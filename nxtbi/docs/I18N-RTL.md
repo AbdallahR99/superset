@@ -58,9 +58,11 @@ built from the branch (no dev overlay):
 | Backend unit tests (translations, document direction, error page) | 122 passed |
 | TypeScript | clean except 5 errors in an upstream test file this branch does not touch |
 
-The two E2E failures are one check in both languages: at 390px the dashboard header overflows
-horizontally. It happens in English on master too (the vertical filter bar keeps 260px, leaving 130px
-for the header). Upstream's answer is `MOBILE_CONSUMPTION_MODE`; it is not enabled here.
+The branch audit found dashboard header overflow at 390px in both languages. The stabilization image
+uses a drawer for vertical filters on narrow dashboard pages and wraps the header actions on phones.
+Chromium verification at 390px kept the dashboard and its controls within the viewport. The drawer
+opened from the right in Arabic and from the left in English. The touch check covers direct visits,
+navigation from the dashboard list, and restoration of the previous viewport when returning to the list.
 
 A visual baseline for every combination is committed under `nxtbi/tests/rtl-visual/baseline`
 (`rtl_audit.py --compare` diffs against it).
@@ -69,7 +71,7 @@ A visual baseline for every combination is committed under `nxtbi/tests/rtl-visu
 
 | Item | Detail |
 |---|---|
-| Phone layout | Dashboard and Explore headers overflow at 390px in both languages (upstream). |
+| Phone layout | Chart Explore clips header metadata and scrolls its editor panels horizontally at 390px in both languages. |
 | Static error pages | The 404 page gets the session's `lang` and `dir`, but its three strings are English; the 500 page handlers are unchanged. |
 | Untranslatable strings | A few upstream strings are not wrapped for translation (for example the Explore results row-limit options "1k rows", "Untitled Query N" tab names). |
 | Chart fonts | The theme font has no Arabic glyphs; canvas text in ECharts falls back to a system Arabic font. |

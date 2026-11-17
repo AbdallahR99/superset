@@ -36,6 +36,24 @@
 
 Details: `nxtbi/docs/WIDGETS.md` section 2 and `nxtbi/docs/widgets/03-backend-security.md` section 5.
 
+## Final stabilization fixes
+
+- Classic dashboard metadata writes use the current-row compare-and-swap even
+  when their session loaded a dashboard without a V2 document. An overwrite
+  import can add the first V2 revision while the classic writer is waiting.
+  Imports and version restores validate incoming V2 documents before committing.
+- The Dashboard V2 canvas subscribes to the widget registry. A saved extension
+  widget renders as soon as its Module Federation bundle registers the view.
+- Saved widget data calls check the guest token's dataset binding and allowlist
+  before dispatch. Guest control schemas use the static schema without dataset
+  discovery. REST rejects malformed widget bodies, REST and MCP share schema
+  request limits, and authored ECharts formatters use the same validation path
+  for structured and raw options.
+- Classic dashboards use the filter drawer and a compact header at phone widths.
+  The normal dashboard view installs a device-width viewport when needed, including
+  after in-app navigation. The existing mobile consumption flag continues to control
+  consumption-only mode.
+
 ## Things learned the hard way
 
 - `npm run type` alone reports thousands of TS6305 errors; run `npx tsc --build` (project references).

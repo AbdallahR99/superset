@@ -54,6 +54,34 @@ docker compose -f nxtbi/widgets/docker-compose.yml --profile flag-off --profile 
 Builder: `http://localhost:8089/dashboard/v2/new/`. Example app:
 `python nxtbi/widgets/scripts/example_app.py` (port 5173) and with `--guest` (port 5174).
 
+## Stabilization validation
+
+The release candidate is `nxtbi/superset-fork:stabilization-final`. It reuses the
+merged production image's dependency layers and packages the stabilization
+source, freshly built production webpack assets, and compiled browser
+translations inside the image. The validation containers mount stack
+configuration and the test extension bundle as read-only files.
+
+The local validation commands below run from the repository root on this
+workstation. The ignored validation directory holds the Compose overlays and
+generated credentials for the isolated projects. The demo helper uses the
+seeded validation database and its running isolated Keycloak and Mailpit.
+
+```powershell
+pwsh -File nxtbi/out/stabilization/start-widgets-final.ps1
+pwsh -File nxtbi/out/stabilization/start-demo-final.ps1
+```
+
+| Validation endpoint | Purpose |
+|---|---|
+| `http://localhost:18088` | Demo with isolated Keycloak, Dashboard V2 disabled |
+| `http://localhost:18089/dashboard/v2/new/` | Dashboard V2 builder with production CSP |
+| `http://localhost:18099` | Widgets flag-off control |
+| `http://localhost:15009/mcp` | Widgets MCP |
+| `http://localhost:18180` | Disposable Keycloak realm |
+| `http://localhost:15173`, `http://localhost:15174` | Session and guest-token widget hosts |
+| `http://localhost:28089/health` | Separate cold-start check using fresh PostgreSQL and Redis |
+
 ## Key configuration
 
 Main demo (`nxtbi/config/superset_config.py`): `AUTH_TYPE = AUTH_OAUTH` with provider `keycloak`,

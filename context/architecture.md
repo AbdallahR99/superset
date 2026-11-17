@@ -45,7 +45,9 @@ answers 404; frontend routes and menu entries are flag-gated).
 | MCP read-only widget tools | `superset/mcp_service/widgets/` |
 
 The V2 document is stored in `dashboards.json_metadata` under `v2_document`, with its `revision`
-inside. The dashboards table is unchanged.
+inside. Classic metadata updates preserve the document observed in the current
+row, including the first revision written by a concurrent import. This uses
+the existing dashboards table and compare-and-swap.
 
 **Frontend**
 
