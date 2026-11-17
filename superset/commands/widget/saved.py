@@ -29,6 +29,7 @@ from superset.commands.widget.exceptions import (
     SavedWidgetForbiddenError,
     SavedWidgetNotFoundError,
     SavedWidgetUpdateFailedError,
+    WidgetInvalidError,
 )
 from superset.commands.widget.utils import (
     load_saved_widget,
@@ -42,6 +43,12 @@ from superset.utils import json
 from superset.utils.core import get_user_id
 from superset.utils.decorators import on_error, transaction
 from superset.widgets.data import props_dataset_id
+
+# Bounds of the saved-widget list. A caller that names no page size gets the
+# largest page, so a short list still arrives in one call.
+DEFAULT_LIST_PAGE_SIZE = 25
+MAX_LIST_PAGE_SIZE = 100
+MAX_LIST_PAGE = 100000
 
 
 def _props_attributes(props: dict[str, Any]) -> dict[str, Any]:
@@ -137,15 +144,46 @@ class GetSavedWidgetCommand(BaseCommand):
 
 
 class ListSavedWidgetsCommand(BaseCommand):
-    """Admins see every saved widget; anyone else their own."""
+    """
+    One page of the saved widgets the caller may read.
+
+    Admins read every saved widget; anyone else their own plus those binding
+    a dataset they can read, which is the rule ``GetSavedWidgetCommand``
+    applies to a single widget. Guests get no list. After ``run()`` the total
+    number of readable widgets is in ``count``.
+    """
+
+    def __init__(self, page: int = 0, page_size: int = MAX_LIST_PAGE_SIZE) -> None:
+        self._page = page
+        self._page_size = page_size
+        self.count = 0
 
     def run(self) -> list[SavedWidget]:
         self.validate()
-        if security_manager.is_admin():
-            return SavedWidgetDAO.find_all()
-        user_id = get_user_id()
-        return SavedWidgetDAO.find_by_creator(user_id) if user_id is not None else []
+        widgets, self.count = SavedWidgetDAO.find_readable(
+            get_user_id(),
+            see_all=bool(security_manager.is_admin()),
+            page=self._page,
+            page_size=self._page_size,
+        )
+        return widgets
 
     def validate(self) -> None:
         if security_manager.is_guest_user():
             raise SavedWidgetForbiddenError()
+        if (
+            isinstance(self._page, bool)
+            or not isinstance(self._page, int)
+            or not 0 <= self._page <= MAX_LIST_PAGE
+        ):
+            raise WidgetInvalidError(
+                f"page must be an integer between 0 and {MAX_LIST_PAGE}."
+            )
+        if (
+            isinstance(self._page_size, bool)
+            or not isinstance(self._page_size, int)
+            or not 1 <= self._page_size <= MAX_LIST_PAGE_SIZE
+        ):
+            raise WidgetInvalidError(
+                f"page_size must be an integer between 1 and {MAX_LIST_PAGE_SIZE}."
+            )

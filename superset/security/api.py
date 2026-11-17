@@ -93,8 +93,38 @@ class UserSchema(PermissiveSchema):
 
 
 class ResourceSchema(PermissiveSchema):
-    type = fields.Enum(GuestTokenResourceType, by_value=True, required=True)
-    id = fields.String(required=True)
+    """
+    One resource a guest token grants.
+
+    ``dashboard`` (id: embedded uuid) embeds a dashboard. ``widget`` (id: saved
+    widget uuid) embeds one saved widget and the dataset it binds when the
+    token is minted. ``dataset`` (id: the dataset id, as a string) is the
+    explicit grant for inline, SQL-free widget definitions against that
+    dataset. Only ``type`` and ``id`` are read from the request: the dataset a
+    ``widget`` resource is bound to is recorded by the server, so a
+    ``dataset_id`` sent by the caller is dropped like any other unknown field.
+    """
+
+    type = fields.Enum(
+        GuestTokenResourceType,
+        by_value=True,
+        required=True,
+        metadata={
+            "description": (
+                "`dashboard`, `widget` (a saved widget) or `dataset` (inline "
+                "widget definitions against one dataset)."
+            )
+        },
+    )
+    id = fields.String(
+        required=True,
+        metadata={
+            "description": (
+                "Embedded dashboard uuid, saved widget uuid, or dataset id "
+                "written as a string."
+            )
+        },
+    )
 
     @post_load
     def convert_enum_to_value(  # pylint: disable=unused-argument
@@ -149,7 +179,9 @@ class GuestTokenCreateSchema(PermissiveSchema):
             "description": (
                 "Optional allowlist of dataset IDs the guest may access. "
                 "When omitted all datasets linked to the embedded dashboard "
-                "are accessible, preserving the default behaviour."
+                "are accessible, preserving the default behaviour. The list "
+                "only narrows what `resources` grants and is never a grant "
+                "itself: inline widget definitions need a `dataset` resource."
             )
         },
     )

@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pytest_mock import MockerFixture
 
 from superset.utils import json
 
@@ -63,17 +64,49 @@ def test_widget_routes_are_404_for_anonymous_when_flag_is_off(
     assert _call(client, method, url).status_code == 404
 
 
-def test_requires_dashboard_v2_falls_back_to_abort_for_plain_views(
-    app_context: None,
+@pytest.mark.parametrize("method, url", ROUTES)
+def test_disabled_widget_routes_answer_with_a_json_message(
+    client: Any, method: str, url: str
 ) -> None:
-    from werkzeug.exceptions import NotFound
+    response = _call(client, method, url)
 
-    from superset.widgets.feature import requires_dashboard_v2
+    assert response.content_type.startswith("application/json")
+    assert isinstance(response.get_json()["message"], str)
 
-    class View:
-        @requires_dashboard_v2
-        def page(self) -> str:
-            return "rendered"
 
-    with pytest.raises(NotFound):
-        View().page()
+def test_there_is_one_gate_and_one_flag_resolver(
+    app: Any, mocker: MockerFixture
+) -> None:
+    """
+    The widget routes carry no gate of their own: the app-level Dashboard V2
+    gate covers both widget views and resolves the flag through
+    ``superset.widgets.feature``, the module the MCP tools and the Dashboard V2
+    API import the flag name and resolver from.
+    """
+    from superset.dashboard_v2 import feature as dashboard_v2_feature
+    from superset.widgets import feature
+    from superset.widgets.api import SavedWidgetRestApi, WidgetControlsRestApi
+
+    assert feature.DASHBOARD_V2_FLAG == "DASHBOARD_V2"
+    assert (
+        dashboard_v2_feature.is_dashboard_v2_enabled is feature.is_dashboard_v2_enabled
+    )
+    assert not hasattr(feature, "requires_dashboard_v2")
+
+    blueprints = set(app.blueprints)
+    assert {SavedWidgetRestApi.__name__, WidgetControlsRestApi.__name__} <= blueprints
+
+    # The resolver is the only thing consulted, once per gated request.
+    is_enabled = mocker.patch("superset.is_feature_enabled", return_value=False)
+    with app.test_client() as client:
+        assert client.get("/api/v1/widgets/types").status_code == 404
+        assert client.get("/api/v1/widget/").status_code == 404
+    assert [call.args for call in is_enabled.call_args_list] == [
+        (feature.DASHBOARD_V2_FLAG,)
+    ] * 2
+
+    is_enabled.return_value = True
+    assert feature.is_dashboard_v2_enabled() is True
+    with app.test_client() as client:
+        # Past the gate: the route exists and asks for authentication.
+        assert client.get("/api/v1/widgets/types").status_code == 401

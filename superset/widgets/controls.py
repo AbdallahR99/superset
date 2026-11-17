@@ -31,9 +31,11 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.json_schema import SkipJsonSchema
 from superset_core.widgets import MetricControl
+
+from superset.widgets.safety import column_defs_problem, echarts_option_problem
 
 
 class DataBinding(MetricControl):
@@ -140,6 +142,17 @@ class AgGridTableControls(BaseModel):
         ),
         json_schema_extra={"x-control": "code", "x-language": "json"},
     )
+
+    @field_validator("column_defs")
+    @classmethod
+    def _column_defs_are_declarative(
+        cls, value: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Reject column settings AG Grid would execute or mount (see
+        ``superset.widgets.safety``)."""
+        if problem := column_defs_problem(value):
+            raise ValueError(problem)
+        return value
 
 
 class MarkdownControls(BaseModel):
@@ -400,6 +413,15 @@ class EchartsControls(BaseModel):
             "least one entry). Clicking the same point again clears it."
         ),
     )
+
+    @field_validator("echarts_options")
+    @classmethod
+    def _echarts_options_are_declarative(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Reject option settings that render HTML or run code (see
+        ``superset.widgets.safety``)."""
+        if problem := echarts_option_problem(value):
+            raise ValueError(problem)
+        return value
 
 
 class FilterScope(BaseModel):

@@ -24,6 +24,29 @@ implementation every built-in query-bound widget shares: the query is rebuilt
 from ``props.dataBinding``, client filters are only structured column
 comparisons ANDed on, and the ``QueryContext`` carries the ``WidgetContext`` so
 ``raise_for_access`` can authorize a guest on it.
+
+Who may put SQL into a widget definition
+----------------------------------------
+The rule is the one Explore applies to an ad-hoc SQL metric or filter of a
+classic chart: a signed-in principal who can read the dataset through its own
+grants (``raise_for_access(datasource=...)``) may write SQL expressions against
+it. The expression runs through the dataset's normal ad-hoc pipeline (the same
+sanitizing, ``ALLOW_ADHOC_SUBQUERY`` and template processing), so the builder
+is exactly as permissive as ``/api/v1/chart/data`` for the same role. An
+embedded guest can never send SQL: an inline definition from a guest must be
+buildable from names alone (see ``find_sql_in_props``). SQL stored in a saved
+widget is its author's, checked when it was saved, and is served to a guest
+unchanged, the way a chart's SQL metric is on an embedded dashboard.
+
+Row level security for guests
+-----------------------------
+A guest is not the widget's author. The rows a guest reads are narrowed by the
+``rls`` rules of its token plus the RLS rules that apply to the guest role
+(``GUEST_ROLE_NAME``), never by the author's own role rules. Minting therefore
+refuses a ``widget`` or ``dataset`` resource on an RLS-protected dataset unless
+the token carries a rule covering it or the deployment installs
+``GUEST_TOKEN_VALIDATOR_HOOK`` to decide (see
+``SupersetSecurityManager._raise_for_guest_token_widget_rls``).
 """
 
 from __future__ import annotations
@@ -97,6 +120,10 @@ class WidgetDataError(ValueError):
     """The props cannot be executed (no binding, missing dataset, ...)."""
 
 
+class WidgetDatasetMissingError(WidgetDataError):
+    """The dataset the props bind does not exist, for example after deletion."""
+
+
 class WidgetSqlNotAllowedError(WidgetDataError):
     """The props carry SQL or template code their author may not write."""
 
@@ -119,6 +146,18 @@ class WidgetContext:
     @property
     def inline(self) -> bool:
         return self.saved_widget_uuid is None
+
+
+def widget_queries_data(widget_cls: type[Widget]) -> bool:
+    """
+    Whether a widget type reads data on the server at all, that is whether it
+    implements ``fetch_data`` or ``fetch_values`` itself.
+    """
+    return any(
+        getattr(getattr(widget_cls, name), "__func__", None)
+        is not getattr(Widget, name).__func__
+        for name in ("fetch_data", "fetch_values")
+    )
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -269,11 +308,19 @@ def build_widget_query(
 
 
 def get_table(dataset_id: int) -> BaseDatasource:
-    """The SQL dataset a widget reads; a missing one is the caller's error."""
+    """
+    The SQL dataset a widget reads.
+
+    A widget keeps the id of a dataset that has since been deleted; that is
+    reported as ``WidgetDatasetMissingError`` so every caller can answer it as
+    a missing object instead of failing.
+    """
     try:
         return DatasourceDAO.get_datasource(DatasourceType.TABLE, dataset_id)
     except DatasourceNotFound as ex:
-        raise WidgetDataError("The widget's dataset does not exist.") from ex
+        raise WidgetDatasetMissingError(
+            "The dataset this widget reads does not exist."
+        ) from ex
 
 
 def _scan_for_sql(value: Any, path: str) -> str | None:
@@ -364,11 +411,12 @@ def user_may_author_widget_sql(datasource: BaseDatasource | None) -> bool:
     """
     Whether the caller may put SQL expressions into a widget definition.
 
-    Superset has no dedicated "ad-hoc SQL" permission, so this uses the two
-    capabilities that already let a principal write SQL against the data: SQL
-    Lab execution (``can_execute_sql_query on SQLLab``, the ``sql_lab`` role of
-    SECURITY.md) and editorship of the dataset itself, whose editors define its
-    SQL metrics and calculated columns. Admins hold both; a guest holds neither.
+    The same rule Explore applies to an ad-hoc SQL metric of a classic chart:
+    whoever can read the dataset through its own grants may write SQL
+    expressions against it, so a Gamma user with dataset access is treated
+    here exactly as on ``/api/v1/chart/data``. A guest never may, whatever its
+    role grants. A definition that binds no dataset has nothing to run SQL
+    against and is left to admins.
     """
     # pylint: disable=import-outside-toplevel
     from superset import security_manager
@@ -377,9 +425,9 @@ def user_may_author_widget_sql(datasource: BaseDatasource | None) -> bool:
         return False
     if security_manager.is_admin():
         return True
-    if security_manager.can_access("can_execute_sql_query", "SQLLab"):
-        return True
-    return datasource is not None and bool(security_manager.is_editor(datasource))
+    return datasource is not None and bool(
+        security_manager.can_access_datasource(datasource)
+    )
 
 
 def raise_for_widget_sql(props: Any, datasource: BaseDatasource | None) -> None:

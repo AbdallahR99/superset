@@ -31,6 +31,7 @@ from superset.commands.base import BaseCommand
 from superset.commands.chart.exceptions import ChartDataQueryFailedError
 from superset.commands.widget.exceptions import (
     SavedWidgetForbiddenError,
+    WidgetDatasetNotFoundError,
     WidgetInvalidError,
     WidgetSqlForbiddenError,
 )
@@ -45,6 +46,7 @@ from superset.widgets.data import (
     validate_guest_inline_props,
     WidgetContext,
     WidgetDataError,
+    WidgetDatasetMissingError,
     WidgetSqlNotAllowedError,
 )
 from superset.widgets.registry import registry
@@ -77,17 +79,20 @@ def resolve_widget(
     context = WidgetContext(props_dataset_id(inline_props))
     if security_manager.is_guest_user():
         # Default deny: a guest may only send an inline definition for a
-        # dataset its token lists, and only a SQL-free one. A definition with
-        # no dataset to check against (a type the host cannot bind) is refused
-        # rather than handed to the widget unvalidated.
+        # dataset its token grants through an explicit ``dataset`` resource,
+        # and only a SQL-free one. A dashboard or widget resource and the
+        # ``datasets`` allowlist never grant one. A definition with no dataset
+        # to check against (a type the host cannot bind) is refused rather
+        # than handed to the widget unvalidated.
         if context.dataset_id is None or not (
             security_manager.guest_widget_grants_dataset(context)
         ):
             raise SavedWidgetForbiddenError()
         validate_guest_inline_props(inline_props, get_table(context.dataset_id))
     elif find_sql_in_props(inline_props):
-        # Only looked up when the definition does carry SQL, so a SQL-free
-        # request costs no extra dataset read here.
+        # SQL needs the caller's own read access to the dataset, as an ad-hoc
+        # SQL metric does in Explore. Only looked up when the definition does
+        # carry SQL, so a SQL-free request costs no extra dataset read here.
         raise_for_widget_sql(
             inline_props,
             get_table(context.dataset_id) if context.dataset_id is not None else None,
@@ -103,6 +108,8 @@ def _execute(run: Callable[[], T]) -> T:
     except WidgetSqlNotAllowedError as ex:
         # A permission problem, not a malformed request.
         raise WidgetSqlForbiddenError(str(ex)) from ex
+    except WidgetDatasetMissingError as ex:
+        raise WidgetDatasetNotFoundError(str(ex)) from ex
     except (FilterValidationError, WidgetDataError) as ex:
         raise WidgetInvalidError(str(ex)) from ex
     except QueryObjectValidationError as ex:

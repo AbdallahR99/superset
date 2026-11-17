@@ -251,13 +251,36 @@ def enforce_guest_token_identity(
 
 
 class GuestTokenResourceType(StrEnum):
+    """
+    What a guest token resource grants.
+
+    ``dashboard`` embeds one dashboard. ``widget`` embeds one saved widget and
+    reads the dataset that widget bound when the token was minted. ``dataset``
+    is the explicit grant for inline, SQL-free widget definitions against one
+    dataset; no other resource type, and no ``datasets`` allowlist, implies it.
+    """
+
     DASHBOARD = "dashboard"
     WIDGET = "widget"
+    DATASET = "dataset"
 
 
-class GuestTokenResource(TypedDict):
+class _GuestTokenResourceRequired(TypedDict):
     type: GuestTokenResourceType
     id: Union[str, int]
+
+
+class GuestTokenResource(_GuestTokenResourceRequired, total=False):
+    """
+    One entry of a guest token's ``resources`` claim.
+
+    ``dataset_id`` is set by the server, never taken from the request, on a
+    ``widget`` resource: the dataset the saved widget bound when the token was
+    minted (``None`` for a widget type that queries no data). Data requests
+    are refused once the widget binds a different dataset.
+    """
+
+    dataset_id: Optional[int]
 
 
 GuestTokenResources = list[GuestTokenResource]
@@ -284,6 +307,8 @@ class GuestToken(_GuestTokenRequired, total=False):
     ``datasets`` is an optional allowlist of dataset IDs the guest may access.
     When absent the guest can access all datasets linked to the embedded dashboard,
     preserving existing behaviour.  When present only the listed IDs are permitted.
+    The allowlist only ever narrows what the ``resources`` claim grants; it is
+    never a grant of its own.
     """
 
     datasets: list[int]

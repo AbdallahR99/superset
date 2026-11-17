@@ -15,22 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 """
-The ``DASHBOARD_V2`` feature gate shared by the widget and Dashboard V2 routes.
+The ``DASHBOARD_V2`` feature flag: its name and the one way to resolve it.
 
-Kept free of other ``superset.widgets`` imports so any API or view module can
-use it without pulling in the widget registry.
+There is a single gate. ``superset.dashboard_v2.feature.register_dashboard_v2_gate``
+installs one ``before_request`` hook that answers 404, before authentication,
+for every route of the Dashboard V2 document API, the widget control API, the
+saved-widget API and the builder view while the flag is off; the MCP widget
+tools refuse on the same flag. Both resolve the flag through
+``is_dashboard_v2_enabled`` here, so no route carries a gate of its own and
+there is one place that decides whether the feature is on.
+
+Kept free of other ``superset.widgets`` imports so any API, view or tool module
+can use it without pulling in the widget registry.
 """
 
 from __future__ import annotations
 
-import functools
-from typing import Any, Callable, TypeVar
-
-from flask import abort
-
 DASHBOARD_V2_FLAG = "DASHBOARD_V2"
-
-F = TypeVar("F", bound=Callable[..., Any])
 
 
 def is_dashboard_v2_enabled() -> bool:
@@ -39,23 +40,3 @@ def is_dashboard_v2_enabled() -> bool:
     from superset import is_feature_enabled
 
     return bool(is_feature_enabled(DASHBOARD_V2_FLAG))
-
-
-def requires_dashboard_v2(func: F) -> F:
-    """
-    Answer 404 from a REST API or view method unless ``DASHBOARD_V2`` is on.
-
-    Apply it directly under ``@expose`` (above ``@protect()`` / ``@has_access``
-    and ``@safe``) so a disabled deployment gives the same "no such route"
-    answer to every caller, signed in or not, and no handler code runs.
-    """
-
-    @functools.wraps(func)
-    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-        if not is_dashboard_v2_enabled():
-            if callable(response_404 := getattr(self, "response_404", None)):
-                return response_404()
-            abort(404)
-        return func(self, *args, **kwargs)
-
-    return wrapper  # type: ignore[return-value]

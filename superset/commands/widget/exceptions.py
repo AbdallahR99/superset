@@ -71,6 +71,15 @@ class WidgetInvalidError(CommandException):
         self.errors = errors
 
 
+class WidgetDatasetNotFoundError(WidgetInvalidError):
+    """
+    The dataset a widget reads does not exist, typically because it was
+    deleted after the widget was saved. Answered as a missing object.
+    """
+
+    status = 404
+
+
 class SavedWidgetCreateFailedError(CreateFailedError):
     message = _("Widget could not be created.")
 

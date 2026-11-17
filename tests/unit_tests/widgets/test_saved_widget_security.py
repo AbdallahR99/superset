@@ -57,8 +57,20 @@ def _guest(
     return GuestUser(token=token, roles=[])
 
 
-def _widget_resource(widget_uuid: str = WIDGET_UUID) -> dict[str, Any]:
-    return {"type": GuestTokenResourceType.WIDGET, "id": widget_uuid}
+def _widget_resource(
+    widget_uuid: str = WIDGET_UUID, dataset_id: int | None = DATASET_ID
+) -> dict[str, Any]:
+    """A ``widget`` resource as minting records it: bound to a dataset."""
+    return {
+        "type": GuestTokenResourceType.WIDGET,
+        "id": widget_uuid,
+        "dataset_id": dataset_id,
+    }
+
+
+def _dataset_resource(dataset_id: int | str = DATASET_ID) -> dict[str, Any]:
+    """The explicit grant for inline definitions against one dataset."""
+    return {"type": GuestTokenResourceType.DATASET, "id": str(dataset_id)}
 
 
 def _saved(dataset_id: int = DATASET_ID) -> WidgetContext:
@@ -127,25 +139,106 @@ def test_saved_widget_grant_ignores_datasets_claim(
     assert not sm.guest_widget_grants_datasource(_saved(), _datasource())
 
 
-def test_inline_grant_requires_datasets_claim(
+def test_inline_grant_requires_a_dataset_resource(
     mocker: MockerFixture, sm: SupersetSecurityManager
 ) -> None:
     _as_guest(mocker, sm, _guest([_widget_resource()]))
     assert not sm.guest_widget_grants_datasource(_inline(), _datasource())
 
-    _as_guest(mocker, sm, _guest([], datasets=[99]))
+    _as_guest(mocker, sm, _guest([_dataset_resource(99)]))
     assert not sm.guest_widget_grants_datasource(_inline(), _datasource())
 
-    _as_guest(mocker, sm, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, sm, _guest([_dataset_resource()]))
     assert sm.guest_widget_grants_datasource(_inline(), _datasource())
+
+
+def test_datasets_claim_is_never_an_inline_grant(
+    mocker: MockerFixture, sm: SupersetSecurityManager
+) -> None:
+    """
+    SECURITY.md row "Embedded guest token"; principal: a guest holding an
+    ordinary dashboard-scoped token. ``datasets`` is an allowlist that narrows
+    the token, so it must not let the guest query the dataset inline.
+    """
+    dashboard = {"type": GuestTokenResourceType.DASHBOARD, "id": str(uuid.uuid4())}
+    for resources in ([], [dashboard], [_widget_resource()]):
+        _as_guest(mocker, sm, _guest(resources, datasets=[DATASET_ID]))
+        assert not sm.guest_widget_grants_dataset(_inline())
+        assert not sm.guest_widget_grants_datasource(_inline(), _datasource())
+        with pytest.raises(SupersetSecurityException):
+            sm.raise_for_access(query_context=_query_context(_inline(), _datasource()))
+
+
+@pytest.mark.parametrize(
+    "resource_id",
+    ["017", " 17", "17 ", "+17", "1e1", "17.0", "", "abc", None, True, 17.0, [17]],
+)
+def test_dataset_resource_id_must_be_a_plain_integer(
+    mocker: MockerFixture, sm: SupersetSecurityManager, resource_id: Any
+) -> None:
+    resource = {"type": GuestTokenResourceType.DATASET, "id": resource_id}
+    _as_guest(mocker, sm, _guest([resource]))
+    assert not sm.guest_widget_grants_datasource(_inline(), _datasource())
+    assert not sm.guest_widget_grants_datasource(_inline(1), _datasource(1))
+
+
+def test_dataset_allowlist_still_narrows_an_inline_grant(
+    mocker: MockerFixture, sm: SupersetSecurityManager
+) -> None:
+    _as_guest(mocker, sm, _guest([_dataset_resource()], datasets=[99]))
+    with pytest.raises(SupersetSecurityException):
+        sm.raise_for_access(query_context=_query_context(_inline(), _datasource()))
+
+    _as_guest(mocker, sm, _guest([_dataset_resource()], datasets=[DATASET_ID]))
+    sm.raise_for_access(query_context=_query_context(_inline(), _datasource()))
 
 
 def test_grant_requires_matching_dataset(
     mocker: MockerFixture, sm: SupersetSecurityManager
 ) -> None:
-    _as_guest(mocker, sm, _guest([_widget_resource()], datasets=[DATASET_ID, 99]))
+    _as_guest(
+        mocker,
+        sm,
+        _guest([_widget_resource(), _dataset_resource()], datasets=[DATASET_ID, 99]),
+    )
     assert not sm.guest_widget_grants_datasource(_saved(), _datasource(99))
     assert not sm.guest_widget_grants_datasource(_inline(), _datasource(99))
+
+
+def test_widget_grant_is_bound_to_the_dataset_recorded_at_mint(
+    mocker: MockerFixture, sm: SupersetSecurityManager
+) -> None:
+    """
+    A widget-scoped token was checked against one dataset. Once the saved
+    widget binds another one, the token no longer grants its data.
+    """
+    _as_guest(mocker, sm, _guest([_widget_resource(dataset_id=DATASET_ID)]))
+    assert sm.guest_widget_grants_datasource(_saved(), _datasource())
+
+    rebound = _saved(dataset_id=99)
+    assert not sm.guest_widget_grants_dataset(rebound)
+    assert not sm.guest_widget_grants_datasource(rebound, _datasource(99))
+    with pytest.raises(SupersetSecurityException):
+        sm.raise_for_access(query_context=_query_context(rebound, _datasource(99)))
+    # The definition stays readable; only the data grant lapses.
+    assert sm.guest_token_names_widget(WIDGET_UUID)
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        {"type": GuestTokenResourceType.WIDGET, "id": WIDGET_UUID},
+        {"type": GuestTokenResourceType.WIDGET, "id": WIDGET_UUID, "dataset_id": None},
+        {"type": GuestTokenResourceType.WIDGET, "id": WIDGET_UUID, "dataset_id": "17"},
+        {"type": GuestTokenResourceType.WIDGET, "id": WIDGET_UUID, "dataset_id": True},
+    ],
+)
+def test_widget_resource_without_a_recorded_dataset_grants_no_data(
+    mocker: MockerFixture, sm: SupersetSecurityManager, resource: dict[str, Any]
+) -> None:
+    _as_guest(mocker, sm, _guest([resource]))
+    assert not sm.guest_widget_grants_datasource(_saved(), _datasource())
+    assert not sm.guest_widget_grants_datasource(_saved(1), _datasource(1))
 
 
 def test_grant_is_guest_only(
@@ -166,10 +259,10 @@ def test_raise_for_access_allows_saved_widget_context(
     sm.raise_for_access(query_context=_query_context(_saved(), _datasource()))
 
 
-def test_raise_for_access_allows_inline_context_with_claim(
+def test_raise_for_access_allows_inline_context_with_dataset_resource(
     mocker: MockerFixture, sm: SupersetSecurityManager
 ) -> None:
-    _as_guest(mocker, sm, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, sm, _guest([_dataset_resource()]))
     sm.raise_for_access(query_context=_query_context(_inline(), _datasource()))
 
 
@@ -184,7 +277,7 @@ def test_raise_for_access_rejects_inline_without_claim(
 def test_raise_for_access_rejects_forged_form_data(
     mocker: MockerFixture, sm: SupersetSecurityManager
 ) -> None:
-    _as_guest(mocker, sm, _guest([_widget_resource()], datasets=[DATASET_ID]))
+    _as_guest(mocker, sm, _guest([_widget_resource(), _dataset_resource()]))
     forged = _query_context(
         None,
         _datasource(),
@@ -197,7 +290,7 @@ def test_raise_for_access_rejects_forged_form_data(
 def test_raise_for_access_rejects_duck_typed_marker(
     mocker: MockerFixture, sm: SupersetSecurityManager
 ) -> None:
-    _as_guest(mocker, sm, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, sm, _guest([_dataset_resource()]))
     fake = MagicMock(dataset_id=DATASET_ID, saved_widget_uuid=None)
 
     assert not widget_context_grants_data_access(
@@ -225,7 +318,72 @@ def test_validate_guest_token_resources_requires_saved_widget(
     with pytest.raises(ValidationError):
         sm.validate_guest_token_resources(resources)
 
-    # A widget that binds no dataset grants no data, so existing is enough.
-    find_by_uuid.return_value = MagicMock(props_dict={"content": "# hi"})
+    # A widget type that queries no data grants none: existing is enough, and
+    # the token records that it is bound to no dataset.
+    find_by_uuid.return_value = MagicMock(
+        widget_type="markdown", props_dict={"content": "# hi"}
+    )
     sm.validate_guest_token_resources(resources)
+    assert resources == [{"type": "widget", "id": WIDGET_UUID, "dataset_id": None}]
     sm.validate_guest_token_resources([])
+
+
+@pytest.mark.parametrize(
+    "widget_type, props",
+    [
+        ("echarts", {"echartsOptions": {}}),
+        ("metric-tile", {"dataBinding": {"datasetId": "17", "metrics": ["m"]}}),
+        ("filter.select", {"column": "state"}),
+        ("extensions.gone.away.chart", {"dataBinding": {"datasetId": 17}}),
+    ],
+)
+def test_minting_rejects_a_data_widget_without_a_dataset(
+    mocker: MockerFixture,
+    sm: SupersetSecurityManager,
+    widget_type: str,
+    props: dict[str, Any],
+) -> None:
+    """
+    A widget type that queries data must bind a dataset the minter can be
+    checked against; an unknown type cannot be reasoned about at all.
+    """
+    mocker.patch(
+        "superset.daos.saved_widget.SavedWidgetDAO.find_by_uuid",
+        return_value=MagicMock(widget_type=widget_type, props_dict=props),
+    )
+    mocker.patch.object(sm, "can_access_datasource", return_value=True)
+    mocker.patch(
+        "superset.daos.datasource.DatasourceDAO.get_datasource",
+        return_value=_datasource(),
+    )
+    resources: Any = [{"type": "widget", "id": WIDGET_UUID}]
+    if widget_type.startswith("extensions."):
+        with pytest.raises(ValidationError, match="unknown widget type"):
+            sm.validate_guest_token_resources(resources)
+    else:
+        with pytest.raises(ValidationError, match="binds no dataset"):
+            sm.validate_guest_token_resources(resources)
+    assert "dataset_id" not in resources[0]
+
+
+def test_minting_records_the_widgets_dataset_and_ignores_a_sent_one(
+    mocker: MockerFixture, sm: SupersetSecurityManager
+) -> None:
+    mocker.patch(
+        "superset.daos.saved_widget.SavedWidgetDAO.find_by_uuid",
+        return_value=MagicMock(
+            widget_type="echarts",
+            props_dict={"dataBinding": {"datasetId": DATASET_ID, "metrics": ["m"]}},
+        ),
+    )
+    get_datasource = mocker.patch(
+        "superset.daos.datasource.DatasourceDAO.get_datasource",
+        return_value=_datasource(),
+    )
+    mocker.patch.object(sm, "can_access_datasource", return_value=True)
+    resources: Any = [{"type": "widget", "id": WIDGET_UUID, "dataset_id": 99}]
+
+    sm.validate_guest_token_resources(resources)
+
+    assert resources[0]["dataset_id"] == DATASET_ID
+    assert get_datasource.call_args.args[1] == DATASET_ID

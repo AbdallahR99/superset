@@ -16,12 +16,15 @@
 # under the License.
 from __future__ import annotations
 
+import functools
 import logging
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from flask import make_response, request, Response
 from flask_appbuilder.api import expose, protect, safe
 from flask_babel import gettext as _
+from flask_jwt_extended.exceptions import JWTExtendedException
+from jwt.exceptions import PyJWTError
 from marshmallow import ValidationError
 
 from superset import security_manager
@@ -30,6 +33,7 @@ from superset.commands.widget.data import WidgetDataCommand, WidgetValuesCommand
 from superset.commands.widget.exceptions import WidgetInvalidError
 from superset.commands.widget.saved import (
     CreateSavedWidgetCommand,
+    DEFAULT_LIST_PAGE_SIZE,
     DeleteSavedWidgetCommand,
     GetSavedWidgetCommand,
     ListSavedWidgetsCommand,
@@ -39,7 +43,6 @@ from superset.commands.widget.utils import serialize_saved_widget
 from superset.extensions import event_logger
 from superset.utils import json
 from superset.views.base_api import BaseSupersetApi, statsd_metrics
-from superset.widgets.feature import requires_dashboard_v2
 from superset.widgets.registry import registry
 from superset.widgets.schema_tools import get_subtrees, SchemaPathError
 from superset.widgets.schemas import (
@@ -56,6 +59,31 @@ logger = logging.getLogger(__name__)
 # Bounds on the caller-sized lists the control-schema route accepts.
 MAX_SCHEMA_PATHS = 200
 MAX_SCHEMA_SERIES = 500
+
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def json_auth_errors(func: F) -> F:
+    """
+    Answer a missing, malformed or expired credential with the same JSON body
+    every other widget error has: ``{"message": <text>}`` under 401.
+
+    Without a session or a usable guest token the route falls through to the
+    bearer-token check, whose own handler answers ``{"msg": ...}``. An
+    embedding host maps statuses to messages, so the text is given under
+    ``message`` too. Apply it directly above ``@protect()``.
+    """
+
+    @functools.wraps(func)
+    def wrapper(self: BaseSupersetApi, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(self, *args, **kwargs)
+        except (JWTExtendedException, PyJWTError) as ex:
+            text = str(ex) or "Not authorized"
+            return self.response(401, message=text, msg=text)
+
+    return wrapper  # type: ignore[return-value]
 
 
 def _is_string_list(value: Any, limit: int) -> bool:
@@ -103,7 +131,7 @@ class WidgetControlsRestApi(BaseSupersetApi):
     openapi_spec_tag = "Dashboard Controls (experimental)"
 
     @expose("/types", methods=("GET",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -138,7 +166,7 @@ class WidgetControlsRestApi(BaseSupersetApi):
         return self.response(200, result=result)
 
     @expose("/type/<widget_type>/control-schema", methods=("GET", "POST"))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -208,7 +236,9 @@ class WidgetControlsRestApi(BaseSupersetApi):
                         drill-in subtrees instead of the whole schema.
           responses:
             200:
-              description: Control JSON Schema, or a `{path: schema}` map
+              description: >-
+                Control JSON Schema, or a `{path: schema}` map when `paths`
+                was given.
               content:
                 application/json:
                   schema:
@@ -277,7 +307,7 @@ class WidgetControlsRestApi(BaseSupersetApi):
         return resp
 
     @expose("/type/<widget_type>/validate", methods=("POST",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -296,9 +326,8 @@ class WidgetControlsRestApi(BaseSupersetApi):
         each widget's control model, not here.
 
         On success also returns ``values``: the candidate as Pydantic actually
-        parsed it (coerced, alias-keyed) rather than the raw request body — the
-        same normalization the ``set_widget_control_values`` MCP tool commits,
-        so a REST caller that commits its own raw candidate instead can end up
+        parsed it (coerced, alias-keyed) rather than the raw request body — a
+        caller that commits its own raw candidate instead can end up
         storing something subtly different from what this endpoint validated
         (e.g. a numeric field coerced from a string).
         ---
@@ -362,10 +391,61 @@ class WidgetControlsRestApi(BaseSupersetApi):
 
 
 def _command_error(api: BaseSupersetApi, ex: CommandException) -> Response:
+    """
+    Answer a failed command as JSON: ``{"message": <text>}`` under the
+    command's own status (400, 403, 404, 409, 422, ...), plus
+    ``errors: [{"loc", "message"}]`` when the widget props failed validation.
+    """
     payload: dict[str, Any] = {"message": str(ex.message)}
     if isinstance(ex, WidgetInvalidError) and ex.errors:
         payload["errors"] = ex.errors
     return api.response(ex.status, **payload)
+
+
+def _schema_errors(messages: Any) -> list[dict[str, Any]]:
+    """Flatten marshmallow's nested messages into ``[{"loc", "message"}]``."""
+    errors: list[dict[str, Any]] = []
+    stack: list[tuple[list[str], Any]] = [([], messages)]
+    while stack:
+        loc, value = stack.pop()
+        if isinstance(value, dict):
+            stack.extend(
+                (
+                    loc if key == "_schema" else [*loc, str(key)],
+                    item,
+                )
+                for key, item in reversed(list(value.items()))
+            )
+        elif isinstance(value, (list, tuple)):
+            stack.extend((loc, item) for item in reversed(list(value)))
+        else:
+            errors.append({"loc": loc, "message": str(value)})
+    return errors
+
+
+def _bad_request(api: BaseSupersetApi, error: ValidationError) -> Response:
+    """
+    Answer a request body that failed its schema with a readable ``message``
+    (the first problem) and every problem under ``errors``, the same shape a
+    props validation failure uses.
+    """
+    errors = _schema_errors(error.messages) or [
+        {"loc": [], "message": "Invalid request."}
+    ]
+    first = errors[0]
+    location = ".".join(first["loc"])
+    message = f"{location}: {first['message']}" if location else first["message"]
+    return api.response(400, message=message, errors=errors)
+
+
+def _page_argument(name: str, default: int) -> int:
+    """An integer query argument; anything else is the caller's error."""
+    raw = request.args.get(name)
+    if raw is None or raw == "":
+        return default
+    if not raw.isascii() or not raw.isdigit() or len(raw) > 9:
+        raise WidgetInvalidError(f"{name} must be a non-negative integer.")
+    return int(raw)
 
 
 def _result_response(result: Any) -> Response:
@@ -409,7 +489,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
     )
 
     @expose("/", methods=("GET",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -421,32 +501,69 @@ class SavedWidgetRestApi(BaseSupersetApi):
         """List saved widgets.
         ---
         get:
-          summary: List saved widgets
+          summary: List the saved widgets the caller may read
+          description: >-
+            Admins see every saved widget; anyone else their own and those
+            that bind a dataset they can read. Most recently changed first.
+          parameters:
+          - in: query
+            name: page
+            description: Zero-based page index.
+            schema:
+              type: integer
+              minimum: 0
+              default: 0
+          - in: query
+            name: page_size
+            description: Rows per page.
+            schema:
+              type: integer
+              minimum: 1
+              maximum: 100
+              default: 25
           responses:
             200:
-              description: Saved widgets
+              description: One page of saved widgets
               content:
                 application/json:
                   schema:
                     type: object
                     properties:
+                      count:
+                        type: integer
+                        description: Readable saved widgets across all pages.
+                      page:
+                        type: integer
+                      page_size:
+                        type: integer
                       result:
                         type: array
                         items:
                           $ref: '#/components/schemas/SavedWidgetResponseSchema'
+            400:
+              $ref: '#/components/responses/400'
             401:
               $ref: '#/components/responses/401'
             403:
               $ref: '#/components/responses/403'
         """
         try:
-            widgets = ListSavedWidgetsCommand().run()
+            page = _page_argument("page", 0)
+            page_size = _page_argument("page_size", DEFAULT_LIST_PAGE_SIZE)
+            command = ListSavedWidgetsCommand(page, page_size)
+            widgets = command.run()
         except CommandException as ex:
             return _command_error(self, ex)
-        return self.response(200, result=[_dump(widget) for widget in widgets])
+        return self.response(
+            200,
+            count=command.count,
+            page=page,
+            page_size=page_size,
+            result=[_dump(widget) for widget in widgets],
+        )
 
     @expose("/", methods=("POST",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -483,7 +600,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         try:
             body = SavedWidgetPostSchema().load(request.get_json(silent=True) or {})
         except ValidationError as error:
-            return self.response_400(message=error.messages)
+            return _bad_request(self, error)
         try:
             widget = CreateSavedWidgetCommand(body).run()
         except CommandException as ex:
@@ -491,7 +608,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(201, result=_dump(widget))
 
     @expose("/<uuid>", methods=("GET",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -531,7 +648,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(200, result=_dump(widget))
 
     @expose("/<uuid>", methods=("PUT",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -575,7 +692,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         try:
             body = SavedWidgetPutSchema().load(request.get_json(silent=True) or {})
         except ValidationError as error:
-            return self.response_400(message=error.messages)
+            return _bad_request(self, error)
         try:
             widget = UpdateSavedWidgetCommand(uuid, body).run()
         except CommandException as ex:
@@ -583,7 +700,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(200, result=_dump(widget))
 
     @expose("/<uuid>", methods=("DELETE",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -616,7 +733,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(200, message="OK")
 
     @expose("/data", methods=("POST",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -659,7 +776,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         try:
             body = WidgetDataPostSchema().load(request.get_json(silent=True) or {})
         except ValidationError as error:
-            return self.response_400(message=error.messages)
+            return _bad_request(self, error)
         filters = body.pop("filters")
         try:
             result = WidgetDataCommand(body, filters).run()
@@ -668,7 +785,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return _result_response(result)
 
     @expose("/values", methods=("POST",))
-    @requires_dashboard_v2
+    @json_auth_errors
     @protect()
     @safe
     @statsd_metrics
@@ -713,7 +830,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         try:
             body = WidgetValuesPostSchema().load(request.get_json(silent=True) or {})
         except ValidationError as error:
-            return self.response_400(message=error.messages)
+            return _bad_request(self, error)
         try:
             result = WidgetValuesCommand(body).run()
         except CommandException as ex:

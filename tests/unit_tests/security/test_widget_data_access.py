@@ -173,8 +173,24 @@ def _guest(
     return GuestUser(token=token, roles=[])
 
 
-def _widget_resource(widget_uuid: str) -> dict[str, Any]:
-    return {"type": GuestTokenResourceType.WIDGET, "id": widget_uuid}
+def _widget_resource(
+    widget_uuid: str, dataset_id: int | None = DATASET_ID
+) -> dict[str, Any]:
+    """A ``widget`` resource as minting records it: bound to a dataset."""
+    return {
+        "type": GuestTokenResourceType.WIDGET,
+        "id": widget_uuid,
+        "dataset_id": dataset_id,
+    }
+
+
+def _dataset_resource(dataset_id: int = DATASET_ID) -> dict[str, Any]:
+    """The explicit grant for inline definitions against one dataset."""
+    return {"type": GuestTokenResourceType.DATASET, "id": str(dataset_id)}
+
+
+def _dashboard_resource() -> dict[str, Any]:
+    return {"type": GuestTokenResourceType.DASHBOARD, "id": str(uuid.uuid4())}
 
 
 def _as_guest(mocker: MockerFixture, guest: GuestUser) -> None:
@@ -398,7 +414,7 @@ def test_guest_values_request_outside_dataset_allowlist_is_denied(
 def test_guest_values_request_needs_a_server_built_context(
     mocker: MockerFixture, app_context: None
 ) -> None:
-    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, _guest([_dataset_resource()]))
     datasource = _datasource()
     _patch_tables(mocker, datasource)
     forged = MagicMock(dataset_id=DATASET_ID, saved_widget_uuid=None)
@@ -422,40 +438,160 @@ def test_guest_allowlist_never_covers_a_non_table_datasource(
         security_manager.raise_for_guest_dataset_allowlist(semantic_view)
 
 
-def test_guest_inline_widget_needs_the_dataset_listed(
+def test_guest_inline_widget_needs_a_dataset_resource(
     mocker: MockerFixture, app_context: None
 ) -> None:
     _patch_tables(mocker)
     inline = {"widget": {"type": "echarts", "props": SAFE_PROPS}}
 
-    # A widget resource alone is not an inline grant.
+    # A widget resource alone is not an inline grant, even for its own dataset.
     _as_guest(mocker, _guest([_widget_resource(WIDGET_A)]))
     with pytest.raises(SavedWidgetForbiddenError):
         resolve_widget(inline)
 
-    # Another dataset is listed.
-    _as_guest(mocker, _guest([], datasets=[OTHER_DATASET_ID]))
+    # The grant is for another dataset.
+    _as_guest(mocker, _guest([_dataset_resource(OTHER_DATASET_ID)]))
     with pytest.raises(SavedWidgetForbiddenError):
         resolve_widget(inline)
 
-    # A malformed claim grants nothing.
-    guest = _guest([], datasets=[DATASET_ID])
-    guest.guest_token["datasets"] = [str(DATASET_ID), DATASET_ID]  # type: ignore[list-item]
-    _as_guest(mocker, guest)
-    with pytest.raises(SavedWidgetForbiddenError):
-        resolve_widget(inline)
+    # A malformed resource grants nothing.
+    for bad_id in (DATASET_ID + 0.0, f"0{DATASET_ID}", [DATASET_ID], None):
+        _as_guest(
+            mocker,
+            _guest([{"type": GuestTokenResourceType.DATASET, "id": bad_id}]),
+        )
+        with pytest.raises(SavedWidgetForbiddenError):
+            resolve_widget(inline)
 
-    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, _guest([_dataset_resource()]))
     _, props, context = resolve_widget(inline)
     assert props == SAFE_PROPS
     assert context == WidgetContext(DATASET_ID)
+
+
+@pytest.mark.parametrize("endpoint", ["data", "values"])
+@pytest.mark.parametrize(
+    "resources",
+    [
+        pytest.param([], id="no-resources"),
+        pytest.param(["dashboard"], id="dashboard-only"),
+        pytest.param(["dashboard", "widget"], id="dashboard-and-saved-widget"),
+    ],
+)
+def test_dashboard_token_with_datasets_cannot_run_an_inline_definition(
+    mocker: MockerFixture, app_context: None, resources: list[str], endpoint: str
+) -> None:
+    """
+    SECURITY.md row "Embedded guest token" (in-scope bullet "An embedded guest
+    token authorizes actions outside the dashboard it was issued for");
+    principal: a guest holding an ordinary dashboard-scoped token.
+
+    ``datasets: [17]`` only narrows that token. It must not let the guest
+    read arbitrary columns of dataset 17 through an inline widget definition:
+    the request is refused with 403 before any query or value lookup runs.
+    """
+    from superset.commands.widget.data import WidgetValuesCommand
+
+    token_resources = [
+        _dashboard_resource() if kind == "dashboard" else _widget_resource(WIDGET_A)
+        for kind in resources
+    ]
+    _as_guest(mocker, _guest(token_resources, datasets=[DATASET_ID]))
+    datasource = _datasource()
+    _patch_tables(mocker, datasource)
+    fetch_data = mocker.patch("superset.widgets.data.DataBindingWidget.fetch_data")
+
+    if endpoint == "data":
+        selector = {
+            "widget": {
+                "type": "ag-grid-table",
+                "props": {
+                    "dataBinding": {
+                        "datasetId": DATASET_ID,
+                        "metrics": ["sum__num"],
+                        "dimensions": ["state", "gender"],
+                        "rowLimit": 10000,
+                    }
+                },
+            }
+        }
+        command: Any = WidgetDataCommand(selector, [])
+    else:
+        selector = {
+            "widget": {
+                "type": "filter.select",
+                "props": {"datasetId": DATASET_ID, "column": "state"},
+            }
+        }
+        command = WidgetValuesCommand(selector)
+
+    with pytest.raises(SavedWidgetForbiddenError) as excinfo:
+        command.run()
+    assert excinfo.value.status == 403
+    fetch_data.assert_not_called()
+    datasource.values_for_column.assert_not_called()
+    # The lower layers agree, so no other entry point turns the claim into a
+    # grant either.
+    assert not security_manager.guest_widget_grants_dataset(WidgetContext(DATASET_ID))
+    with pytest.raises(SupersetSecurityException):
+        fetch_column_values(DATASET_ID, "state", WidgetContext(DATASET_ID))
+
+
+def test_guest_saved_widget_pointed_at_another_dataset_is_denied(
+    mocker: MockerFixture, app_context: None
+) -> None:
+    """
+    SECURITY.md row "Embedded guest token"; principal: a guest whose token was
+    minted for widget A while it read dataset 17. After the author points the
+    widget at dataset 99 the token grants neither its data nor its values.
+    """
+    from superset.commands.widget.data import WidgetValuesCommand
+
+    _as_guest(mocker, _guest([_widget_resource(WIDGET_A, DATASET_ID)]))
+    rebound = _saved_widget(
+        WIDGET_A,
+        props={"dataBinding": {"datasetId": OTHER_DATASET_ID, "metrics": ["sum__num"]}},
+    )
+    filter_widget = _saved_widget(
+        WIDGET_B, props={"datasetId": OTHER_DATASET_ID, "column": "state"}
+    )
+    filter_widget.widget_type = "filter.select"
+    _patch_saved(mocker, rebound, filter_widget)
+    datasource = _datasource(OTHER_DATASET_ID)
+    _patch_tables(mocker, datasource)
+    # The query context the widget builds, checked by the real access rule.
+    query_context = _query_context(None, datasource)
+    query_context.raise_for_access.side_effect = lambda: (
+        security_manager.raise_for_access(query_context=query_context)
+    )
+    mocker.patch(
+        "superset.widgets.data.QueryContextFactory"
+    ).return_value.create.return_value = query_context
+    run = mocker.patch(
+        "superset.commands.chart.data.get_data_command.ChartDataCommand.run"
+    )
+
+    with pytest.raises(SavedWidgetForbiddenError):
+        WidgetDataCommand({"id": WIDGET_A}, []).run()
+    run.assert_not_called()
+
+    _as_guest(mocker, _guest([_widget_resource(WIDGET_B, DATASET_ID)]))
+    with pytest.raises(SavedWidgetForbiddenError):
+        WidgetValuesCommand({"id": WIDGET_B}).run()
+    datasource.values_for_column.assert_not_called()
+
+    # A token minted after the change is bound to the new dataset.
+    _as_guest(mocker, _guest([_widget_resource(WIDGET_B, OTHER_DATASET_ID)]))
+    datasource.values_for_column.return_value = ["CA"]
+    mocker.patch.object(security_manager, "raise_for_unsupported_guest_rls")
+    assert WidgetValuesCommand({"id": WIDGET_B}).run() == ["CA"]
 
 
 def test_guest_inline_widget_without_a_dataset_is_denied(
     mocker: MockerFixture, app_context: None
 ) -> None:
     """Default deny: nothing to check the definition against, so no access."""
-    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, _guest([_dataset_resource()]))
 
     with pytest.raises(SavedWidgetForbiddenError):
         resolve_widget({"widget": {"type": "markdown", "props": {"content": "hi"}}})
@@ -505,10 +641,34 @@ def test_sql_free_definitions_are_not_flagged() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(SQL_BEARING_PROPS))
-def test_sql_bearing_inline_definition_is_rejected_for_gamma(
+def test_sql_bearing_inline_definition_is_allowed_for_gamma_with_dataset_access(
     mocker: MockerFixture, app_context: None, name: str
 ) -> None:
-    _as_user(mocker)
+    """
+    SECURITY.md row "Gamma" (read data: only granted datasets). Explore lets a
+    Gamma user with access to a dataset add an ad-hoc SQL metric or filter to a
+    chart on it; the V2 builder applies the same rule, no stricter.
+    """
+    raise_for_access = _as_user(mocker)
+    datasource = _datasource()
+    _patch_tables(mocker, datasource)
+    props = SQL_BEARING_PROPS[name]
+
+    _, resolved, context = resolve_widget(
+        {"widget": {"type": "echarts", "props": props}}
+    )
+
+    assert resolved == props
+    assert context == WidgetContext(DATASET_ID)
+    raise_for_access.assert_called_with(datasource=datasource)
+
+
+@pytest.mark.parametrize("name", sorted(SQL_BEARING_PROPS))
+def test_sql_bearing_inline_definition_is_rejected_without_dataset_access(
+    mocker: MockerFixture, app_context: None, name: str
+) -> None:
+    """Gamma without a grant on the dataset: no SQL against it, as in Explore."""
+    _as_user(mocker, datasource_access=False)
     _patch_tables(mocker)
     selector = {"widget": {"type": "echarts", "props": SQL_BEARING_PROPS[name]}}
 
@@ -526,7 +686,7 @@ def test_sql_bearing_inline_definition_is_rejected_for_gamma(
 def test_sql_bearing_inline_definition_is_rejected_for_guests(
     mocker: MockerFixture, app_context: None, name: str
 ) -> None:
-    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, _guest([_dataset_resource()]))
     _patch_tables(mocker)
     selector = {"widget": {"type": "echarts", "props": SQL_BEARING_PROPS[name]}}
 
@@ -542,7 +702,7 @@ def test_sql_bearing_inline_definition_is_rejected_for_guests(
 def test_guest_never_authors_sql_whatever_its_roles_grant(
     mocker: MockerFixture, app_context: None
 ) -> None:
-    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, _guest([_dataset_resource()]))
     mocker.patch.object(security_manager, "can_access", return_value=True)
     mocker.patch.object(security_manager, "is_admin", return_value=True)
     mocker.patch.object(security_manager, "is_editor", return_value=True)
@@ -551,29 +711,42 @@ def test_guest_never_authors_sql_whatever_its_roles_grant(
 
 
 @pytest.mark.parametrize(
-    "grants",
-    [{"admin": True}, {"sql_lab": True}, {"editor": True}],
+    "grants, allowed",
+    [
+        ({"admin": True, "datasource_access": False}, True),
+        ({"datasource_access": True}, True),
+        # SQL Lab or editorship elsewhere is not access to this dataset.
+        ({"sql_lab": True, "datasource_access": False}, False),
+        ({"datasource_access": False}, False),
+    ],
 )
-def test_sql_bearing_inline_definition_needs_a_sql_capability(
-    mocker: MockerFixture, app_context: None, grants: dict[str, bool]
+def test_sql_authoring_follows_dataset_access(
+    mocker: MockerFixture,
+    app_context: None,
+    grants: dict[str, bool],
+    allowed: bool,
 ) -> None:
     """
-    Admin, the sql_lab role and editors of the dataset already write SQL
-    against this data elsewhere, so they may here too.
+    The SQL-authoring rule is dataset access, the rule classic charts use for
+    ad-hoc SQL metrics; admins always may.
     """
     _as_user(mocker, **grants)
     _patch_tables(mocker)
+    selector = {"widget": {"type": "echarts", "props": SQL_BEARING_PROPS["sql_metric"]}}
 
-    _, props, _ = resolve_widget(
-        {"widget": {"type": "echarts", "props": SQL_BEARING_PROPS["sql_metric"]}}
-    )
-    assert props == SQL_BEARING_PROPS["sql_metric"]
+    assert user_may_author_widget_sql(_datasource()) is allowed
+    if allowed:
+        _, props, _ = resolve_widget(selector)
+        assert props == SQL_BEARING_PROPS["sql_metric"]
+    else:
+        with pytest.raises(WidgetSqlNotAllowedError):
+            resolve_widget(selector)
 
 
 def test_guest_inline_definition_is_checked_against_the_dataset(
     mocker: MockerFixture, app_context: None
 ) -> None:
-    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, _guest([_dataset_resource()]))
     _patch_tables(mocker)
 
     for props in (
@@ -597,25 +770,44 @@ def test_guest_inline_definition_is_checked_against_the_dataset(
             resolve_widget({"widget": {"type": "echarts", "props": props}})
 
 
-def test_gamma_cannot_save_a_sql_bearing_widget(
+def test_gamma_saves_a_sql_bearing_widget_only_on_a_dataset_it_can_read(
     mocker: MockerFixture, app_context: None
 ) -> None:
-    _as_user(mocker)
+    own = _saved_widget(WIDGET_A, created_by_fk=1)
+    _patch_saved(mocker, own)
     _patch_tables(mocker)
 
-    with pytest.raises(WidgetSqlForbiddenError):
+    _as_user(mocker)
+    CreateSavedWidgetCommand(
+        {"widget_type": "echarts", "props": SQL_BEARING_PROPS["sql_metric"]}
+    ).validate()
+    UpdateSavedWidgetCommand(
+        WIDGET_A, {"props": SQL_BEARING_PROPS["sql_where_filter"]}
+    ).validate()
+    CreateSavedWidgetCommand({"widget_type": "echarts", "props": SAFE_PROPS}).validate()
+
+    _as_user(mocker, datasource_access=False)
+    with pytest.raises(SavedWidgetForbiddenError):
         CreateSavedWidgetCommand(
             {"widget_type": "echarts", "props": SQL_BEARING_PROPS["sql_metric"]}
         ).validate()
-
-    own = _saved_widget(WIDGET_A, created_by_fk=1)
-    _patch_saved(mocker, own)
-    with pytest.raises(WidgetSqlForbiddenError):
+    with pytest.raises(SavedWidgetForbiddenError):
         UpdateSavedWidgetCommand(
             WIDGET_A, {"props": SQL_BEARING_PROPS["sql_where_filter"]}
         ).validate()
 
-    CreateSavedWidgetCommand({"widget_type": "echarts", "props": SAFE_PROPS}).validate()
+
+def test_guest_cannot_save_a_widget_at_all(
+    mocker: MockerFixture, app_context: None
+) -> None:
+    _as_guest(mocker, _guest([_dataset_resource()]))
+    _patch_tables(mocker)
+
+    for props in (SAFE_PROPS, SQL_BEARING_PROPS["sql_metric"]):
+        with pytest.raises(SavedWidgetForbiddenError):
+            CreateSavedWidgetCommand(
+                {"widget_type": "echarts", "props": props}
+            ).validate()
 
 
 # --------------------------------------------------------------------------
@@ -722,7 +914,7 @@ def test_minting_rejects_unknown_resource_types(
 ) -> None:
     for resource in (
         {"type": "chart", "id": "1"},
-        {"type": "dataset", "id": DATASET_ID},
+        {"type": "datasets", "id": DATASET_ID},
         {"id": WIDGET_A},
     ):
         with pytest.raises(ValidationError):
@@ -779,7 +971,9 @@ def test_minting_still_checks_dashboards_listed_next_to_widgets(
     The minter's dashboard entitlement check runs for every dashboard
     resource, whatever other resource types the token lists.
     """
-    _patch_saved(mocker, _saved_widget(WIDGET_A, props={"content": "x"}))
+    note = _saved_widget(WIDGET_A, props={"content": "x"})
+    note.widget_type = "markdown"
+    _patch_saved(mocker, note)
     dashboard = MagicMock()
     dashboard.embedded = [MagicMock()]
     mocker.patch("superset.models.dashboard.Dashboard.get", return_value=dashboard)
@@ -799,9 +993,16 @@ def test_minting_still_checks_dashboards_listed_next_to_widgets(
     raise_for_access.assert_called_once_with(dashboard=dashboard)
 
 
-def test_minting_checks_inline_datasets_while_widget_apis_are_enabled(
+def test_minting_a_dataset_resource_requires_the_minters_dataset_access(
     mocker: MockerFixture, app_context: None
 ) -> None:
+    """
+    SECURITY.md row "Embedded guest token"; principal: a custom role holding
+    only ``can_grant_guest_token``. The inline grant is validated with
+    ``can_access_datasource`` for the minting user.
+    """
+    from superset.daos.exceptions import DatasourceNotFound
+
     datasource = _datasource()
     get_datasource = mocker.patch(
         "superset.daos.datasource.DatasourceDAO.get_datasource",
@@ -810,18 +1011,163 @@ def test_minting_checks_inline_datasets_while_widget_apis_are_enabled(
     can_access = mocker.patch.object(
         security_manager, "can_access_datasource", return_value=False
     )
-    flag = mocker.patch("superset.is_feature_enabled", return_value=False)
+    resources: Any = [{"type": "dataset", "id": str(DATASET_ID)}]
 
-    # Flag off: the claim only narrows dashboard tokens, as before.
-    security_manager.validate_guest_token_resources([], datasets=[DATASET_ID])
-    get_datasource.assert_not_called()
-
-    flag.side_effect = lambda name: name == "DASHBOARD_V2"
     with pytest.raises(SavedWidgetGuestTokenDeniedError):
-        security_manager.validate_guest_token_resources([], datasets=[DATASET_ID])
+        security_manager.validate_guest_token_resources(resources)
+    can_access.assert_called_once_with(datasource)
 
     can_access.return_value = True
-    security_manager.validate_guest_token_resources([], datasets=[DATASET_ID])
+    security_manager.validate_guest_token_resources(resources)
+    assert resources == [{"type": "dataset", "id": str(DATASET_ID)}]
+
+    get_datasource.side_effect = DatasourceNotFound()
+    with pytest.raises(ValidationError):
+        security_manager.validate_guest_token_resources(resources)
+
+    for bad_id in ("0", "-1", "1.5", "seven", "", "017", None):
+        with pytest.raises(ValidationError):
+            security_manager.validate_guest_token_resources(
+                [{"type": "dataset", "id": bad_id}]  # type: ignore[list-item]
+            )
+
+
+def test_minting_does_not_treat_the_datasets_claim_as_a_grant(
+    mocker: MockerFixture, app_context: None
+) -> None:
+    """
+    The claim stays what it was before widgets existed: an allowlist. Minting
+    neither checks it as a grant nor turns it into one, with the widget APIs
+    on or off, and the token it produces cannot run an inline definition.
+    """
+    get_datasource = mocker.patch(
+        "superset.daos.datasource.DatasourceDAO.get_datasource"
+    )
+    mocker.patch.object(security_manager, "can_access_datasource", return_value=False)
+
+    for enabled in (False, True):
+        mocker.patch("superset.is_feature_enabled", return_value=enabled)
+        resources: Any = []
+        security_manager.validate_guest_token_resources(
+            resources, datasets=[DATASET_ID]
+        )
+        assert resources == []
+    get_datasource.assert_not_called()
+
+    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    assert not security_manager.guest_widget_grants_dataset(WidgetContext(DATASET_ID))
+
+
+def test_guest_token_schema_drops_a_client_sent_widget_binding() -> None:
+    """Only the server records the dataset a widget resource is bound to."""
+    from superset.security.api import guest_token_create_schema
+
+    body = guest_token_create_schema.load(
+        {
+            "user": {"username": "guest"},
+            "resources": [
+                {"type": "widget", "id": WIDGET_A, "dataset_id": OTHER_DATASET_ID},
+                {"type": "dataset", "id": str(DATASET_ID)},
+            ],
+            "rls": [],
+        }
+    )
+
+    assert body["resources"] == [
+        {"type": "widget", "id": WIDGET_A},
+        {"type": "dataset", "id": str(DATASET_ID)},
+    ]
+    with pytest.raises(ValidationError):
+        guest_token_create_schema.load(
+            {"resources": [{"type": "datasets", "id": "1"}], "rls": []}
+        )
+
+
+# --------------------------------------------------------------------------
+# Minting: row level security for widget and dataset grants
+# --------------------------------------------------------------------------
+
+
+def _mint(
+    mocker: MockerFixture,
+    resources: list[dict[str, Any]],
+    rls: list[dict[str, Any]],
+    *,
+    protected: bool,
+    hook: Any = None,
+) -> dict[str, Any]:
+    """Mint a token for already-validated resources and decode its claims."""
+    datasource = _datasource()
+    datasource.row_level_security_filters = [MagicMock()] if protected else []
+    mocker.patch(
+        "superset.daos.datasource.DatasourceDAO.get_datasource",
+        return_value=datasource,
+    )
+    from flask import current_app
+
+    mocker.patch.dict(current_app.config, {"GUEST_TOKEN_VALIDATOR_HOOK": hook})
+    token = security_manager.create_guest_access_token(
+        {"username": "guest"},
+        resources,  # type: ignore[arg-type]
+        rls,  # type: ignore[arg-type]
+    )
+    return security_manager.parse_jwt_guest_token(token)
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        {"type": "widget", "id": WIDGET_A, "dataset_id": DATASET_ID},
+        {"type": "dataset", "id": str(DATASET_ID)},
+    ],
+)
+def test_minting_requires_an_rls_rule_for_an_rls_protected_dataset(
+    mocker: MockerFixture, app_context: None, resource: dict[str, Any]
+) -> None:
+    """
+    SECURITY.md row "Embedded guest token" and in-scope bullet
+    "row-level-security rule bypass"; principal: a guest of a widget whose
+    author is limited by role RLS. A guest is filtered by the token's rules
+    and the guest role's rules only, so a token without a covering rule would
+    show more than the author sees and is refused.
+    """
+    with pytest.raises(ValidationError, match="row level security"):
+        _mint(mocker, [resource], [], protected=True)
+    # A rule for another dataset covers nothing.
+    with pytest.raises(ValidationError, match="row level security"):
+        _mint(
+            mocker,
+            [resource],
+            [{"dataset": OTHER_DATASET_ID, "clause": "1 = 1"}],
+            protected=True,
+        )
+
+    scoped = _mint(
+        mocker,
+        [resource],
+        [{"dataset": DATASET_ID, "clause": "org = 'a'"}],
+        protected=True,
+    )
+    assert scoped["rls_rules"] == [{"dataset": DATASET_ID, "clause": "org = 'a'"}]
+    assert scoped["resources"] == [resource]
+    _mint(mocker, [resource], [{"clause": "org = 'a'"}], protected=True)
+
+    # No RLS on the dataset: nothing to preserve.
+    _mint(mocker, [resource], [], protected=False)
+    # The deployment's validator hook is the authority when one is installed.
+    _mint(mocker, [resource], [], protected=True, hook=lambda body: True)
+
+
+def test_minting_a_dashboard_token_is_not_subject_to_the_widget_rls_rule(
+    mocker: MockerFixture, app_context: None
+) -> None:
+    from superset.daos.datasource import DatasourceDAO
+
+    claims = _mint(mocker, [_dashboard_resource()], [], protected=True)
+
+    assert "datasets" not in claims
+    # Dashboard resources never reach the widget rule's dataset lookup.
+    DatasourceDAO.get_datasource.assert_not_called()  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------
@@ -853,7 +1199,7 @@ def test_widget_context_is_not_part_of_any_request_schema() -> None:
 def test_forged_widget_context_grants_nothing(
     mocker: MockerFixture, app_context: None, forged: Any
 ) -> None:
-    _as_guest(mocker, _guest([], datasets=[DATASET_ID]))
+    _as_guest(mocker, _guest([_dataset_resource()]))
     datasource = _datasource()
 
     query_context = _query_context(forged, datasource)

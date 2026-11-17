@@ -61,8 +61,8 @@ def test_only_the_read_only_data_routes_are_csrf_exempt(app: Any) -> None:
         "superset.widgets.api.values",
     }
 
-    # The exemption is matched on ``module.name`` of the view function, so the
-    # feature gate wrapping each method must keep both intact; otherwise it
+    # The exemption is matched on ``module.name`` of the view function, so
+    # every decorator wrapping a method must keep both intact; otherwise it
     # would silently stop applying (or apply to the wrong view).
     from superset.widgets.api import SavedWidgetRestApi
 
