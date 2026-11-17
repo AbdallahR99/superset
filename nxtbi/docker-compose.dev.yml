@@ -1,0 +1,37 @@
+# Development overlay: iterate on the fork's frontend and templates without rebuilding
+# the 4.8 GB image. Use together with the main file:
+#
+#   docker build --target superset-node-ci --build-arg BUILD_TRANSLATIONS=true -t nxtbi/fe-build:local .
+#   docker compose -f nxtbi/docker-compose.yml -f nxtbi/docker-compose.dev.yml run --rm fe-build dev
+#   docker compose -f nxtbi/docker-compose.yml -f nxtbi/docker-compose.dev.yml up -d
+#
+# The web tier then serves the assets built by fe-build and the backend files listed
+# below straight from the working tree. Drop the second -f to go back to the image.
+services:
+  # One-shot webpack/jest runner on a Linux filesystem (see nxtbi/dev/fe-build.sh).
+  fe-build:
+    image: nxtbi/fe-build:local
+    profiles: ["tools"]
+    entrypoint: ["bash", "/host/nxtbi/dev/fe-build.sh"]
+    environment:
+      NODE_OPTIONS: "--max_old_space_size=8192"
+    volumes:
+      - ..:/host:ro
+      - fe_work:/app/superset-frontend
+      - fe_assets:/app/superset/static/assets
+      - ./out/dev:/out
+    working_dir: /app/superset-frontend
+
+  superset:
+    volumes: &dev-overlay
+      - fe_assets:/app/superset/static/assets:ro
+      # Backend files changed on this branch (the web tier imports /app/superset).
+      - ../superset/templates/superset/spa.html:/app/superset/templates/superset/spa.html:ro
+      - ../superset/views/base.py:/app/superset/views/base.py:ro
+      - ../superset/embedded/view.py:/app/superset/embedded/view.py:ro
+      - ../superset/translations/utils.py:/app/superset/translations/utils.py:ro
+      - ../superset/config.py:/app/superset/config.py:ro
+
+volumes:
+  fe_work:
+  fe_assets:
