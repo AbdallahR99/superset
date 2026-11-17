@@ -314,3 +314,25 @@ describe('RuleList RTL', () => {
     expect(modalAfterClick).toBeInTheDocument();
   });
 });
+
+test('shows the clause left-to-right in a right-to-left interface', async () => {
+  fetchMock.modifyRoute(ruleListEndpoint, {
+    response: { result: mockRules, count: mockRules.length },
+  });
+  await act(async () => {
+    render(
+      <MemoryRouter>
+        <QueryParamProvider adapter={ReactRouter5Adapter}>
+          <RowLevelSecurityList user={mockUser} />
+        </QueryParamProvider>
+      </MemoryRouter>,
+      { useRedux: true, direction: 'rtl' },
+    );
+  });
+
+  // `1 = 0` must not be displayed as `0 = 1`: the predicate is isolated from
+  // the direction of the page.
+  const clause = await screen.findByText(mockRules[0].clause);
+  expect(clause.tagName).toBe('BDI');
+  expect(clause).toHaveAttribute('dir', 'ltr');
+});

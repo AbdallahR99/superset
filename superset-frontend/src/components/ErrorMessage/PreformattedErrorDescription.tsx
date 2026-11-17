@@ -16,17 +16,24 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import type { HTMLAttributes } from 'react';
 import { styled } from '@apache-superset/core/theme';
 
-/**
- * Preformatted error detail for an Alert description: preserves the server
- * error's line breaks, wraps long unbroken tokens (SQL, URIs, payloads)
- * instead of overflowing the Alert, and uses the theme's code font so it
- * matches other preformatted errors in the app.
- */
-export const PreformattedErrorDescription = styled.pre`
+const StyledPre = styled.pre`
   margin: 0;
   font-family: ${({ theme }) => theme.fontFamilyCode};
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 `;
+
+/**
+ * Preformatted error detail for an Alert description: preserves the server
+ * error's line breaks, wraps long unbroken tokens (SQL, URIs, payloads)
+ * instead of overflowing the Alert, and uses the theme's code font so it
+ * matches other preformatted errors in the app. The text comes from the
+ * server in a language unrelated to the interface language, so it takes the
+ * direction of its own content (`dir="auto"`).
+ */
+export const PreformattedErrorDescription = (
+  props: HTMLAttributes<HTMLPreElement>,
+) => <StyledPre dir="auto" {...props} />;

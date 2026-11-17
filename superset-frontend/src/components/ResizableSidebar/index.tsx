@@ -18,7 +18,7 @@
  */
 import { FC, ReactNode } from 'react';
 import { Resizable } from 're-resizable';
-import { styled } from '@apache-superset/core/theme';
+import { styled, useIsRtl } from '@apache-superset/core/theme';
 import useStoredSidebarWidth from './useStoredSidebarWidth';
 
 const ResizableWrapper = styled.div`
@@ -61,13 +61,18 @@ const ResizableSidebar: FC<Props> = ({
   children,
 }) => {
   const [width, setWidth] = useStoredSidebarWidth(id, initialWidth);
+  const isRtl = useIsRtl();
 
   return (
     <>
       <ResizableWrapper>
         <Resizable
-          enable={{ right: enable }}
+          // The handle sits on the edge that borders the content: the right
+          // edge of a sidebar docked left, the left edge of one docked right
+          // (right-to-left layouts). Only the enabled handle is rendered.
+          enable={isRtl ? { left: enable } : { right: enable }}
           handleClasses={{
+            left: 'sidebar-resizer',
             right: 'sidebar-resizer',
             bottom: 'hidden',
             bottomRight: 'hidden',

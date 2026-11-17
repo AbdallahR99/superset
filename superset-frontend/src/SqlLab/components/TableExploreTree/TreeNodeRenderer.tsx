@@ -17,7 +17,13 @@
  * under the License.
  */
 import { handleKeyboardActivation } from '@superset-ui/core';
-import { css, styled, useTheme } from '@apache-superset/core/theme';
+import {
+  css,
+  flipPlacement,
+  styled,
+  useDirection,
+  useTheme,
+} from '@apache-superset/core/theme';
 import { t } from '@apache-superset/core/translation';
 import type { NodeRendererProps } from 'react-arborist';
 import { Icons, Typography } from '@superset-ui/core/components';
@@ -118,6 +124,14 @@ const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({
   toggleSortColumns,
 }) => {
   const theme = useTheme();
+  const direction = useDirection();
+  // react-arborist indents rows with a physical `paddingLeft` and its list
+  // viewport is always left-to-right. Move the indentation to the inline-start
+  // side and give the row the interface direction, so the hierarchy grows from
+  // the side where reading starts.
+  const { paddingLeft, ...restStyle } = style;
+  const nodeStyle = { ...restStyle, paddingInlineStart: paddingLeft };
+  const nodeDir = direction === 'rtl' ? direction : undefined;
   const { data } = node;
   const parts = data.id.split(':');
   const [identifier, _dbId, schema, tableName] = parts;
@@ -157,8 +171,9 @@ const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({
     return (
       <div
         className="tree-node"
+        dir={nodeDir}
         style={{
-          ...style,
+          ...nodeStyle,
           opacity: 0.5,
           fontStyle: 'italic',
           cursor: 'default',
@@ -167,7 +182,9 @@ const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({
         <span className="tree-node-icon">
           <Icons.FileOutlined iconSize="l" />
         </span>
-        <span className="tree-node-title">{data.name}</span>
+        <span className="tree-node-title">
+          <bdi>{data.name}</bdi>
+        </span>
       </div>
     );
   }
@@ -177,7 +194,8 @@ const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({
     return (
       <StyledColumnNode
         className="tree-node"
-        style={style}
+        dir={nodeDir}
+        style={nodeStyle}
         data-selected={node.isSelected}
         onClick={() => node.select()}
       >
@@ -215,7 +233,8 @@ const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div
       className="tree-node"
-      style={style}
+      dir={nodeDir}
+      style={nodeStyle}
       data-selected={node.isSelected}
       onClick={e => {
         e.stopPropagation();
@@ -247,10 +266,13 @@ const TreeNodeRenderer: React.FC<TreeNodeRendererProps> = ({
           opacity: ${getOpacity(data.disableCheckbox)};
         `}
         ellipsis={{
-          tooltip: { title: data.name, placement: 'topLeft' },
+          tooltip: {
+            title: data.name,
+            placement: flipPlacement('topLeft', direction),
+          },
         }}
       >
-        {highlightText(data.name, searchTerm)}
+        <bdi>{highlightText(data.name, searchTerm)}</bdi>
       </Typography.Text>
       {identifier === 'schema' && (
         // Pure event-boundary wrapper: only stops the click/keydown from

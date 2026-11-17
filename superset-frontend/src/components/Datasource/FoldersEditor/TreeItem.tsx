@@ -327,7 +327,11 @@ function TreeItemComponent({
             onToggleCollapse(id);
           }}
         >
-          {isCollapsed ? <Icons.RightOutlined /> : <Icons.DownOutlined />}
+          {isCollapsed ? (
+            <Icons.RightOutlined mirrorInRtl />
+          ) : (
+            <Icons.DownOutlined />
+          )}
         </CollapseButton>
       )}
     </>

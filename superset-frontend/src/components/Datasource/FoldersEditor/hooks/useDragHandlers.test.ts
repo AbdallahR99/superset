@@ -18,8 +18,12 @@
  */
 
 import { renderHook, act } from '@testing-library/react';
-import type { DragStartEvent } from '@dnd-kit/core';
-import { FlattenedTreeItem } from '../constants';
+import type {
+  DragMoveEvent,
+  DragOverEvent,
+  DragStartEvent,
+} from '@dnd-kit/core';
+import { DRAG_INDENTATION_WIDTH, FlattenedTreeItem } from '../constants';
 import { FoldersEditorItemType } from '../../types';
 import { useDragHandlers } from './useDragHandlers';
 
@@ -161,4 +165,46 @@ test('draggedItemIds contains only active item when not in selection', () => {
   });
 
   expect(result.current.draggedItemIds).toEqual(new Set(['column-1']));
+});
+
+/**
+ * Drags metric-3 in place and moves the pointer horizontally by `deltaX`.
+ * metric-3 sits right below metric-2, which is one level deeper, so nesting
+ * it one level deeper makes subfolder-b the drop target.
+ */
+function dragMetric3Horizontally(deltaX: number) {
+  const { result } = setup();
+  act(() => {
+    result.current.handleDragStart(makeDragStartEvent('metric-3'));
+  });
+  act(() => {
+    result.current.handleDragOver({
+      over: { id: 'metric-3' },
+    } as unknown as DragOverEvent);
+  });
+  act(() => {
+    result.current.handleDragMove({
+      delta: { x: deltaX, y: 0 },
+    } as unknown as DragMoveEvent);
+  });
+  return result.current.currentDropTargetId;
+}
+
+afterEach(() => {
+  document.documentElement.removeAttribute('dir');
+});
+
+test('dragging right nests deeper in a left-to-right layout', () => {
+  expect(dragMetric3Horizontally(DRAG_INDENTATION_WIDTH)).toBe('subfolder-b');
+  expect(dragMetric3Horizontally(-DRAG_INDENTATION_WIDTH)).not.toBe(
+    'subfolder-b',
+  );
+});
+
+test('dragging left nests deeper in a right-to-left layout', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  expect(dragMetric3Horizontally(-DRAG_INDENTATION_WIDTH)).toBe('subfolder-b');
+  expect(dragMetric3Horizontally(DRAG_INDENTATION_WIDTH)).not.toBe(
+    'subfolder-b',
+  );
 });

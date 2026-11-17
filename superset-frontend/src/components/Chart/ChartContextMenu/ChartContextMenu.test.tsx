@@ -117,9 +117,10 @@ const TestWrapper = ({
   );
 };
 
-const setup = (openFilters?: ContextMenuFilters) =>
+const setup = (openFilters?: ContextMenuFilters, direction?: 'ltr' | 'rtl') =>
   render(<TestWrapper openFilters={openFilters} />, {
     useRedux: true,
+    direction,
     initialState: {
       ...mockState,
       user: {
@@ -178,6 +179,25 @@ test('tooltip is restored when user clicks outside to close context menu', async
     expect(screen.getByTestId('tooltip-visible')).toBeInTheDocument();
   });
 });
+
+test.each(['ltr', 'rtl'] as const)(
+  'anchors the menu at the physical pointer position in a %s layout',
+  async direction => {
+    setup(undefined, direction);
+
+    await userEvent.click(screen.getByTestId('open-context-menu'));
+    await waitFor(() => {
+      expect(screen.getByTestId('chart-context-menu')).toBeInTheDocument();
+    });
+
+    // eslint-disable-next-line testing-library/no-node-access
+    const anchor = document.getElementById(`hidden-span-${sliceId}`);
+    // Inline, hence never mirrored: the pointer's clientX is a distance from
+    // the left edge of the viewport whatever the text direction is.
+    expect(anchor?.style.left).toBe('100px');
+    expect(anchor?.style.right).toBe('');
+  },
+);
 
 test('tooltip is restored when user selects a menu item', async () => {
   setup();

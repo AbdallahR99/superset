@@ -133,4 +133,15 @@ describe('InvalidSQLErrorMessage', () => {
 
     unmount();
   });
+
+  test('keeps the SQL line and its caret left-to-right', () => {
+    const { getByText, unmount } = renderComponent();
+
+    const sqlLine = getByText('SELECT * FFROM table');
+    const caretLine = getByText('^');
+    expect(sqlLine.parentElement).toHaveAttribute('dir', 'ltr');
+    expect(caretLine.parentElement).toBe(sqlLine.parentElement);
+
+    unmount();
+  });
 });

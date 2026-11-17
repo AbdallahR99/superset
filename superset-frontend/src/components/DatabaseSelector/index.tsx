@@ -159,7 +159,9 @@ export const SelectLabel = ({
 }) => (
   <LabelStyle>
     <Label className="backend">{backend || ''}</Label>
-    <span className="name" title={databaseName}>
+    {/* A database name is an identifier: with its own direction it is
+        truncated at its end, not at its start, in a right-to-left layout. */}
+    <span className="name" title={databaseName} dir="auto">
       {databaseName}
     </span>
   </LabelStyle>
@@ -520,7 +522,7 @@ export function DatabaseSelector({
           displayValue: selectedCatalog?.label,
           disabled: !currentDb || readOnly,
           loading: loadingCatalogs,
-          icon: <Icons.RightOutlined />,
+          icon: <Icons.RightOutlined mirrorInRtl />,
         },
       );
     }
@@ -561,7 +563,7 @@ export function DatabaseSelector({
         displayValue: selectedSchema?.label,
         disabled: !currentDb || readOnly,
         loading: loadingSchemas,
-        icon: <Icons.RightOutlined />,
+        icon: <Icons.RightOutlined mirrorInRtl />,
       });
     }
     const refreshIcon = !readOnly && (

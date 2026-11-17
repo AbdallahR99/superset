@@ -49,7 +49,7 @@ const LastQueriedLabel: FC<LastQueriedLabelProps> = ({ queriedDttm }) => {
       `}
       data-test="last-queried-label"
     >
-      {t('Last queried at')}: {formattedTime}
+      {t('Last queried at')}: <bdi>{formattedTime}</bdi>
     </div>
   );
 };

@@ -23,6 +23,7 @@ import {
   type AgGridContainerElement,
 } from '@superset-ui/core/components/ThemedAgGridReact';
 import { GridTable } from '.';
+import { PIVOT_COL_ID } from './constants';
 
 // Jest renders the `css` prop as a plain attribute, so record the styles
 // GridTable builds instead of reading them from the DOM.
@@ -105,4 +106,44 @@ test('clips multi-line cell values at the cell so they do not overlap the rows b
   // The cell has the fixed row height; the inner value span grows to fit its
   // lines, so the clip has to be on the cell itself.
   expect(gridStyles).toMatch(/\.ag-cell\s*\{\s*overflow:\s*hidden;/);
+});
+
+const getPinnedSide = async (container: HTMLElement) => {
+  const gridContainer = container.querySelector<AgGridContainerElement>(
+    '[data-themed-ag-grid]',
+  );
+  await waitFor(() => expect(gridContainer?._agGridApi).toBeDefined());
+  const api = gridContainer!._agGridApi!;
+  return {
+    api,
+    pinned: api.getColumn(PIVOT_COL_ID)?.getPinned(),
+  };
+};
+
+test('pins the row-number column to the left in a left-to-right interface', async () => {
+  const { container } = render(<GridTable {...mockedProps} showRowNumber />);
+  const { api, pinned } = await getPinnedSide(container);
+
+  expect(api.getGridOption('enableRtl')).toBeFalsy();
+  expect(pinned).toBe('left');
+  expect(api.getAllDisplayedColumns().map(column => column.getColId())).toEqual(
+    [PIVOT_COL_ID, 'a', 'b', 'c'],
+  );
+});
+
+test('pins the row-number column to the right so it leads in a right-to-left interface', async () => {
+  const { container } = render(<GridTable {...mockedProps} showRowNumber />, {
+    direction: 'rtl',
+  });
+  const { api, pinned } = await getPinnedSide(container);
+
+  expect(api.getGridOption('enableRtl')).toBe(true);
+  // ag-grid keeps pinned sides physical when mirrored: the right side is where
+  // a right-to-left row starts.
+  expect(pinned).toBe('right');
+  // Displayed columns come back in reading order, which is also the order
+  // copy-to-clipboard and the CSV export use.
+  expect(api.getAllDisplayedColumns().map(column => column.getColId())).toEqual(
+    [PIVOT_COL_ID, 'a', 'b', 'c'],
+  );
 });

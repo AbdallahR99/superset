@@ -19,6 +19,7 @@
 import { createElement, Fragment, ReactElement } from 'react';
 import { escape } from 'lodash-es';
 import { t, tn } from '@apache-superset/core/translation';
+import { getDocumentDirection } from '@apache-superset/core/theme';
 import { isFeatureEnabled, FeatureFlag } from '@superset-ui/core';
 import getBootstrapData from 'src/utils/getBootstrapData';
 import { LocalStorageKeys, setItem } from 'src/utils/localStorageHelpers';
@@ -162,8 +163,10 @@ export function recoveredToast(
     return { text: message };
   }
   const linkText = t('View %(type)s', { type: typeLabel });
+  // The arrow points in the reading direction, towards what comes next.
+  const arrow = getDocumentDirection() === 'rtl' ? '←' : '→';
   return {
-    text: `${escape(message)} <a href="${escape(ensureAppRoot(url))}">${escape(linkText)} →</a>`,
+    text: `${escape(message)} <a href="${escape(ensureAppRoot(url))}">${escape(linkText)} ${arrow}</a>`,
     options: { allowHtml: true },
   };
 }

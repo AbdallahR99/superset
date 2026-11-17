@@ -17,6 +17,7 @@
  * under the License.
  */
 import { t } from '@apache-superset/core/translation';
+import { LtrIsolate } from '@apache-superset/core/theme';
 import { SupersetClient } from '@superset-ui/core';
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -170,6 +171,15 @@ function RowLevelSecurityList(props: RLSProps) {
         id: 'group_key',
       },
       {
+        // A SQL predicate reads left-to-right whatever the interface
+        // direction is; without the isolate `1 = 0` is shown as `0 = 1`.
+        Cell: ({
+          row: {
+            original: { clause },
+          },
+        }: {
+          row: { original: { clause?: string } };
+        }) => <LtrIsolate as="bdi">{clause}</LtrIsolate>,
         accessor: 'clause',
         Header: t('Clause'),
         size: 'xl',

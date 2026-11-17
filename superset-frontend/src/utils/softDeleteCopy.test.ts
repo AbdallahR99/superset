@@ -66,6 +66,20 @@ test('recoveredToast links to the asset and enables HTML when a url is present',
   expect(options).toEqual({ allowHtml: true });
 });
 
+test('recoveredToast points its arrow in the reading direction', () => {
+  expect(recoveredToast('My Chart', 'Chart', '/u').text).toContain(
+    'View Chart →</a>',
+  );
+  document.documentElement.setAttribute('dir', 'rtl');
+  try {
+    expect(recoveredToast('My Chart', 'Chart', '/u').text).toContain(
+      'View Chart ←</a>',
+    );
+  } finally {
+    document.documentElement.removeAttribute('dir');
+  }
+});
+
 test('recoveredToast is plain text with no html when there is no url', () => {
   const { text, options } = recoveredToast('My Chart', 'Chart');
   expect(text).toBe('My Chart restored successfully');

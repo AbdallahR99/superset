@@ -45,6 +45,7 @@ import { fDuration, extendedDayjs } from '@superset-ui/core/utils/dates';
 import { SqlLabRootState } from 'src/SqlLab/types';
 import { UserWithPermissionsAndRoles as User } from 'src/types/bootstrapTypes';
 import { openInNewTab } from 'src/utils/navigationUtils';
+import stripDirectionMarks from 'src/SqlLab/utils/stripDirectionMarks';
 import ResultSet from '../ResultSet';
 import HighlightedSql from '../HighlightedSql';
 import { StaticPosition, StyledTooltip, ModalResultSetWrapper } from './styles';
@@ -265,7 +266,9 @@ const QueryTable = ({
 
         if (q.endDttm) {
           q.duration = (
-            <Label monospace>{fDuration(q.startDttm, q.endDttm)}</Label>
+            <Label monospace>
+              <bdi dir="ltr">{fDuration(q.startDttm, q.endDttm)}</bdi>
+            </Label>
           );
         }
         q.user = (
@@ -288,7 +291,11 @@ const QueryTable = ({
         );
         q.started = (
           <Label monospace>
-            {extendedDayjs(q.startDttm).format('L HH:mm:ss')}
+            <bdi dir="ltr">
+              {stripDirectionMarks(
+                extendedDayjs(q.startDttm).format('L HH:mm:ss'),
+              )}
+            </bdi>
           </Label>
         );
         q.querylink = (

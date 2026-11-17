@@ -45,6 +45,10 @@ export interface ApiKey {
 export function ApiKeyList() {
   const theme = useTheme();
   const { addDangerToast, addSuccessToast } = useToasts();
+  // The hook renders the dialog inside the application providers, so it
+  // follows the theme, the locale and the text direction. The static
+  // Modal.confirm() renders outside of them.
+  const [modal, modalContextHolder] = Modal.useModal();
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -79,7 +83,7 @@ export function ApiKeyList() {
   }, []);
 
   function handleRevokeKey(keyUuid: string) {
-    Modal.confirm({
+    modal.confirm({
       title: t('Revoke API Key'),
       content: t(
         'Are you sure you want to revoke this API key? This action cannot be undone.',
@@ -135,6 +139,7 @@ export function ApiKeyList() {
       key: 'key_prefix',
       render: (prefix: string) => (
         <code
+          dir="ltr"
           css={css`
             background: ${theme.colorFillSecondary};
             padding: 2px 6px;
@@ -198,6 +203,7 @@ export function ApiKeyList() {
 
   return (
     <div>
+      {modalContextHolder}
       <div
         css={css`
           display: flex;

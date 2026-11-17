@@ -85,3 +85,12 @@ test('passes language option to the editor', () => {
 
   expect(screen.getByTestId('ace-editor-language')).toHaveTextContent('json');
 });
+
+test('keeps the hosted editor left-to-right without adding a layout box', () => {
+  render(<EditorHost {...defaultProps} />);
+
+  const boundary = screen.getByTestId('ace-editor-provider').parentElement;
+  expect(boundary).toHaveAttribute('dir', 'ltr');
+  // `display: contents` keeps the editor sized against the host's parent.
+  expect(boundary).toHaveStyle({ display: 'contents' });
+});

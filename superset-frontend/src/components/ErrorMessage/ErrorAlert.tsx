@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { t } from '@apache-superset/core/translation';
 import { Alert } from '@apache-superset/core/components';
 import { css, useTheme } from '@apache-superset/core/theme';
@@ -74,12 +74,18 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({
     fontFamily: theme.fontFamilyCode,
     margin: `${theme.sizeUnit}px 0`,
   };
+  // Preformatted content is a technical payload (database error text, SQL,
+  // stack trace) written in a language unrelated to the interface language.
+  // `dir="auto"` lets each payload take the direction of its own text, so a
+  // left-to-right message is not reordered or right-aligned in a right-to-left
+  // interface, while a translated message still reads right-to-left.
+  const renderPayload = (payload: ReactNode) => <div dir="auto">{payload}</div>;
   const renderDescription = () => (
     <div>
       {message &&
         (messagePre ? (
           <Typography.Paragraph style={preStyle}>
-            {message}
+            {renderPayload(message)}
           </Typography.Paragraph>
         ) : (
           <div>{message}</div>
@@ -89,7 +95,7 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({
           style={descriptionPre ? preStyle : {}}
           data-testid="description"
         >
-          {description}
+          {descriptionPre ? renderPayload(description) : description}
         </Typography.Paragraph>
       )}
       {descriptionDetails && (

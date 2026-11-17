@@ -473,11 +473,12 @@ const ChartContextMenu = (
           css={{
             visibility: 'hidden',
             position: 'fixed',
-            top: clientY,
-            left: clientX,
             width: 1,
             height: 1,
           }}
+          // Pointer coordinates are physical: as an inline style they are not
+          // mirrored in right-to-left layouts, unlike the css prop.
+          style={{ top: clientY, left: clientX }}
         />
       </Dropdown>
       {showDrillToDetail && (

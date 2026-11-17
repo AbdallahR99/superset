@@ -164,6 +164,8 @@ function CopyToClip({
         {shouldShowText && text && (
           <span
             data-test="short-url"
+            // URLs, identifiers and code keep their own reading order
+            dir="auto"
             css={(theme: SupersetTheme) => css`
               margin-right: ${theme.sizeUnit}px;
             `}

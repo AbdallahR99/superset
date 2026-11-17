@@ -129,3 +129,34 @@ test('ErrorAlert renders an exclamation-circle icon for error type in compact mo
     container.querySelector('[aria-label="exclamation-circle"]'),
   ).toBeInTheDocument();
 });
+
+test('ErrorAlert lets a preformatted payload take the direction of its own text', () => {
+  render(
+    <ErrorAlert
+      errorType="Error"
+      message="تعذر تنفيذ الاستعلام"
+      type="error"
+      description={'column "sector" does not exist\nLINE 1: SELECT sector'}
+    />,
+  );
+
+  const payload = screen.getByText(/does not exist/);
+  expect(payload).toHaveAttribute('dir', 'auto');
+  expect(payload).toHaveTextContent('column "sector" does not exist');
+  // The explanation is ordinary prose and follows the interface direction.
+  expect(screen.getByText('تعذر تنفيذ الاستعلام')).not.toHaveAttribute('dir');
+});
+
+test('ErrorAlert leaves a prose description in the interface direction', () => {
+  render(
+    <ErrorAlert
+      errorType="Error"
+      message="Something went wrong"
+      type="error"
+      description="Plain explanation"
+      descriptionPre={false}
+    />,
+  );
+
+  expect(screen.getByText('Plain explanation')).not.toHaveAttribute('dir');
+});

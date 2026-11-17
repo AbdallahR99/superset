@@ -44,6 +44,7 @@ import { styled } from '@apache-superset/core/theme';
 import { extendedDayjs as dayjs } from '@superset-ui/core/utils/dates';
 import { useAppDispatch } from 'src/SqlLab/hooks/useAppDispatch';
 import { useAppSelector } from 'src/SqlLab/hooks/useAppSelector';
+import stripDirectionMarks from 'src/SqlLab/utils/stripDirectionMarks';
 import rison from 'rison';
 import { createDatasource } from 'src/SqlLab/actions/sqlLab';
 import { addDangerToast } from 'src/components/MessageToasts/actions';
@@ -233,7 +234,7 @@ export const SaveDatasetModal = ({
   );
 
   const getDefaultDatasetName = () =>
-    `${datasource?.name || UNTITLED} ${dayjs().format('L HH:mm:ss')}`;
+    `${datasource?.name || UNTITLED} ${stripDirectionMarks(dayjs().format('L HH:mm:ss'))}`;
   const [datasetName, setDatasetName] = useState(getDefaultDatasetName());
   const [newOrOverwrite, setNewOrOverwrite] = useState(
     DatasetRadioState.SaveNew,
@@ -460,7 +461,7 @@ export const SaveDatasetModal = ({
                   setIncludeTemplateParameters(e.target.checked ?? false)
                 }
               />
-              <span style={{ marginLeft: '5px' }}>
+              <span style={{ marginInlineStart: '5px' }}>
                 {t('Include Template Parameters')}
               </span>
             </div>
