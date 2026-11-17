@@ -412,8 +412,12 @@ body: JSON.stringify({
   rules that apply to the guest role. Without either, the widget sees every
   row the dataset returns. For a dataset that carries RLS rules in Superset,
   a `widget` or `dataset` grant is refused (400) unless a token rule covers
-  that dataset (one naming it, or one with no `dataset`), or the deployment
-  installs `GUEST_TOKEN_VALIDATOR_HOOK` and decides itself.
+  that dataset (one naming it, or one with no `dataset`) with a non-empty
+  clause. The account that mints the token must be an admin or have no RLS
+  rule applying to it on that dataset: a minter cannot hand out rows it
+  cannot see itself. A deployment whose `GUEST_TOKEN_VALIDATOR_HOOK` enforces
+  an equivalent policy can switch the built-in check off with
+  `GUEST_TOKEN_WIDGET_RLS_GUARD = False`.
 - **No SQL from guests.** An inline definition may use saved metric names and
   simple aggregates (`AVG`, `COUNT`, `COUNT_DISTINCT`, `MAX`, `MIN`, `SUM`) on
   existing columns. A `sqlExpression` anywhere is a 400. SQL stored in a saved

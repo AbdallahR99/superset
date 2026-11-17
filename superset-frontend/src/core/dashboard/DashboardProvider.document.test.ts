@@ -250,3 +250,66 @@ test("getScopeTargets reads a node's authored scope", () => {
   expect(provider.getScopeTargets('node_50')).toBeUndefined();
   expect(provider.getScopeTargets('host:region')).toBeUndefined();
 });
+
+test('a stored document with a reserved node id loads with every node, reports it, and saves as a whole tree', () => {
+  const stored = JSON.parse(
+    '{"root":{"type":"grid","children":["__proto__","node_1"]},' +
+      '"__proto__":{"type":"markdown","props":{"content":"kept"}},' +
+      '"node_1":{"type":"filter.select","props":{"scope":{"targets":["__proto__","node_1"]}}}}',
+  );
+
+  const issues = provider.loadDocument(stored);
+
+  expect(issues).toEqual([
+    { kind: 'reserved-id', nodeId: '__proto__', renamedTo: 'renamed_1' },
+  ]);
+  expect(provider.getRoot().children).toEqual(['renamed_1', 'node_1']);
+  expect(provider.getNode('renamed_1')).toMatchObject({
+    type: 'markdown',
+    props: { content: 'kept' },
+  });
+  // What pointed at the node by id still does.
+  expect(provider.getScopeTargets('node_1')).toEqual(['renamed_1', 'node_1']);
+
+  // Every child the saved document lists is a node it holds.
+  const document = provider.getDocument();
+  expect(Object.keys(document).sort()).toEqual(['node_1', 'renamed_1', 'root']);
+
+  // And the content survives an edit elsewhere in the tree.
+  provider.updateProps('node_1', { column: 'region' });
+  expect(provider.getNode('renamed_1')?.props).toEqual({ content: 'kept' });
+});
+
+test('names every object answers to are not nodes of the store', () => {
+  provider.loadDocument(savedDocument());
+  const before = provider.getDocumentVersion();
+
+  ['__proto__', 'constructor', 'toString', 'hasOwnProperty'].forEach(id => {
+    expect(provider.getNode(id)).toBeUndefined();
+    expect(provider.getSubtreeIds(id)).toEqual([]);
+    expect(provider.getScopeTargets(id)).toBeUndefined();
+    expect(() => provider.updateProps(id, { a: 1 })).toThrow(/Unknown node/);
+    expect(() => provider.updateLayout(id, { colSpan: 2 })).toThrow(
+      /Unknown node/,
+    );
+    expect(() => provider.addWidget(id, 0, { type: 'markdown' })).toThrow(
+      /Unknown parent/,
+    );
+    expect(() => provider.moveWidget(id, 'root', 0)).toThrow(/Unknown node/);
+    provider.removeWidget(id);
+    provider.emit(id, 'filter.change', { value: 1 });
+  });
+  provider.updateLayouts({ constructor: { colSpan: 3 } });
+
+  expect(provider.getSourceIds('filter.change')).toEqual([]);
+  expect(Object.keys(provider.getDocument()).sort()).toEqual([
+    'node_50',
+    'node_7',
+    'root',
+  ]);
+  // Only `updateLayouts` committed, and it wrote nothing under that name.
+  expect(provider.getDocumentVersion()).toBe(before + 1);
+  provider.setSelection('constructor');
+  provider.updateProps('node_7', { column: 'city' });
+  expect(provider.getSelection()).toBeUndefined();
+});

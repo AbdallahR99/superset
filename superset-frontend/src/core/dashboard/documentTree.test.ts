@@ -21,7 +21,10 @@ import {
   MAX_DOCUMENT_DEPTH,
   MAX_DOCUMENT_NODES,
   collectSubtreeIds,
+  createNodeMap,
   depthOf,
+  hasNode,
+  isReservedNodeId,
   isInSubtree,
   sanitizeDocument,
   subtreeHeight,
@@ -214,4 +217,84 @@ test('a document past the node limit is refused, not truncated', () => {
   nodes.root = { children };
 
   expect(() => sanitizeDocument(nodes, 'root')).toThrow(DocumentLimitError);
+});
+
+/** A document as `JSON.parse` yields it: `__proto__` is a key of its own. */
+const parsed = (json: string): Nodes => JSON.parse(json) as Nodes;
+
+test('a node stored under a reserved id is kept under another id, and the rename is reported', () => {
+  const stored = parsed(
+    '{"root":{"children":["__proto__","constructor","b"]},' +
+      '"__proto__":{"children":["toString"],"content":"kept"},' +
+      '"constructor":{},"toString":{},"b":{}}',
+  );
+
+  const { nodes, issues, renamed } = sanitizeDocument(stored, 'root');
+
+  expect([...renamed]).toEqual([
+    ['__proto__', 'renamed_1'],
+    ['constructor', 'renamed_2'],
+    ['toString', 'renamed_3'],
+  ]);
+  expect(Object.keys(nodes).sort()).toEqual([
+    'b',
+    'renamed_1',
+    'renamed_2',
+    'renamed_3',
+    'root',
+  ]);
+  expect(nodes.root.children).toEqual(['renamed_1', 'renamed_2', 'b']);
+  expect(nodes.renamed_1).toEqual({
+    children: ['renamed_3'],
+    content: 'kept',
+  });
+  expect(issues).toEqual([
+    { kind: 'reserved-id', nodeId: '__proto__', renamedTo: 'renamed_1' },
+    { kind: 'reserved-id', nodeId: 'constructor', renamedTo: 'renamed_2' },
+    { kind: 'reserved-id', nodeId: 'toString', renamedTo: 'renamed_3' },
+  ]);
+});
+
+test('the id a reserved one is replaced with is never one the document uses', () => {
+  const { renamed } = sanitizeDocument(
+    parsed(
+      '{"root":{"children":["__proto__","renamed_1"]},"__proto__":{},"renamed_1":{}}',
+    ),
+    'root',
+  );
+  expect([...renamed]).toEqual([['__proto__', 'renamed_2']]);
+});
+
+test('a name every object answers to is not a node unless the document holds one', () => {
+  const nodes: Nodes = { root: { children: ['constructor', 'a'] }, a: {} };
+
+  expect(collectSubtreeIds(nodes, 'root')).toEqual(['root', 'a']);
+  expect(collectSubtreeIds(nodes, 'toString')).toEqual([]);
+  expect(isInSubtree(nodes, 'constructor', 'constructor')).toBe(false);
+  expect(depthOf(nodes, 'root', 'constructor')).toBeUndefined();
+  expect(depthOf(nodes, 'hasOwnProperty', 'a')).toBeUndefined();
+  expect(subtreeHeight(nodes, 'root')).toBe(1);
+
+  const { nodes: tree, issues } = sanitizeDocument(nodes, 'root');
+  expect(tree.root.children).toEqual(['a']);
+  expect(issues).toEqual([
+    { kind: 'missing-child', nodeId: 'constructor', parentId: 'root' },
+  ]);
+  expect(() => sanitizeDocument({ a: {} }, 'constructor')).toThrow(
+    /must contain/,
+  );
+});
+
+test('a node map holds a reserved id as a key like any other', () => {
+  const map = createNodeMap<TreeNode>();
+  const reserved = '__proto__';
+  map[reserved] = { children: [] };
+
+  expect(Object.keys(map)).toEqual(['__proto__']);
+  expect(hasNode(map, '__proto__')).toBe(true);
+  expect(hasNode(map, 'constructor')).toBe(false);
+  expect(hasNode({ a: {} }, 'toString')).toBe(false);
+  expect(isReservedNodeId('__proto__')).toBe(true);
+  expect(isReservedNodeId('prototype')).toBe(true);
+  expect(isReservedNodeId('node_1_abc123')).toBe(false);
 });

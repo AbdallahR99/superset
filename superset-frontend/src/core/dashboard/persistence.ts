@@ -18,6 +18,7 @@
  */
 import { SupersetClient } from '@superset-ui/core';
 import type { DocumentNode } from './DashboardProvider';
+import { createNodeMap } from './documentTree';
 
 export const DOCUMENT_VERSION = 1;
 
@@ -157,17 +158,39 @@ const canonical = (value: unknown): unknown => {
   return value;
 };
 
+/** The parts of a node the server stores only when they hold something. */
+const OPTIONAL_NODE_PARTS = ['layout', 'props', 'style'] as const;
+
+/**
+ * The nodes as the server stores them: a `layout`, `props` or `style` that
+ * is `null` is not stored at all, so it reads back as absent.
+ */
+const asStored = (nodes: Record<string, DocumentNode>): unknown[] =>
+  Object.keys(nodes)
+    .sort()
+    .map(id => {
+      const node: unknown = nodes[id];
+      if (typeof node !== 'object' || node === null) return [id, node];
+      const kept: Record<string, unknown> = { ...node };
+      OPTIONAL_NODE_PARTS.forEach(part => {
+        if (kept[part] === null) delete kept[part];
+      });
+      return [id, canonical(kept)];
+    });
+
 /**
  * Whether two documents are the same document: the same nodes with the same
- * content, whatever order their keys are in and whether an absent value is
- * spelled `undefined` or left out (JSON does not carry the difference).
+ * content, whatever order their keys are in, whether an absent value is
+ * spelled `undefined` or left out (JSON does not carry the difference), and
+ * whether a node's empty `layout`, `props` or `style` is spelled `null` or
+ * left out (the server does not store the difference).
  */
 export function sameDocumentNodes(
   left: Record<string, DocumentNode> | undefined,
   right: Record<string, DocumentNode> | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return false;
-  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+  return JSON.stringify(asStored(left)) === JSON.stringify(asStored(right));
 }
 
 /**
@@ -190,7 +213,7 @@ export async function readNodeErrors(
   if (typeof errors !== 'object' || errors === null || Array.isArray(errors)) {
     return {};
   }
-  const result: Record<string, string[]> = {};
+  const result = createNodeMap<string[]>();
   Object.entries(errors as Record<string, unknown>).forEach(
     ([nodeId, problems]) => {
       const lines = (Array.isArray(problems) ? problems : [problems])

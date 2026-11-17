@@ -72,10 +72,25 @@ const nameOf = (user: BootstrapUser): string =>
   user?.username ||
   '';
 
-/** When the row was last written, in words; `undefined` when it cannot be read as a time. */
-const humanize = (changedOn: string | undefined): string | undefined => {
+/** A zone designator at the end of an ISO timestamp: `Z`, `+02:00`, `-0500`. */
+const ZONE_DESIGNATOR = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/**
+ * When the row was last written, in words; `undefined` when it cannot be read
+ * as a time.
+ *
+ * The API states `changed_on` as the server's clock without a zone designator
+ * (`2026-01-01T10:00:00`). Read as it stands, that is a time in the zone of
+ * whoever is looking, so a dashboard saved a second ago is "4 hours ago" east
+ * of the server and "in 5 hours" west of it. A timestamp without a designator
+ * is therefore read as UTC, which is the clock a Superset server keeps; one
+ * that carries its own zone is read as written.
+ */
+export const humanize = (changedOn: string | undefined): string | undefined => {
   if (!changedOn) return undefined;
-  const when = extendedDayjs(changedOn);
+  const when = ZONE_DESIGNATOR.test(changedOn)
+    ? extendedDayjs(changedOn)
+    : extendedDayjs.utc(changedOn);
   return when.isValid() ? when.fromNow() : undefined;
 };
 

@@ -239,3 +239,30 @@ test('clicking the canvas itself clears the selection', async () => {
   // the one gesture that unambiguously means "nothing".
   expect(provider.getSelection()).toBeUndefined();
 });
+
+test('the page is held to the viewport while the builder is mounted, so the canvas is what scrolls', () => {
+  // Without a bounded page the document scrolls instead, and takes the
+  // header and the palette out of view on a long dashboard.
+  // Emotion writes its rules either as text or straight into the sheet,
+  // depending on the build; both are read.
+  const pageRules = () =>
+    Array.from(document.querySelectorAll('style'))
+      .map(
+        style =>
+          (style.textContent ?? '') +
+          Array.from(style.sheet?.cssRules ?? [])
+            .map(rule => rule.cssText)
+            .join(''),
+      )
+      .join('')
+      .replace(/\s+/g, '');
+  const bounded = 'body{height:100vh;max-height:100vh;overflow:hidden;}';
+
+  const { unmount } = renderPage();
+  expect(pageRules()).toContain(bounded);
+  expect(pageRules()).toMatch(/#app\{[^}]*min-height:0;overflow:hidden;\}/);
+
+  // Other pages scroll the document; the rule must not outlive the builder.
+  unmount();
+  expect(pageRules()).not.toContain(bounded);
+});

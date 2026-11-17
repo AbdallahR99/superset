@@ -1093,3 +1093,185 @@ test('closing the page keeps anything in flight from landing later', async () =>
   expect(listener).not.toHaveBeenCalled();
   expect(provider.getRoot().children).toEqual([]);
 });
+
+/** A create that failed with no answer, and no answer about it either. */
+const lostCreate = async () => {
+  const context = setup();
+  context.session.open(undefined);
+  addMarkdown();
+  const first = context.session.save();
+  const original = context.saves[0].args.nodes;
+  context.saves[0].reject(networkFailure());
+  await flush();
+  context.fetches[0].reject(networkFailure());
+  await first;
+  return { ...context, original };
+};
+
+test('a repeated create that finds the dashboard saved by someone since is a conflict, not an update over it', async () => {
+  const { session, saves } = await lostCreate();
+
+  // The create did land. The dashboard was opened in another tab and saved
+  // twice there, so it is at revision 3 with a tree this session never sent.
+  addMarkdown();
+  const second = session.save();
+  saves[1].resolve({ ...saved(7, 3, documentOf('theirs')), replayed: true });
+
+  await expect(second).resolves.toEqual({
+    status: 'conflict',
+    created: true,
+    id: 7,
+  });
+  // The repeat is the last request: nothing is written over the other copy.
+  expect(saves).toHaveLength(2);
+  expect(session.getState()).toMatchObject({
+    dashboardId: 7,
+    uuid: 'uuid-7',
+    baseRevision: undefined,
+    saving: false,
+    conflict: { revision: 3, source: 'save' },
+  });
+  expect(session.isDirty()).toBe(true);
+
+  // Carrying on does not turn the next save into a blind update either.
+  session.dismissConflict();
+  await expect(session.save()).resolves.toEqual({ status: 'conflict' });
+  expect(saves).toHaveLength(2);
+  expect(session.getState().conflict).toEqual({ revision: 3, source: 'save' });
+
+  // Overwriting is the author's decision, on the revision the server holds.
+  const overwriting = session.overwrite();
+  await flush();
+  expect(saves).toHaveLength(3);
+  expect(saves[2].args).toMatchObject({ id: 7, baseRevision: 3 });
+  saves[2].resolve(saved(7, 4));
+  await expect(overwriting).resolves.toMatchObject({ status: 'saved', id: 7 });
+  expect(session.getState()).toMatchObject({
+    baseRevision: 4,
+    conflict: undefined,
+  });
+});
+
+test('a lost create found by its uuid at a later revision with another tree is a conflict', async () => {
+  const { session, saves, fetches } = setup();
+  session.open(undefined);
+  addMarkdown();
+
+  const running = session.save();
+  saves[0].reject(networkFailure());
+  await flush();
+  fetches[0].resolve(saved(7, 5, documentOf('theirs')));
+
+  await expect(running).resolves.toEqual({
+    status: 'conflict',
+    created: true,
+    id: 7,
+  });
+  expect(saves).toHaveLength(1);
+  expect(session.getState()).toMatchObject({
+    dashboardId: 7,
+    baseRevision: undefined,
+    conflict: { revision: 5, source: 'save' },
+  });
+});
+
+test('a repeated create that finds one of its own earlier attempts is still updated without asking', async () => {
+  const { session, saves, original } = await lostCreate();
+
+  // A server that numbers its first write differently: the stored tree is
+  // what tells this session the row is still its own.
+  addMarkdown();
+  const second = session.save();
+  saves[1].resolve({ ...saved(7, 0, original), replayed: true });
+  await flush();
+
+  expect(saves).toHaveLength(3);
+  expect(saves[2].args).toMatchObject({ id: 7, baseRevision: 0 });
+  saves[2].resolve(saved(7, 1));
+  await expect(second).resolves.toMatchObject({ status: 'saved', id: 7 });
+  expect(session.getState().conflict).toBeUndefined();
+});
+
+test('reloading after a repeated create met someone else’s copy takes theirs', async () => {
+  const { session, saves, fetches } = await lostCreate();
+  addMarkdown();
+  const second = session.save();
+  saves[1].resolve({ ...saved(7, 3, documentOf('theirs')), replayed: true });
+  await second;
+
+  session.reloadTheirs();
+  expect(fetches[1].ref).toBe('7');
+  fetches[1].resolve(saved(7, 3, documentOf('theirs')));
+  await flush();
+
+  expect(provider.getRoot().children).toEqual(['theirs']);
+  expect(session.getState()).toMatchObject({
+    baseRevision: 3,
+    conflict: undefined,
+  });
+  // The decision was made: saving is an ordinary update again.
+  provider.updateProps('theirs', { content: 'edited' });
+  const third = session.save();
+  expect(saves[2].args).toMatchObject({ id: 7, baseRevision: 3 });
+  saves[2].resolve(saved(7, 4));
+  await third;
+});
+
+test('a lost update is recognised as stored when the only difference is a null the server does not store', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+  const widget = provider.addWidget('root', 0, {
+    type: 'markdown',
+    layout: null,
+    props: null,
+    style: null,
+  } as unknown as Parameters<typeof provider.addWidget>[2]);
+
+  const running = session.save();
+  const sent = saves[0].args.nodes;
+  saves[0].reject(networkFailure());
+  await flush();
+  // What the server holds: the same tree, without the null parts.
+  const stored = JSON.parse(JSON.stringify(sent)) as typeof sent;
+  stored[widget] = { type: 'markdown' };
+  fetches[1].resolve(saved(5, 4, stored));
+
+  await expect(running).resolves.toMatchObject({ status: 'saved', id: 5 });
+  expect(session.getState()).toMatchObject({
+    baseRevision: 4,
+    conflict: undefined,
+  });
+});
+
+test.each([403, 422])(
+  'a save refused with %s for a widget whose dataset the author cannot read is shown on that widget',
+  async status => {
+    const { session, saves } = await editedSession(3);
+
+    const running = session.save();
+    saves[0].reject(
+      refusal(status, {
+        message: 'You cannot author widgets on this dataset',
+        errors: {
+          a: [
+            {
+              loc: ['dataBinding', 'datasetId'],
+              message: 'You do not have access to dataset 12',
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(running).resolves.toMatchObject({ status: 'error' });
+    expect(saves).toHaveLength(1);
+    expect(session.getState()).toMatchObject({
+      saving: false,
+      conflict: undefined,
+      baseRevision: 3,
+      nodeErrors: {
+        a: ['dataBinding.datasetId: You do not have access to dataset 12'],
+      },
+    });
+    expect(session.isDirty()).toBe(true);
+  },
+);

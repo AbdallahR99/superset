@@ -19,6 +19,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { t } from '@apache-superset/core/translation';
+import { Global } from '@emotion/react';
 import { css, styled, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import {
   Button,
@@ -70,6 +71,32 @@ import { useSaveDashboard } from './useSaveDashboard';
 // type is known before the first node is rendered, and only where the
 // feature is on, so reaching this module some other way registers nothing.
 registerBuiltInWidgetsIfEnabled();
+
+/**
+ * Holds the page to the height of the viewport while the builder is mounted,
+ * so that `Canvas` below is what scrolls.
+ *
+ * The application shell grows with its content and lets the document scroll.
+ * Under that, a dashboard taller than the window scrolls the header and the
+ * editor panel away with it: the palette is out of reach exactly when the
+ * canvas is long, and `Canvas`'s own `overflow-y: auto` never applies because
+ * nothing above it has a height to overflow. A bounded `body` gives the flex
+ * chain from `#app` down to `Canvas` that height. Explore and SQL Lab bound
+ * the page the same way, and for the same reason; the rule is gone again when
+ * the builder unmounts.
+ */
+export const viewportBoundPageCss = css`
+  body {
+    height: 100vh;
+    max-height: 100vh;
+    overflow: hidden;
+  }
+  #app {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+`;
 
 const PageContainer = styled(Flex)`
   ${({ theme }) => css`
@@ -379,6 +406,7 @@ export default function DashboardBuilderV2() {
 
   return (
     <>
+      <Global styles={viewportBoundPageCss} />
       <PageContainer vertical>
         <DashboardHeader />
         {session.status === 'loading' && (

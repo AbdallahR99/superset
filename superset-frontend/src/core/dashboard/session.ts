@@ -130,6 +130,9 @@ export interface SessionApi {
 
 const ROOT_ID = 'root';
 
+/** The revision a create stores, by contract. */
+const INITIAL_REVISION = 1;
+
 /** One object for "none", so a state that still has none is the same state. */
 const NO_NODE_ERRORS: Readonly<Record<string, readonly string[]>> =
   Object.freeze({});
@@ -212,6 +215,21 @@ export class DashboardSession {
    * whose answer was lost and the retry that follows are one create.
    */
   private createUuid: string | undefined;
+
+  /**
+   * The trees sent under `createUuid`, one per attempt. Whichever attempt
+   * the server took, what it stored is one of these, and a row found under
+   * the uuid holding anything else has been saved by someone since.
+   */
+  private createAttempts: Record<string, DocumentNode>[] = [];
+
+  /**
+   * Set when the dashboard a lost create made was found holding a document
+   * this session never sent. The tree is then based on no revision the
+   * server handed to this session, and saving has to be a decision, exactly
+   * as after a discarded load.
+   */
+  private foreignCopy: SessionConflict | undefined;
 
   /**
    * An update that got no answer, when the server could not be asked whether
@@ -350,6 +368,8 @@ export class DashboardSession {
     this.supersede();
     // Another document, saved or not, is not the one the uuid was made for.
     this.createUuid = undefined;
+    this.createAttempts = [];
+    this.foreignCopy = undefined;
     if (ref === undefined) {
       this.loadDiscarded = false;
       this.store.newDocument();
@@ -399,6 +419,7 @@ export class DashboardSession {
     const controller = new AbortController();
     this.loadController = controller;
     this.loadDiscarded = false;
+    this.foreignCopy = undefined;
     // Blanked before the request rather than when it answers: until then the
     // tree would be the previous dashboard's under this one's name.
     this.store.newDocument();
@@ -476,14 +497,15 @@ export class DashboardSession {
       this.resaveRequested = true;
       return this.inFlightSave;
     }
-    if (this.loadDiscarded) {
+    if (this.loadDiscarded || this.foreignCopy !== undefined) {
       // Based on nothing the server ever sent, so there is no revision to
       // send back and an update would be a blind overwrite.
       this.setState({
-        conflict: this.state.conflict ?? {
-          revision: undefined,
-          source: 'load',
-        },
+        conflict: this.state.conflict ??
+          this.foreignCopy ?? {
+            revision: undefined,
+            source: 'load',
+          },
       });
       return Promise.resolve({ status: 'conflict' });
     }
@@ -569,7 +591,9 @@ export class DashboardSession {
         // create: that is what lets the server recognise a repeat instead of
         // creating a second dashboard.
         this.createUuid = uuidv4();
+        this.createAttempts = [];
       }
+      if (id === undefined) this.createAttempts.push(nodes);
       const uuid = id === undefined ? this.createUuid : undefined;
       let saved: DashboardV2 | undefined;
       try {
@@ -654,6 +678,32 @@ export class DashboardSession {
         savedId = saved.id;
         this.adoptRef = String(saved.id);
         this.createUuid = undefined;
+        const attempts = this.createAttempts;
+        this.createAttempts = [];
+        const storedNodes = saved.document?.nodes;
+        const holdsThisTree =
+          saved.replayed !== true || sameDocumentNodes(storedNodes, nodes);
+        if (
+          !holdsThisTree &&
+          saved.revision !== INITIAL_REVISION &&
+          !attempts.some(attempt => sameDocumentNodes(storedNodes, attempt))
+        ) {
+          // The dashboard was created by an earlier attempt whose answer was
+          // lost, and it has been saved since by someone who is not this
+          // session (the author's other tab, say). The row is adopted, the
+          // document it holds is not: writing this tree over it is for the
+          // author to choose.
+          this.foreignCopy = { revision: saved.revision, source: 'save' };
+          this.setState({
+            saving: false,
+            dashboardId: saved.id,
+            uuid: saved.uuid,
+            changedOn: saved.changed_on,
+            baseRevision: undefined,
+            conflict: this.foreignCopy,
+          });
+          return { status: 'conflict', ...creation() };
+        }
         this.setState({
           dashboardId: saved.id,
           uuid: saved.uuid,
@@ -661,13 +711,10 @@ export class DashboardSession {
           baseRevision: saved.revision,
           conflict: undefined,
         });
-        if (
-          saved.replayed === true &&
-          !sameDocumentNodes(saved.document?.nodes, nodes)
-        ) {
+        if (!holdsThisTree) {
           // The dashboard was created by an earlier attempt whose answer was
-          // lost, and what it holds is the tree as it was then. This tree is
-          // written to it as an update, on the revision it is at.
+          // lost, and what it holds is still the tree as it was then. This
+          // tree is written to it as an update, on the revision it is at.
           continue;
         }
       } else if (
@@ -736,6 +783,7 @@ export class DashboardSession {
       if (epoch !== this.epoch) return { status: 'superseded' };
     }
     this.loadDiscarded = false;
+    this.foreignCopy = undefined;
     this.setState({ conflict: undefined, baseRevision: revision });
     return this.save();
   }
@@ -761,6 +809,8 @@ export class DashboardSession {
     this.supersede();
     this.adoptRef = undefined;
     this.createUuid = undefined;
+    this.createAttempts = [];
+    this.foreignCopy = undefined;
     this.loadDiscarded = false;
     this.listeners.clear();
     this.stopWatchingRefused?.();

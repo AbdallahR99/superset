@@ -28,8 +28,10 @@ import { HOST_SOURCE_PREFIX } from '@apache-superset/core/widgets';
 import type { WidgetBus } from '@apache-superset/core/widgets';
 import {
   collectSubtreeIds,
+  createNodeMap,
   depthOf,
   getDocumentLimits,
+  hasNode,
   isInSubtree,
   sanitizeDocument,
   subtreeHeight,
@@ -83,7 +85,7 @@ export const isContainerType = (type: string): boolean =>
   type === GRID_TYPE || registeredContainerTypes.has(type);
 
 function createBlankNodes(): Record<string, StoredNode> {
-  return {
+  return createNodeMap<StoredNode>({
     [ROOT_ID]: {
       type: GRID_TYPE,
       // No total height is set here, and none is needed — the root grid's
@@ -92,7 +94,7 @@ function createBlankNodes(): Record<string, StoredNode> {
       layout: { columns: DEFAULT_COLUMNS, gap: 16 },
       children: [],
     },
-  };
+  });
 }
 
 /**
@@ -282,18 +284,26 @@ class DashboardProvider implements WidgetBus {
     // the thing being edited. Clearing it here — rather than at each removal
     // site — covers a subtree deletion too, where the node that vanished was
     // a descendant of the one actually removed.
-    if (this.selection !== undefined && !nodes[this.selection]) {
+    if (this.selection !== undefined && !hasNode(nodes, this.selection)) {
       this.selection = undefined;
     }
-    this.nodes = nodes;
+    // Held without a prototype whatever built `nodes`: an id is looked up
+    // here as a key, and a key such as `constructor` must find a node or
+    // nothing, never a member every object has.
+    this.nodes = createNodeMap(nodes);
     this.revision += 1;
     this.documentVersion += 1;
     this.layoutChangeEmitter.fire();
     this.stateSubscribers.forEach(fn => fn());
   }
 
+  /** The stored node under `id`, and nothing else an object answers to. */
+  private stored(id: string): StoredNode | undefined {
+    return hasNode(this.nodes, id) ? this.nodes[id] : undefined;
+  }
+
   private toNode(id: string): DashboardNode | undefined {
-    const data = this.nodes[id];
+    const data = this.stored(id);
     return data ? { id, ...data } : undefined;
   }
 
@@ -371,12 +381,12 @@ class DashboardProvider implements WidgetBus {
     parentId: string,
     nodes: Record<string, StoredNode>,
   ): Record<string, StoredNode> {
-    const parent = nodes[parentId];
+    const parent = hasNode(nodes, parentId) ? nodes[parentId] : undefined;
     if (!parent?.children) return nodes;
 
     const columns = parent.layout?.columns ?? DEFAULT_COLUMNS;
     const getNode = (nodeId: string): DashboardNode | undefined => {
-      const data = nodes[nodeId];
+      const data = hasNode(nodes, nodeId) ? nodes[nodeId] : undefined;
       return data ? { id: nodeId, ...data } : undefined;
     };
     const adjustments = resolveExplicitCollisions(
@@ -386,9 +396,9 @@ class DashboardProvider implements WidgetBus {
     );
     if (Object.keys(adjustments).length === 0) return nodes;
 
-    const result = { ...nodes };
+    const result = createNodeMap(nodes);
     Object.entries(adjustments).forEach(([id, layout]) => {
-      const node = result[id];
+      const node = hasNode(result, id) ? result[id] : undefined;
       if (node) result[id] = { ...node, layout: { ...node.layout, ...layout } };
     });
     return result;
@@ -404,7 +414,7 @@ class DashboardProvider implements WidgetBus {
     for (;;) {
       this.nextNodeId += 1;
       const id = `node_${this.nextNodeId}_${randomIdSuffix()}`;
-      if (this.nodes[id] === undefined) return id;
+      if (!hasNode(this.nodes, id)) return id;
     }
   }
 
@@ -425,7 +435,7 @@ class DashboardProvider implements WidgetBus {
       );
     }
 
-    const parent = this.nodes[parentId];
+    const parent = this.stored(parentId);
     if (!parent) {
       throw new Error(`[dashboard] Unknown parent node "${parentId}"`);
     }
@@ -450,11 +460,9 @@ class DashboardProvider implements WidgetBus {
     const clampedIndex = Math.max(0, Math.min(index, children.length));
     children.splice(clampedIndex, 0, id);
 
-    const nodes = {
-      ...this.nodes,
-      [parentId]: { ...parent, children },
-      [id]: node,
-    };
+    const nodes = createNodeMap(this.nodes);
+    nodes[parentId] = { ...parent, children };
+    nodes[id] = node;
 
     this.commit(this.resolveParentCollisions(parentId, nodes));
 
@@ -465,9 +473,9 @@ class DashboardProvider implements WidgetBus {
     if (id === ROOT_ID) {
       throw new Error('[dashboard] Cannot remove the root node');
     }
-    if (!this.nodes[id]) return;
+    if (!this.stored(id)) return;
 
-    const nodes = { ...this.nodes };
+    const nodes = createNodeMap(this.nodes);
     collectSubtreeIds(this.nodes, id).forEach(nodeId => {
       // The root survives whatever a malformed subtree claims to contain.
       if (nodeId !== ROOT_ID) delete nodes[nodeId];
@@ -489,10 +497,10 @@ class DashboardProvider implements WidgetBus {
     if (id === ROOT_ID) {
       throw new Error('[dashboard] Cannot move the root node');
     }
-    if (!this.nodes[id]) {
+    if (!this.stored(id)) {
       throw new Error(`[dashboard] Unknown node "${id}"`);
     }
-    if (!this.nodes[newParentId]?.children) {
+    if (!this.stored(newParentId)?.children) {
       throw new Error(
         `[dashboard] Node "${newParentId}" cannot hold children (not a container)`,
       );
@@ -506,7 +514,7 @@ class DashboardProvider implements WidgetBus {
 
     const oldParentId = this.findParentId(id, this.nodes);
 
-    const nodes = { ...this.nodes };
+    const nodes = createNodeMap(this.nodes);
     Object.entries(nodes).forEach(([parentId, parent]) => {
       if (parent.children?.includes(id)) {
         nodes[parentId] = {
@@ -561,15 +569,13 @@ class DashboardProvider implements WidgetBus {
   }
 
   public updateLayout(id: string, layout: Partial<LayoutProps>): void {
-    const node = this.nodes[id];
+    const node = this.stored(id);
     if (!node) {
       throw new Error(`[dashboard] Unknown node "${id}"`);
     }
 
-    const nodes = {
-      ...this.nodes,
-      [id]: { ...node, layout: { ...node.layout, ...layout } },
-    };
+    const nodes = createNodeMap(this.nodes);
+    nodes[id] = { ...node, layout: { ...node.layout, ...layout } };
 
     const parentId = this.findParentId(id, nodes);
     this.commit(
@@ -586,9 +592,9 @@ class DashboardProvider implements WidgetBus {
    * once for the whole gesture.
    */
   public updateLayouts(updates: Record<string, Partial<LayoutProps>>): void {
-    const nodes = { ...this.nodes };
+    const nodes = createNodeMap(this.nodes);
     Object.entries(updates).forEach(([id, layout]) => {
-      const node = nodes[id];
+      const node = hasNode(nodes, id) ? nodes[id] : undefined;
       if (!node) return;
       nodes[id] = { ...node, layout: { ...node.layout, ...layout } };
     });
@@ -604,15 +610,14 @@ class DashboardProvider implements WidgetBus {
    * position, layout, and identity just to change what it renders.
    */
   public updateProps(id: string, props: Record<string, unknown>): void {
-    const node = this.nodes[id];
+    const node = this.stored(id);
     if (!node) {
       throw new Error(`[dashboard] Unknown node "${id}"`);
     }
 
-    this.commit({
-      ...this.nodes,
-      [id]: { ...node, props: { ...node.props, ...props } },
-    });
+    const nodes = createNodeMap(this.nodes);
+    nodes[id] = { ...node, props: { ...node.props, ...props } };
+    this.commit(nodes);
   }
 
   /**
@@ -625,7 +630,31 @@ class DashboardProvider implements WidgetBus {
    * with a `DocumentLimitError` and leaves the current tree untouched.
    */
   public loadDocument(nodes: Record<string, DocumentNode>): DocumentIssue[] {
-    const { nodes: tree, issues } = sanitizeDocument(nodes, ROOT_ID);
+    const { nodes: tree, issues, renamed } = sanitizeDocument(nodes, ROOT_ID);
+    if (renamed.size > 0) {
+      // A filter names the widgets it applies to by id, in its properties,
+      // which the tree repair does not read.
+      Object.keys(tree).forEach(id => {
+        const node = tree[id];
+        const scope = node.props?.scope as { targets?: unknown } | undefined;
+        const targets = scope?.targets;
+        if (
+          Array.isArray(targets) &&
+          targets.some(target => renamed.has(target))
+        ) {
+          tree[id] = {
+            ...node,
+            props: {
+              ...node.props,
+              scope: {
+                ...scope,
+                targets: targets.map(target => renamed.get(target) ?? target),
+              },
+            },
+          };
+        }
+      });
+    }
     const root = tree[ROOT_ID];
     // Everything that places a widget asks the root for its `children`, so a
     // stored root without the array would be a dashboard nothing can be
@@ -655,7 +684,7 @@ class DashboardProvider implements WidgetBus {
    * reachable from the root, so nothing detached is ever written back.
    */
   public getDocument(): Record<string, DocumentNode> {
-    const document: Record<string, DocumentNode> = {};
+    const document = createNodeMap<DocumentNode>();
     collectSubtreeIds(this.nodes, ROOT_ID).forEach(id => {
       document[id] = this.nodes[id];
     });
@@ -672,13 +701,13 @@ class DashboardProvider implements WidgetBus {
     [...(this.eventSources.get(eventType) ?? [])].filter(
       id =>
         id.startsWith(HOST_SOURCE_PREFIX) ||
-        this.nodes[id] !== undefined ||
+        hasNode(this.nodes, id) ||
         this.allocatedSources.has(id),
     );
 
   /** A node's authored `props.scope.targets`; host sources carry theirs in the payload. */
   public getScopeTargets = (sourceId: string): string[] | undefined =>
-    (this.nodes[sourceId]?.props?.scope as { targets?: string[] } | undefined)
+    (this.stored(sourceId)?.props?.scope as { targets?: string[] } | undefined)
       ?.targets;
 
   public get onDidLayoutChange() {
@@ -751,7 +780,7 @@ class DashboardProvider implements WidgetBus {
     for (;;) {
       this.allocatedSourceIds += 1;
       const id = `widget-${this.allocatedSourceIds}`;
-      if (this.nodes[id] === undefined) {
+      if (!hasNode(this.nodes, id)) {
         this.allocatedSources.add(id);
         return id;
       }

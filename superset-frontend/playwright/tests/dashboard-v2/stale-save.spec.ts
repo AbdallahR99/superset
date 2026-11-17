@@ -135,8 +135,12 @@ test('the second of two editors to save is refused, and reloading shows the firs
 
     // A adds two widgets and renames the dashboard, then saves. Nobody has
     // written since A loaded, so the save is accepted.
+    // Placing a widget selects it, which brings its properties to the front
+    // of the editor panel: the palette has to be shown again for the next.
     await editorA.showPalette();
     await editorA.palette('markdown').click();
+    await expect(editorA.gridItems()).toHaveCount(2);
+    await editorA.showPalette();
     await editorA.palette('markdown').click();
     await expect(editorA.gridItems()).toHaveCount(3);
     await editorA.rename(renamedByA);

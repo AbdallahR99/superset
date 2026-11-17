@@ -19,7 +19,7 @@
 import userEvent from '@testing-library/user-event';
 import { render, screen } from 'spec/helpers/testing-library';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
-import DashboardHeader from './DashboardHeader';
+import DashboardHeader, { humanize } from './DashboardHeader';
 
 const provider = DashboardProvider.getInstance();
 
@@ -147,4 +147,24 @@ test('emptying the title is not a rename', async () => {
   // nameless; the field goes back to what the dashboard is still called.
   expect(provider.getRoot().props?.title).toBe('Quarterly review');
   expect(screen.getByTestId('header-title')).toHaveValue('Quarterly review');
+});
+
+test('a save made a moment ago reads as a moment ago in every time zone', () => {
+  // The API writes `changed_on` as the server's UTC clock with no zone
+  // designator. Read in the reader's own zone it is off by their offset:
+  // "5 hours ago" (or "in 4 hours") for a dashboard saved just before.
+  jest.useFakeTimers().setSystemTime(new Date('2026-01-01T10:05:00Z'));
+  try {
+    // Only meaningful where the reader is not on UTC, as this suite is not.
+    expect(new Date('2026-01-01T10:00:00').getTimezoneOffset()).not.toBe(0);
+    expect(humanize('2026-01-01T10:00:00')).toBe('5 minutes ago');
+    expect(humanize('2026-01-01T10:00:00.238676')).toBe('5 minutes ago');
+    // A timestamp that names its zone is read as written.
+    expect(humanize('2026-01-01T10:00:00Z')).toBe('5 minutes ago');
+    expect(humanize('2026-01-01T12:00:00+02:00')).toBe('5 minutes ago');
+    expect(humanize('not a time')).toBeUndefined();
+    expect(humanize(undefined)).toBeUndefined();
+  } finally {
+    jest.useRealTimers();
+  }
 });

@@ -25,6 +25,7 @@ import { cellRegistryEntries } from '@great-expectations/jsonforms-antd-renderer
 import { renderers } from 'src/features/semanticLayers/jsonFormsHelpers';
 import { provider } from 'src/core/dashboard/store';
 import inferPropsSchema, { untypedKeys } from './inferPropsSchema';
+import { interpretingAjv } from './interpretingValidator';
 
 /**
  * What a generated form is made to agree with.
@@ -271,6 +272,9 @@ export default function PropsForm({
           data={data}
           renderers={renderers}
           cells={cellRegistryEntries}
+          // Never a real Ajv: its first `compile` generates code, which the
+          // page's Content Security Policy refuses.
+          ajv={interpretingAjv}
           // Nothing here is required and nothing is constrained, because the
           // schema was read off values a widget already renders from — so a
           // validation message could only ever be about a type this form

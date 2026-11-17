@@ -1795,3 +1795,45 @@ test('a flat (one-level) nested chrome object renders its own fields, not an emp
     ).toBe('right'),
   );
 });
+
+test('renders, validates and evaluates rules where generating code is refused (no unsafe-eval)', async () => {
+  // The production Content Security Policy has no `'unsafe-eval'`, so
+  // `new Function` throws an EvalError there. Ajv compiles every schema that
+  // way; with it, mounting this panel takes the whole builder down.
+  const realFunction = global.Function;
+  function refuse(): never {
+    throw new EvalError('unsafe-eval is not an allowed source of script');
+  }
+  global.Function = refuse as unknown as FunctionConstructor;
+  try {
+    // `city` depends on `region`, which makes `buildUiSchema` attach a
+    // SHOW rule: the path that calls `ajv.validate` on top of `ajv.compile`.
+    mockPost({
+      type: 'object',
+      $defs: { Scope: { type: 'object', properties: {} } },
+      properties: {
+        prefix: { type: 'string', title: 'Prefix', minLength: 1 },
+        region: { type: 'string', title: 'Region', 'x-dynamic': true },
+        city: {
+          type: 'string',
+          title: 'City',
+          enum: ['Oslo'],
+          'x-dynamic': true,
+          'x-dependsOn': ['region'],
+        },
+        scope: { anyOf: [{ $ref: '#/$defs/Scope' }, { type: 'null' }] },
+      },
+      required: ['prefix'],
+    });
+    const id = mount('metric-tile', { prefix: 'a', region: 'north' });
+
+    const field = await screen.findByLabelText('Prefix');
+    await userEvent.type(field, 'b');
+    await waitFor(() => expect(provider.getNode(id)?.props?.prefix).toBe('ab'));
+    // `region` is set, so the rule on `city` was put to the validator
+    // (an unset dependency is decided before it is asked).
+    expect(screen.getByText('City')).toBeInTheDocument();
+  } finally {
+    global.Function = realFunction;
+  }
+});

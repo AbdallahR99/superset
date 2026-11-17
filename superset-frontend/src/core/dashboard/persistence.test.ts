@@ -340,3 +340,42 @@ test('an entity tag is read in each form the server may write it', () => {
   expect(revisionOfETag('"a"')).toBeUndefined();
   expect(revisionOfETag(null)).toBeUndefined();
 });
+
+test('a null layout, props or style on a node is the same as none, as the server stores it', () => {
+  const sent = {
+    root: { type: 'grid', children: ['a'] },
+    a: { type: 'markdown', layout: null, props: null, style: null },
+  } as unknown as Record<string, DocumentNode>;
+  const stored: Record<string, DocumentNode> = {
+    root: { type: 'grid', children: ['a'] },
+    a: { type: 'markdown' },
+  };
+
+  expect(sameDocumentNodes(sent, stored)).toBe(true);
+  expect(sameDocumentNodes(stored, sent)).toBe(true);
+  // Only at the top of a node: a null inside props is content.
+  expect(
+    sameDocumentNodes(
+      { ...stored, a: { type: 'markdown', props: { content: null } } },
+      { ...stored, a: { type: 'markdown', props: {} } },
+    ),
+  ).toBe(false);
+});
+
+test('a refusal with 403 that names widgets is read like any other', async () => {
+  // Written out as text: an object literal cannot carry `__proto__` as a key.
+  const refusal = new Response(
+    '{"message":"Forbidden","errors":{' +
+      '"a":[{"loc":["dataBinding","datasetId"],"message":"No access"}],' +
+      '"__proto__":["Reserved id"]}}',
+    { status: 403 },
+  );
+
+  const errors = await readNodeErrors(refusal);
+  expect(errors.a).toEqual(['dataBinding.datasetId: No access']);
+  expect(Object.keys(errors).sort()).toEqual(['__proto__', 'a']);
+  expect(Object.getOwnPropertyDescriptor(errors, '__proto__')?.value).toEqual([
+    'Reserved id',
+  ]);
+  expect(isAmbiguousSaveFailure(refusal)).toBe(false);
+});

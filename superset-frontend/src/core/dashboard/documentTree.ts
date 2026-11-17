@@ -112,6 +112,40 @@ export interface TreeNode {
 
 type NodeMap<T extends TreeNode> = Readonly<Record<string, T>>;
 
+/**
+ * Whether `id` names something every plain object already answers to
+ * (`__proto__`, `constructor`, `toString`, ...), or is `prototype`. Such an
+ * id cannot be told from "no such node" by a property read on an ordinary
+ * object, and the server refuses it as a node id (`RESERVED_NODE_IDS` in
+ * `superset/dashboard_v2/document.py`).
+ */
+export const isReservedNodeId = (id: string): boolean =>
+  id === 'prototype' || id in Object.prototype;
+
+/**
+ * A node map with no prototype, optionally filled from `source`. The keys of
+ * a document are ids chosen by whoever wrote it, so the map that holds them
+ * must have no members of its own: on an ordinary object, writing the key
+ * `__proto__` replaces the prototype instead of storing a node.
+ */
+export function createNodeMap<T>(
+  source?: Readonly<Record<string, T>>,
+): Record<string, T> {
+  const map: Record<string, T> = Object.create(null);
+  if (source) {
+    Object.keys(source).forEach(id => {
+      map[id] = source[id];
+    });
+  }
+  return map;
+}
+
+/** Whether `nodes` itself holds a node under `id`. */
+export const hasNode = <T>(
+  nodes: Readonly<Record<string, T>>,
+  id: string,
+): boolean => Object.hasOwn(nodes, id) && nodes[id] != null;
+
 export type DocumentIssueKind =
   /** A node lists one of its own ancestors (or itself) as a child. */
   | 'cycle'
@@ -122,7 +156,9 @@ export type DocumentIssueKind =
   /** The root listed as some node's child. */
   | 'root-as-child'
   /** A node nothing reachable from the root lists. */
-  | 'orphan';
+  | 'orphan'
+  /** A node stored under a reserved id; it is kept under another one. */
+  | 'reserved-id';
 
 /** One thing `sanitizeDocument` had to repair. */
 export interface DocumentIssue {
@@ -131,6 +167,8 @@ export interface DocumentIssue {
   nodeId: string;
   /** The node that carried the bad reference, when there was one. */
   parentId?: string;
+  /** The id a node stored under a reserved one was given instead. */
+  renamedTo?: string;
 }
 
 /** A document too large or too deep to be worked on at all. */
@@ -145,7 +183,7 @@ const childrenOf = <T extends TreeNode>(
   nodes: NodeMap<T>,
   id: string,
 ): readonly string[] => {
-  const children = nodes[id]?.children;
+  const children = hasNode(nodes, id) ? nodes[id].children : undefined;
   return Array.isArray(children) ? children : [];
 };
 
@@ -159,7 +197,7 @@ export function collectSubtreeIds<T extends TreeNode>(
   startId: string,
   limit: number = getDocumentLimits().maxNodes + 1,
 ): string[] {
-  if (nodes[startId] === undefined) return [];
+  if (!hasNode(nodes, startId)) return [];
   const seen = new Set<string>([startId]);
   const order: string[] = [];
   const stack: string[] = [startId];
@@ -170,7 +208,7 @@ export function collectSubtreeIds<T extends TreeNode>(
     // Pushed in reverse so the first child is the next one popped.
     for (let index = children.length - 1; index >= 0; index -= 1) {
       const childId = children[index];
-      if (!seen.has(childId) && nodes[childId] !== undefined) {
+      if (!seen.has(childId) && hasNode(nodes, childId)) {
         seen.add(childId);
         stack.push(childId);
       }
@@ -185,7 +223,7 @@ export function isInSubtree<T extends TreeNode>(
   ancestorId: string,
   targetId: string,
 ): boolean {
-  if (ancestorId === targetId) return nodes[ancestorId] !== undefined;
+  if (ancestorId === targetId) return hasNode(nodes, ancestorId);
   return collectSubtreeIds(nodes, ancestorId).includes(targetId);
 }
 
@@ -205,7 +243,7 @@ export function subtreeHeight<T extends TreeNode>(
     const next: string[] = [];
     level.forEach(nodeId => {
       childrenOf(nodes, nodeId).forEach(childId => {
-        if (!seen.has(childId) && nodes[childId] !== undefined) {
+        if (!seen.has(childId) && hasNode(nodes, childId)) {
           seen.add(childId);
           next.push(childId);
         }
@@ -227,7 +265,7 @@ export function depthOf<T extends TreeNode>(
   rootId: string,
   id: string,
 ): number | undefined {
-  if (nodes[rootId] === undefined) return undefined;
+  if (!hasNode(nodes, rootId)) return undefined;
   const { maxDepth } = getDocumentLimits();
   const seen = new Set<string>([rootId]);
   let level: string[] = [rootId];
@@ -237,7 +275,7 @@ export function depthOf<T extends TreeNode>(
     const next: string[] = [];
     level.forEach(nodeId => {
       childrenOf(nodes, nodeId).forEach(childId => {
-        if (!seen.has(childId) && nodes[childId] !== undefined) {
+        if (!seen.has(childId) && hasNode(nodes, childId)) {
           seen.add(childId);
           next.push(childId);
         }
@@ -257,22 +295,30 @@ export function depthOf<T extends TreeNode>(
  * reference to a node already placed is dropped: that is what removes a
  * cycle (the reference points back up the tree) and a second parent alike.
  * References to nothing and to the root are dropped too, and nodes nothing
- * reaches are left out. Every repair is reported so a caller can tell the
- * author their document was not what was stored.
+ * reaches are left out. A node stored under a reserved id (see
+ * {@link isReservedNodeId}) is kept, content and children, under an id made
+ * up for it, and every `children` list that named it is pointed at the new
+ * one; `renamed` maps old to new for whatever else refers to nodes by id.
+ * Every repair is reported so a caller can tell the author their document
+ * was not what was stored.
  *
  * Size and depth are not repaired. Cutting a document down to a budget would
  * silently delete an author's work on the next save, so a document beyond
  * either limit is refused with a {@link DocumentLimitError} instead.
  */
 export function sanitizeDocument<T extends TreeNode>(
-  nodes: NodeMap<T>,
+  stored: NodeMap<T>,
   rootId: string,
-): { nodes: Record<string, T>; issues: DocumentIssue[] } {
-  if (nodes[rootId] == null) {
+): {
+  nodes: Record<string, T>;
+  issues: DocumentIssue[];
+  renamed: Map<string, string>;
+} {
+  if (!hasNode(stored, rootId)) {
     throw new Error(`[dashboard] A document must contain a "${rootId}" node`);
   }
   const { maxNodes, maxDepth } = getDocumentLimits();
-  const total = Object.keys(nodes).length;
+  const total = Object.keys(stored).length;
   if (total > maxNodes) {
     throw new DocumentLimitError(
       `[dashboard] A document may hold at most ${maxNodes} nodes (found ${total})`,
@@ -280,7 +326,29 @@ export function sanitizeDocument<T extends TreeNode>(
   }
 
   const issues: DocumentIssue[] = [];
-  const result: Record<string, T> = {};
+  const renamed = new Map<string, string>();
+  let counter = 0;
+  Object.keys(stored).forEach(id => {
+    if (id === rootId || !isReservedNodeId(id) || stored[id] == null) return;
+    let replacement: string;
+    do {
+      counter += 1;
+      replacement = `renamed_${counter}`;
+    } while (Object.hasOwn(stored, replacement));
+    renamed.set(id, replacement);
+    issues.push({ kind: 'reserved-id', nodeId: id, renamedTo: replacement });
+  });
+  const nodes = createNodeMap<T>();
+  Object.keys(stored).forEach(id => {
+    const node = stored[id];
+    const children = node?.children;
+    nodes[renamed.get(id) ?? id] =
+      Array.isArray(children) && children.some(child => renamed.has(child))
+        ? { ...node, children: children.map(c => renamed.get(c) ?? c) }
+        : node;
+  });
+
+  const result = createNodeMap<T>();
   const parentOf = new Map<string, string>();
   const placed = new Set<string>([rootId]);
 
@@ -313,7 +381,7 @@ export function sanitizeDocument<T extends TreeNode>(
       node.children.forEach(childId => {
         if (childId === rootId) {
           issues.push({ kind: 'root-as-child', nodeId: childId, parentId: id });
-        } else if (nodes[childId] == null) {
+        } else if (!hasNode(nodes, childId)) {
           issues.push({ kind: 'missing-child', nodeId: childId, parentId: id });
         } else if (placed.has(childId)) {
           issues.push({
@@ -341,5 +409,5 @@ export function sanitizeDocument<T extends TreeNode>(
     if (!placed.has(id)) issues.push({ kind: 'orphan', nodeId: id });
   });
 
-  return { nodes: result, issues };
+  return { nodes: result, issues, renamed };
 }

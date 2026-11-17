@@ -61,6 +61,7 @@ import { provider, useDashboardRevision } from 'src/core/dashboard/store';
 import { fetchQueryData } from '@apache-superset/widgets/chartData';
 import { FormShell } from './PropsForm';
 import { schemaControlRenderers } from './schemaControlRenderers';
+import { interpretingAjv } from './interpretingValidator';
 import {
   commitWidgetProps,
   describeError,
@@ -374,6 +375,10 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
             data={props}
             renderers={schemaControlRenderers}
             cells={cellRegistryEntries}
+            // Validation and the `SHOW` rules of dependent fields run on an
+            // interpreter: Ajv itself generates code, which the page's
+            // Content Security Policy refuses (see `interpretingValidator`).
+            ajv={interpretingAjv}
             config={{ refreshingSchema, formData: liveData }}
             validationMode="ValidateAndHide"
             // Column/metric-reference controls need the widget's

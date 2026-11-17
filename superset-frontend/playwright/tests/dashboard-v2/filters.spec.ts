@@ -213,12 +213,13 @@ test("a filter's default scope excludes a chart on a different dataset", async (
   ).toBe(false);
 });
 
-// Skipped: SchemaControlPanel's loadSeries effect fires an extra,
-// unscoped fetchQueryData call whenever the Inspector applies a
-// dataBinding, independent of ChartWidget's own scope-aware fetch — so
-// the out-of-scope chart here refetches once more than this test expects.
-// Not a scope.targets bug; see SchemaControlPanel.tsx's `loadSeries` effect.
-test.skip('an explicit scope.targets list narrows which same-dataset chart a filter affects', async ({
+// A chart block's data is requested by two parties: the chart itself, and
+// the Inspector, which reads the block's distinct series values for its
+// per-series controls whenever a dataBinding is applied (SchemaControlPanel's
+// `loadSeries`; deliberately unfiltered, and carrying the same row limit).
+// So "how many requests the non-targeted chart has sent" is not a fixed
+// number here; what the filter must not do is add to it.
+test('an explicit scope.targets list narrows which same-dataset chart a filter affects', async ({
   page,
 }) => {
   const dataset = await getDatasetByName(page, DATASET_NAME);
@@ -279,7 +280,22 @@ test.skip('an explicit scope.targets list narrows which same-dataset chart a fil
     .poll(() => outOfScopeOf(payloads).length, { timeout: 15_000 })
     .toBeGreaterThan(0);
 
+  // Let every request of the build-up arrive before counting: the pick must
+  // be the only thing that can cause a request from here on.
+  let settledAt = -1;
+  await expect
+    .poll(
+      () => {
+        const settled = payloads.length === settledAt;
+        settledAt = payloads.length;
+        return settled;
+      },
+      { timeout: 15_000, intervals: [1_500] },
+    )
+    .toBe(true);
+
   const inScopeCountBeforePick = inScopeOf(payloads).length;
+  const outOfScopeCountBeforePick = outOfScopeOf(payloads).length;
   await pickFilterValue(page, FILTER_COLUMN, FILTER_VALUE);
 
   await expect
@@ -296,12 +312,14 @@ test.skip('an explicit scope.targets list narrows which same-dataset chart a fil
   expect(
     JSON.stringify(lastInScope.queries[0].filters ?? []).includes(FILTER_VALUE),
   ).toBe(true);
-  // Same dataset as the targeted chart, but not in `scope.targets` — must
-  // never have refetched at all, not just "refetched without the filter."
-  expect(outOfScopeOf(payloads).length).toBe(1);
+  // Same dataset as the targeted chart, but not in `scope.targets` — the
+  // pick must not have made it refetch at all, not just "refetch without the
+  // filter". Time is given for a refetch that should not come to show up.
+  await page.waitForTimeout(2_000);
+  expect(outOfScopeOf(payloads).length).toBe(outOfScopeCountBeforePick);
   expect(
-    JSON.stringify(lastOutOfScope.queries[0].filters ?? []).includes(
-      FILTER_VALUE,
+    outOfScopeOf(payloads).some(payload =>
+      JSON.stringify(payload.queries[0].filters ?? []).includes(FILTER_VALUE),
     ),
   ).toBe(false);
 });
