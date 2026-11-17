@@ -87,6 +87,8 @@ export const DateLabel = forwardRef(
       <span
         id={`date-label-${props.name}`}
         className="date-label-content"
+        // A range such as `2024-01-01 ≤ col < 2025-01-01` reads left-to-right
+        dir="auto"
         ref={ref}
       >
         {typeof props.label === 'string' ? t(props.label) : props.label}

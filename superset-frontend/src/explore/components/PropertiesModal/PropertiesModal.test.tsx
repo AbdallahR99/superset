@@ -479,3 +479,20 @@ test('Should show Viewers picker when ENABLE_VIEWERS is on', async () => {
 
   mockIsFeatureEnabled.mockRestore();
 });
+
+test('free-text fields follow their content in a right-to-left layout', async () => {
+  const props = createProps();
+  render(<PropertiesModal {...props} />, { useRedux: true, direction: 'rtl' });
+
+  const name = await screen.findByTestId('properties-modal-name-input');
+  await waitFor(() => expect(name).toHaveAttribute('dir', 'auto'));
+});
+
+test('free-text fields are left untouched in a left-to-right layout', async () => {
+  const props = createProps();
+  renderModal(props);
+
+  const name = await screen.findByTestId('properties-modal-name-input');
+  await waitFor(() => expect(name).toHaveValue(props.slice.slice_name));
+  expect(name).not.toHaveAttribute('dir');
+});

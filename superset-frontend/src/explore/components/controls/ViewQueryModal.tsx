@@ -167,7 +167,7 @@ const ViewQueryModal: FC<Props> = ({
     return <Loading />;
   }
   if (error) {
-    return <pre>{error}</pre>;
+    return <pre dir="auto">{error}</pre>;
   }
 
   return (

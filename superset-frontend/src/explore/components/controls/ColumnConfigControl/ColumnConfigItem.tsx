@@ -86,6 +86,8 @@ export default memo(function ColumnConfigItem({
     fontSize: `${theme.fontSizeSM}px`,
     fontWeight: theme.fontWeightNormal,
     color: theme.colorIcon,
+    // The caret points at the popover the row opens, towards inline-end.
+    transform: theme.direction === 'rtl' ? 'scaleX(-1)' : undefined,
   });
 
   return (

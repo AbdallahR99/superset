@@ -18,14 +18,29 @@
  */
 import { styled } from '@apache-superset/core/theme';
 
+/**
+ * Width a popover gains while its resize grip is dragged from `startX` to
+ * `clientX`. The grip sits on the bottom inline-end corner, which is the left
+ * one in right-to-left layouts, so there the pointer travels left to widen it.
+ */
+export const getResizeDeltaX = (
+  startX: number,
+  clientX: number,
+  isRtl: boolean,
+): number => (isRtl ? startX - clientX : clientX - startX);
+
 export const ExplorePopoverContent = styled.div`
   .edit-popover-resize {
-    transform: scaleX(-1);
+    /* The grip floats to the inline-end corner (mirrored automatically); the
+       arrows and the cursor must follow the diagonal of that corner. */
+    transform: ${({ theme }) =>
+      theme.direction === 'rtl' ? 'none' : 'scaleX(-1)'};
     float: right;
     margin-top: ${({ theme }) => theme.margin}px;
     margin-right: ${({ theme }) => theme.marginXXS * -1}px;
     color: ${({ theme }) => theme.colorIcon};
-    cursor: nwse-resize;
+    cursor: ${({ theme }) =>
+      theme.direction === 'rtl' ? 'nesw-resize' : 'nwse-resize'};
   }
   .filter-sql-editor {
     border: ${({ theme }) => theme.colorBorder} solid thin;

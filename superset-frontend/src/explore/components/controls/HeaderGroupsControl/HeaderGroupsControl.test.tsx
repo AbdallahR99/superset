@@ -904,3 +904,69 @@ test('removes stale columns that are no longer available', () => {
     { programmatic: true },
   );
 });
+
+test('swaps the physical wording of the move buttons in right-to-left layouts', async () => {
+  // Groups follow the reading direction of the table, so the group that
+  // moves one position forward goes to the left there.
+  const onChange = jest.fn();
+  render(
+    <HeaderGroupsControl
+      {...baseProps}
+      value={[
+        createGroup({
+          children: [
+            createGroup({
+              id: 'child-1',
+              label: 'Online',
+              columns: ['SUM(cost)'],
+            }),
+            createGroup({
+              id: 'child-2',
+              label: 'Offline',
+              columns: ['AVG(sales)'],
+            }),
+          ],
+        }),
+      ]}
+      onChange={onChange}
+    />,
+    { direction: 'rtl' },
+  );
+
+  await userEvent.click(screen.getByText('Group 1'));
+  const forward = screen.getAllByLabelText('Move group left')[0];
+  expect(within(forward).getByRole('img')).toHaveAttribute(
+    'aria-label',
+    'left',
+  );
+  await userEvent.click(forward);
+
+  expect(onChange).toHaveBeenCalledWith([
+    expect.objectContaining({
+      children: [
+        expect.objectContaining({ id: 'child-2' }),
+        expect.objectContaining({ id: 'child-1' }),
+      ],
+    }),
+  ]);
+});
+
+test('labels the first table side as the right one in right-to-left layouts', async () => {
+  const onChange = jest.fn();
+  render(
+    <HeaderGroupsControl
+      {...baseProps}
+      value={[createGroup()]}
+      onChange={onChange}
+    />,
+    { direction: 'rtl' },
+  );
+
+  await userEvent.click(screen.getByText('Group 1'));
+
+  // "Label position" keeps its own Left/Right pair; the second pair is the
+  // table side, whose stored `left` value is the leading side of the table.
+  const rightRadios = screen.getAllByRole('radio', { name: 'Right' });
+  const tableSide = rightRadios[rightRadios.length - 1];
+  expect(tableSide).toHaveAttribute('value', 'left');
+});

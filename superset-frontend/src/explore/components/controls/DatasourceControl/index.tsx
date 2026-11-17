@@ -202,10 +202,12 @@ export const renderDatasourceTitle = (
   displayString?.length && displayString.length > VISIBLE_TITLE_LENGTH ? (
     // Add a tooltip only for long names that will be visually truncated
     <Tooltip title={tooltip}>
-      <span className="title-select">{displayString}</span>
+      <span className="title-select" dir="auto">
+        {displayString}
+      </span>
     </Tooltip>
   ) : (
-    <span title={tooltip} className="title-select">
+    <span title={tooltip} className="title-select" dir="auto">
       {displayString}
     </span>
   );

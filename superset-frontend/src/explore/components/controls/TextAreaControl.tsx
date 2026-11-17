@@ -37,6 +37,7 @@ import { useTheme } from '@apache-superset/core/theme';
 import 'ace-builds/src-min-noconflict/mode-handlebars';
 
 import ControlHeader from 'src/explore/components/ControlHeader';
+import InputDirection from './shared/InputDirection';
 
 interface HotkeyConfig {
   name: string;
@@ -323,14 +324,16 @@ function TextAreaControl({
 
       const textArea = (
         <div>
-          <Input.TextArea
-            placeholder={t('textarea')}
-            onChange={handleChange}
-            defaultValue={initialValue ?? value}
-            disabled={readOnly}
-            style={{ height }}
-            aria-required={ariaRequired}
-          />
+          <InputDirection mode="auto" value={value ?? initialValue}>
+            <Input.TextArea
+              placeholder={t('textarea')}
+              onChange={handleChange}
+              defaultValue={initialValue ?? value}
+              disabled={readOnly}
+              style={{ height }}
+              aria-required={ariaRequired}
+            />
+          </InputDirection>
         </div>
       );
 

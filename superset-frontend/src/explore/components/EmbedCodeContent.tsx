@@ -32,6 +32,7 @@ import { CopyToClipboard } from 'src/components';
 import { URL_PARAMS } from 'src/constants';
 import { getChartPermalink } from 'src/utils/urlUtils';
 import { Icons } from '@superset-ui/core/components/Icons';
+import InputDirection from './controls/shared/InputDirection';
 
 export interface EmbedCodeContentProps {
   formData?: LatestQueryFormData;
@@ -121,22 +122,25 @@ const EmbedCodeContent: FC<EmbedCodeContentProps> = ({
             </button>
           }
         />
-        <Input.TextArea
-          data-test="embed-code-textarea"
-          name="embedCode"
-          disabled={!html}
-          value={text}
-          rows={4}
-          readOnly
-          css={theme => css`
-            resize: vertical;
-            margin-top: ${theme.sizeUnit * 2}px;
-            padding: ${theme.sizeUnit * 2}px;
-            font-size: ${theme.fontSizeSM}px;
-            border-radius: 4px;
-            background-color: ${theme.colorBgElevated};
-          `}
-        />
+        {/* The embed code is markup; a status message follows its script. */}
+        <InputDirection mode={html ? 'ltr' : 'auto'} value={text}>
+          <Input.TextArea
+            data-test="embed-code-textarea"
+            name="embedCode"
+            disabled={!html}
+            value={text}
+            rows={4}
+            readOnly
+            css={theme => css`
+              resize: vertical;
+              margin-top: ${theme.sizeUnit * 2}px;
+              padding: ${theme.sizeUnit * 2}px;
+              font-size: ${theme.fontSizeSM}px;
+              border-radius: 4px;
+              background-color: ${theme.colorBgElevated};
+            `}
+          />
+        </InputDirection>
       </div>
       <Space
         direction="horizontal"

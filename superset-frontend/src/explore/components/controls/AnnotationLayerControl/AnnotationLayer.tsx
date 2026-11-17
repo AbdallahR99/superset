@@ -43,7 +43,7 @@ import {
   type QueryFormColumn,
 } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
-import { styled, useTheme } from '@apache-superset/core/theme';
+import { styled, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { logging } from '@apache-superset/core/utils';
 import SelectControl from 'src/explore/components/controls/SelectControl';
 import TextControl from 'src/explore/components/controls/TextControl';
@@ -244,6 +244,7 @@ function AnnotationLayer({
   close = () => {},
 }: AnnotationLayerProps) {
   const theme = useTheme();
+  const isRtl = useIsRtl();
 
   // Process overrides - only allow override whole time_range
   const processedOverrides = useMemo((): AnnotationOverrides => {
@@ -1156,9 +1157,11 @@ function AnnotationLayer({
     // Fitting beside the panel needs no shift, avoiding the offset antd leaves
     // behind when it shifts. Wrapping to get there costs more than the offset, so
     // anything narrower falls back to the viewport and antd shifts across the panel.
+    // The chart side of the panel: to its right, or to its left in
+    // right-to-left layouts.
+    const panelRect = panel.getBoundingClientRect();
     const besidePanel =
-      viewport -
-      panel.getBoundingClientRect().right -
+      (isRtl ? panelRect.left : viewport - panelRect.right) -
       popoverInsetWidth -
       viewportInset;
     const available =
@@ -1168,7 +1171,7 @@ function AnnotationLayer({
     if (available > 0) {
       setSectionsMaxWidth(available);
     }
-  }, [sectionGap, viewportInset]);
+  }, [sectionGap, viewportInset, isRtl]);
 
   // Resizing the viewport or dragging the panel moves the edge the cap derives
   // from, so remeasure while the popover is open. Observing the panel and not the

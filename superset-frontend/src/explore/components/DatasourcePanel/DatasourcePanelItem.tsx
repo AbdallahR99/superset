@@ -264,8 +264,8 @@ const DatasourcePanelItem = ({
     <div
       style={{
         ...style,
-        paddingLeft: theme.sizeUnit * 4 + indentation,
-        paddingRight: theme.sizeUnit * 4,
+        paddingInlineStart: theme.sizeUnit * 4 + indentation,
+        paddingInlineEnd: theme.sizeUnit * 4,
         opacity: isRowInDraggedFolder ? 0.5 : undefined,
       }}
     >

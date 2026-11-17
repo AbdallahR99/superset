@@ -22,6 +22,7 @@ import { t } from '@apache-superset/core/translation';
 import { styled } from '@apache-superset/core/theme';
 import { debounce } from 'lodash-es';
 import ControlHeader from 'src/explore/components/ControlHeader';
+import InputDirection from './shared/InputDirection';
 
 type ValueType = (number | null)[];
 
@@ -36,12 +37,12 @@ const StyledDiv = styled.div`
 
 const MinInput = styled(InputNumber)`
   flex: 1;
-  margin-right: ${({ theme }) => theme.sizeUnit}px;
+  margin-inline-end: ${({ theme }) => theme.sizeUnit}px;
 `;
 
 const MaxInput = styled(InputNumber)`
   flex: 1;
-  margin-left: ${({ theme }) => theme.sizeUnit}px;
+  margin-inline-start: ${({ theme }) => theme.sizeUnit}px;
 `;
 
 const parseNumber = (value: undefined | number | string | null) => {
@@ -92,22 +93,27 @@ export default function BoundsControl({
     <div>
       <ControlHeader {...props} />
       <StyledDiv>
-        <MinInput
-          data-test="min-bound"
-          placeholder={t('Min')}
-          // emit (string | number | undefined | null)
-          onChange={onMinChange}
-          // accept (number | undefined)
-          value={minMax[0] === null ? undefined : minMax[0]}
-        />
-        <MaxInput
-          data-test="max-bound"
-          placeholder={t('Max')}
-          // emit (number | string | undefined | null)
-          onChange={onMaxChange}
-          // accept (number | undefined)
-          value={minMax[1] === null ? undefined : minMax[1]}
-        />
+        {/* A negative bound reads `5-` when laid out right-to-left. */}
+        <InputDirection mode="auto" value={minMax[0]}>
+          <MinInput
+            data-test="min-bound"
+            placeholder={t('Min')}
+            // emit (string | number | undefined | null)
+            onChange={onMinChange}
+            // accept (number | undefined)
+            value={minMax[0] === null ? undefined : minMax[0]}
+          />
+        </InputDirection>
+        <InputDirection mode="auto" value={minMax[1]}>
+          <MaxInput
+            data-test="max-bound"
+            placeholder={t('Max')}
+            // emit (number | string | undefined | null)
+            onChange={onMaxChange}
+            // accept (number | undefined)
+            value={minMax[1] === null ? undefined : minMax[1]}
+          />
+        </InputDirection>
       </StyledDiv>
     </div>
   );

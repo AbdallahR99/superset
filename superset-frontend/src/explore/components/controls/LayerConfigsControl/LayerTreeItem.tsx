@@ -20,7 +20,7 @@ import { Icons } from '@superset-ui/core/components/Icons';
 import { Button } from '@superset-ui/core/components';
 import { Tag } from 'src/components';
 import { FC } from 'react';
-import { css } from '@apache-superset/core/theme';
+import { css, type SupersetTheme } from '@apache-superset/core/theme';
 import { LayerTreeItemProps } from './types';
 
 const layerTreeItemLabelCss = css`
@@ -31,6 +31,13 @@ const layerTreeItemLabelCss = css`
   text-align: left;
   cursor: pointer;
 `;
+
+// The chevron points at the editor the item opens, towards inline-end.
+const forwardChevronCss = (theme: SupersetTheme) =>
+  theme.direction === 'rtl' &&
+  css`
+    transform: scaleX(-1);
+  `;
 
 export const LayerTreeItem: FC<LayerTreeItemProps> = ({
   layerConf,
@@ -72,7 +79,7 @@ export const LayerTreeItem: FC<LayerTreeItemProps> = ({
       </button>
       <Button
         className="layer-tree-item-edit"
-        icon={<Icons.RightOutlined />}
+        icon={<Icons.RightOutlined css={forwardChevronCss} />}
         onClick={onEditTag}
         size="small"
       />

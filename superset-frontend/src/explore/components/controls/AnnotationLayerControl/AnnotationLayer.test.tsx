@@ -777,3 +777,47 @@ test('Disable apply button if formula is incorrect', async () => {
     expect(applyButton).toBeDisabled();
   });
 });
+
+test('measures the room on the left of the control panel in right-to-left layouts', async () => {
+  // The panel sits on the right of the chart there, so the popover opens
+  // towards the left: 1160 viewport, a 620px panel flush with the right edge.
+  setViewportWidth(1160);
+  jest
+    .spyOn(Element.prototype, 'getBoundingClientRect')
+    .mockImplementation(function (this: Element) {
+      if (this.id === 'controlSections') return rect(620, 1160);
+      if (this.classList.contains('ant-popover')) return rect(802, 540);
+      if (this.getAttribute('data-test') === SECTIONS_TEST_ID)
+        return rect(778, 528);
+      if (this.parentElement?.getAttribute('data-test') === SECTIONS_TEST_ID)
+        return rect(238, 238);
+      return rect(0, 0);
+    });
+
+  try {
+    await waitFor(() =>
+      render(
+        <>
+          <div id="controlSections" />
+          <div className="ant-popover">
+            <AnnotationLayer
+              {...defaultProps}
+              annotationType={ANNOTATION_TYPES_METADATA.EVENT.value}
+              sourceType="Table"
+            />
+          </div>
+        </>,
+        { direction: 'rtl' },
+      ),
+    );
+
+    // 540 left of the panel - 24 popover padding - 8 inset. Measured from the
+    // right edge of the panel there would be no room at all (1160 - 1160).
+    expect(screen.getByTestId('annotation-layer-sections')).toHaveStyle(
+      'max-width: 508px',
+    );
+  } finally {
+    restoreViewportWidth();
+    jest.restoreAllMocks();
+  }
+});

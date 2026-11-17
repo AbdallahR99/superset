@@ -32,6 +32,7 @@ import { Icons } from '@superset-ui/core/components/Icons';
 import BoundsControl from '../BoundsControl';
 import CheckboxControl from '../CheckboxControl';
 import ControlPopover from '../ControlPopover/ControlPopover';
+import InputDirection from '../shared/InputDirection';
 
 interface TimeSeriesColumnControlProps {
   label?: string;
@@ -336,11 +337,13 @@ function TimeSeriesColumnControl({
               'Number of periods to compare against. You can use negative numbers to compare from the beginning of the time range.',
             ),
             'time-lag',
-            <Input
-              value={state.timeLag}
-              onChange={handleTimeLagChange}
-              placeholder={t('Time Lag')}
-            />,
+            <InputDirection mode="auto" value={state.timeLag}>
+              <Input
+                value={state.timeLag}
+                onChange={handleTimeLagChange}
+                placeholder={t('Time Lag')}
+              />
+            </InputDirection>,
           )}
         {['spark'].indexOf(state.colType) >= 0 &&
           formRow(
@@ -400,22 +403,26 @@ function TimeSeriesColumnControl({
           t('Number format'),
           t('Optional d3 number format string'),
           'd3-format',
-          <Input
-            value={state.d3format}
-            onChange={handleD3formatChange}
-            placeholder={t('Number format string')}
-          />,
+          <InputDirection mode="auto" value={state.d3format}>
+            <Input
+              value={state.d3format}
+              onChange={handleD3formatChange}
+              placeholder={t('Number format string')}
+            />
+          </InputDirection>,
         )}
         {state.colType === 'spark' &&
           formRow(
             t('Date format'),
             t('Optional d3 date format string'),
             'date-format',
-            <Input
-              value={state.dateFormat}
-              onChange={handleDateFormatChange}
-              placeholder={t('Date format string')}
-            />,
+            <InputDirection mode="auto" value={state.dateFormat}>
+              <Input
+                value={state.dateFormat}
+                onChange={handleDateFormatChange}
+                placeholder={t('Date format string')}
+              />
+            </InputDirection>,
           )}
         <ButtonBar>
           <Button buttonSize="small" onClick={onClose} cta>

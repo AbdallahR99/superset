@@ -25,13 +25,17 @@ import {
 } from '@superset-ui/core/components';
 
 import { TooltipPlacement } from '@superset-ui/core/components/Tooltip/types';
+import { useIsRtl } from '@apache-superset/core/theme';
 
 import { CONTROL_SECTIONS_ID } from 'src/explore/constants';
 
 export const getSectionContainerElement = () =>
   document.getElementById(CONTROL_SECTIONS_ID)?.lastElementChild as HTMLElement;
 
-const getElementVisibilityRatio = (node?: HTMLElement) => {
+export const getElementVisibilityRatio = (
+  node?: HTMLElement,
+  isRtl = false,
+) => {
   const containerHeight = window?.innerHeight;
   const containerWidth = window?.innerWidth;
 
@@ -41,7 +45,11 @@ const getElementVisibilityRatio = (node?: HTMLElement) => {
   }
 
   const yRatio = rect.top / containerHeight;
-  const xRatio = rect.left / containerWidth;
+  // Measured from the inline-start edge of the viewport, so the placement
+  // derived from it stays in left-to-right terms; the popover mirrors an
+  // explicit placement together with the rest of the layout.
+  const xRatio =
+    (isRtl ? containerWidth - rect.right : rect.left) / containerWidth;
   return { yRatio, xRatio };
 };
 
@@ -95,13 +103,17 @@ const ControlPopover: FC<PopoverProps> = ({
   const triggerElementRef = useRef<HTMLElement>();
   const [uncontrolledVisible, setUncontrolledVisible] = useState(!!defaultOpen);
   const visible = isControlled ? !!visibleProp : uncontrolledVisible;
+  const isRtl = useIsRtl();
   const [placement, setPlacement] =
     React.useState<TooltipPlacement>(initialPlacement);
 
   const calculatePlacement = useCallback(() => {
     if (!triggerElementRef.current || !visible) return;
 
-    const { yRatio, xRatio } = getVisibilityRatio(triggerElementRef.current);
+    const { yRatio, xRatio } = getVisibilityRatio(
+      triggerElementRef.current,
+      isRtl,
+    );
 
     const horizontalPlacement =
       xRatio < 0.35 ? 'right' : xRatio > 0.65 ? 'left' : '';
@@ -121,7 +133,7 @@ const ControlPopover: FC<PopoverProps> = ({
     if (newPlacement !== placement) {
       setPlacement(newPlacement);
     }
-  }, [getVisibilityRatio, visible, placement]);
+  }, [getVisibilityRatio, visible, placement, isRtl]);
 
   const changeContainerScrollStatus = useCallback(
     (visible: boolean | undefined) => {

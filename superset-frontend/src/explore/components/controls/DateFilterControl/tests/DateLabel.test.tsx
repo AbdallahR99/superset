@@ -71,3 +71,15 @@ test('does not submit a surrounding form', async () => {
 
   expect(onSubmit).not.toHaveBeenCalled();
 });
+
+test('lets the label resolve its own direction', () => {
+  // A range such as "2024-01-01 <= col < 2025-01-01" must not be reordered in
+  // a right-to-left interface, while a translated label still reads
+  // right-to-left.
+  render(<DateLabel name="time_range" label="2024-01-01 : 2025-01-01" />);
+
+  expect(screen.getByText('2024-01-01 : 2025-01-01')).toHaveAttribute(
+    'dir',
+    'auto',
+  );
+});

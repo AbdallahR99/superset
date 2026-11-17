@@ -58,7 +58,7 @@ export default function SemanticRequestView({
           </CodeSyntaxHighlighter>
         ) : (
           // An undefined highlighter language defaults to SQL, not plain text.
-          <pre>{requestText}</pre>
+          <pre dir="ltr">{requestText}</pre>
         )}
       </RequestTextContainer>
       <CopyToClipboard

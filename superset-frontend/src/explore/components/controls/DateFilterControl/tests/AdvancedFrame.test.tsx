@@ -42,3 +42,25 @@ test('triggers until onChange', async () => {
   await userEvent.type(screen.getAllByRole('textbox')[1], 'dayAfterTomorrow');
   expect(onChange).toHaveBeenCalled();
 });
+
+test('keeps the date expressions left-to-right in right-to-left layouts', () => {
+  render(<AdvancedFrame onChange={jest.fn()} value="Last week : today" />, {
+    direction: 'rtl',
+  });
+
+  const [since, until] = screen.getAllByRole('textbox');
+  // `DATEADD(DATETIME("today"), -7, day)` must not be reordered
+  expect(since).toHaveAttribute('dir', 'ltr');
+  expect(until).toHaveAttribute('dir', 'ltr');
+  // Ant Design pins `direction: rtl` with this class, overriding the attribute
+  expect(since).not.toHaveClass('ant-input-rtl');
+  expect(until).not.toHaveClass('ant-input-rtl');
+});
+
+test('adds no direction attribute in left-to-right layouts', () => {
+  render(<AdvancedFrame onChange={jest.fn()} value="Last week : today" />);
+
+  screen
+    .getAllByRole('textbox')
+    .forEach(input => expect(input).not.toHaveAttribute('dir'));
+});

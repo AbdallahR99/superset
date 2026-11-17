@@ -194,6 +194,17 @@ const Styles = styled.div`
     overflow: visible;
   }
 
+  /* Section headers use a vertical chevron (down = collapsed, up = expanded)
+     drawn by rotating the arrow's svg. In RTL antd also turns the arrow
+     wrapper by 180deg, which is meant for its horizontal arrow and would show
+     the opposite state here. A vertical chevron has no reading direction. */
+  .ant-collapse-icon-placement-end
+    > .ant-collapse-item
+    > .ant-collapse-header
+    .ant-collapse-arrow {
+    transform: none !important;
+  }
+
   .Select__menu {
     max-width: 100%;
   }
@@ -747,7 +758,7 @@ export const ControlPanelsContainer = (props: ControlPanelsContainerProps) => {
             .filter(Boolean)}
         />
         {isVisible && (
-          <div style={{ paddingLeft: theme.sizeUnit * 2 }}>
+          <div style={{ paddingInlineStart: theme.sizeUnit * 2 }}>
             {section.controlSetRows.map((controlSets, i) => {
               // Detect sub-section header rows (React elements with no name prop)
               const isSubSectionHeaderRow = controlSets.some(
@@ -809,12 +820,12 @@ export const ControlPanelsContainer = (props: ControlPanelsContainerProps) => {
                 return null;
               }
               // Indent controls within sub-sections for visual hierarchy
-              const paddingLeft =
+              const paddingInlineStart =
                 isInSubSection && !isSubSectionHeaderRow
                   ? theme.sizeUnit * 3
                   : 0;
-              return paddingLeft ? (
-                <div key={`controlsetrow-${i}`} style={{ paddingLeft }}>
+              return paddingInlineStart ? (
+                <div key={`controlsetrow-${i}`} style={{ paddingInlineStart }}>
                   <ControlRow controls={renderedControls} />
                 </div>
               ) : (

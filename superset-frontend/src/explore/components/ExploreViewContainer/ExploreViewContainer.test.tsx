@@ -113,7 +113,20 @@ jest.mock(
 );
 
 jest.mock('re-resizable', () => ({
-  Resizable: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Resizable: ({
+    children,
+    enable,
+  }: {
+    children: ReactNode;
+    enable?: Record<string, boolean>;
+  }) => (
+    <div
+      data-test="resizable-panel"
+      data-resize-edges={Object.keys(enable ?? {}).join(',')}
+    >
+      {children}
+    </div>
+  ),
 }));
 
 jest.mock('../ExploreChartPanel', () => ({
@@ -449,6 +462,33 @@ test('renders the normal editor when standalone is absent', () => {
   expect(queryByTestId('explore-chart-panel')).toBeInTheDocument();
   expect(queryByTestId('standalone-app')).not.toBeInTheDocument();
   expect(queryByTestId('explore-chart-panel-hide-nav')).not.toBeInTheDocument();
+});
+
+test('puts the resize handle of both side panels on their right edge', () => {
+  renderWithRouter();
+
+  const panels = screen.getAllByTestId('resizable-panel');
+  expect(panels).toHaveLength(2);
+  panels.forEach(panel =>
+    expect(panel).toHaveAttribute('data-resize-edges', 'right'),
+  );
+});
+
+test('puts the resize handle of both side panels on their left edge in right-to-left layouts', () => {
+  // The panels sit on the right of the chart there and grow towards it, so a
+  // handle on the right edge would be glued to the side that does not move.
+  document.documentElement.setAttribute('dir', 'rtl');
+  try {
+    renderWithRouter();
+
+    const panels = screen.getAllByTestId('resizable-panel');
+    expect(panels).toHaveLength(2);
+    panels.forEach(panel =>
+      expect(panel).toHaveAttribute('data-resize-edges', 'left'),
+    );
+  } finally {
+    document.documentElement.removeAttribute('dir');
+  }
 });
 
 test('generates a form_data param with datasource_id when mounting with existing key', async () => {

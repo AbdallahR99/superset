@@ -92,7 +92,9 @@ const AdhocMetricEditPopoverTitle: FC<AdhocMetricEditPopoverTitleProps> = ({
 
   if (isEditDisabled) {
     return (
-      <span data-test="AdhocMetricTitle">{title?.label || defaultLabel}</span>
+      <span data-test="AdhocMetricTitle" dir="auto">
+        {title?.label || defaultLabel}
+      </span>
     );
   }
 
@@ -131,7 +133,7 @@ const AdhocMetricEditPopoverTitle: FC<AdhocMetricEditPopoverTitleProps> = ({
         onClick={handleClick}
         onBlur={handleBlur}
       >
-        <TitleLabel>{title?.label || defaultLabel}</TitleLabel>
+        <TitleLabel dir="auto">{title?.label || defaultLabel}</TitleLabel>
         &nbsp;
         <Icons.EditOutlined
           iconColor={isHovered ? theme.colorPrimary : theme.colorIcon}
