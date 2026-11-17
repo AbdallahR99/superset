@@ -94,3 +94,18 @@ test('should handle null values', () => {
   render(<FormattedNumber num={null} />);
   expect(screen.getByText('0')).toBeInTheDocument();
 });
+
+test('should isolate the number left-to-right in a right-to-left interface', () => {
+  render(<FormattedNumber num={-0.125} format=".1%" />, { direction: 'rtl' });
+  expect(screen.getByText('-12.5%')).toHaveAttribute('dir', 'ltr');
+});
+
+test('should isolate an unformatted number in a right-to-left interface', () => {
+  render(<FormattedNumber num={-5} />, { direction: 'rtl' });
+  expect(screen.getByText('-5')).toHaveAttribute('dir', 'ltr');
+});
+
+test('should not add a dir attribute in a left-to-right interface', () => {
+  render(<FormattedNumber num={-0.125} format=".1%" />);
+  expect(screen.getByText('-12.5%')).not.toHaveAttribute('dir');
+});

@@ -26,7 +26,12 @@ import {
   useState,
 } from 'react';
 import { t, tn } from '@apache-superset/core/translation';
-import { styled } from '@apache-superset/core/theme';
+import {
+  DirectionProvider,
+  styled,
+  useDirection,
+  type Direction,
+} from '@apache-superset/core/theme';
 import { Button, Icons, Modal } from '@superset-ui/core/components';
 import {
   type JsonContainer,
@@ -384,7 +389,7 @@ function JsonNode({
   );
 }
 
-export function JsonCellRenderer({
+function JsonCell({
   value,
   rawText,
   colId,
@@ -394,7 +399,11 @@ export function JsonCellRenderer({
   api,
   node,
   eGridCell,
-}: JsonCellRendererProps) {
+  pageDirection,
+}: JsonCellRendererProps & { pageDirection: Direction }) {
+  // Set only in a right-to-left interface, so that left-to-right pages keep
+  // their markup unchanged.
+  const jsonDir = pageDirection === 'rtl' ? 'ltr' : undefined;
   const [expanded, setExpanded] = useState(false);
   const [layoutTick, setLayoutTick] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
@@ -509,7 +518,7 @@ export function JsonCellRenderer({
   }, [rawText, value]);
 
   return (
-    <Root ref={rootRef} data-test="json-cell">
+    <Root ref={rootRef} data-test="json-cell" dir={jsonDir}>
       <Toolbar data-wrap={dataWrap}>
         {jsonInCell && (
           <JsonActionButton
@@ -565,36 +574,57 @@ export function JsonCellRenderer({
           <span>{closeBrace}</span>
         </>
       )}
-      <Modal
-        show={modalOpen}
-        onHide={() => {
-          setModalOpen(false);
-          setCopied(false);
-        }}
-        title={t('Cell content')}
-        width="800px"
-        maxWidth="90vw"
-        destroyOnHidden
-        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
-        footer={[
-          <Button
-            key="copy"
-            buttonStyle="secondary"
-            data-test="json-cell-copy"
-            aria-label={copied ? t('Copied') : t('Copy')}
-            onClick={() => {
-              copyText().catch(() => setCopied(false));
-            }}
-          >
-            <Icons.CopyOutlined iconSize="s" aria-hidden />
-            {copied ? t('Copied') : t('Copy')}
-          </Button>,
-        ]}
-      >
-        <Tree>
-          <JsonNode value={value} depth={0} initialOpen />
-        </Tree>
-      </Modal>
+      {/* The dialog is interface, not JSON: it keeps the page direction. */}
+      <DirectionProvider direction={pageDirection}>
+        <Modal
+          show={modalOpen}
+          onHide={() => {
+            setModalOpen(false);
+            setCopied(false);
+          }}
+          title={t('Cell content')}
+          width="800px"
+          maxWidth="90vw"
+          destroyOnHidden
+          styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
+          footer={[
+            <Button
+              key="copy"
+              buttonStyle="secondary"
+              data-test="json-cell-copy"
+              aria-label={copied ? t('Copied') : t('Copy')}
+              onClick={() => {
+                copyText().catch(() => setCopied(false));
+              }}
+            >
+              <Icons.CopyOutlined iconSize="s" aria-hidden />
+              {copied ? t('Copied') : t('Copy')}
+            </Button>,
+          ]}
+        >
+          <DirectionProvider direction="ltr">
+            <Tree dir={jsonDir}>
+              <JsonNode value={value} depth={0} initialOpen />
+            </Tree>
+          </DirectionProvider>
+        </Modal>
+      </DirectionProvider>
     </Root>
+  );
+}
+
+/**
+ * Collapsible JSON value of a grid cell.
+ *
+ * JSON is left-to-right by nature: in a right-to-left grid the cell content
+ * (and the tree in the dialog) is isolated, while the dialog chrome keeps the
+ * direction of the interface.
+ */
+export function JsonCellRenderer(props: JsonCellRendererProps) {
+  const pageDirection = useDirection();
+  return (
+    <DirectionProvider direction="ltr">
+      <JsonCell {...props} pageDirection={pageDirection} />
+    </DirectionProvider>
   );
 }

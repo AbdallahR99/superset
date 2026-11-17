@@ -20,7 +20,11 @@
  */
 import { memo } from 'react';
 import { formatNumber } from '@superset-ui/core';
-import { styled } from '@apache-superset/core/theme';
+import {
+  DirectionProvider,
+  getDocumentDirection,
+  styled,
+} from '@apache-superset/core/theme';
 import { Color } from '@deck.gl/core';
 import { NULL_CATEGORY_KEY, formatNullCategory } from '../utils';
 
@@ -160,6 +164,12 @@ const Legend = ({
     return null;
   }
 
+  // The legend is ordinary interface drawn over the map, which stays
+  // left-to-right: its content follows the page direction, while the corner
+  // chosen by the author (`position`) stays physical.
+  const pageDirection = getDocumentDirection();
+  const isRtl = pageDirection === 'rtl';
+
   const categories = Object.entries(categoriesObject).map(([k, v]) => {
     const [r, g, b, a] = v.color ?? [];
     // deck.gl colour arrays express alpha as 0-255, but CSS rgba() expects
@@ -191,7 +201,13 @@ const Legend = ({
           onClick={() => toggleCategory(k)}
           onDoubleClick={() => showSingleCategory(k)}
         >
-          <span aria-hidden style={swatchStyle} /> {formatCategoryLabel(k)}
+          <span aria-hidden style={swatchStyle} />{' '}
+          {isRtl ? (
+            // Keeps interval notation such as "[1, 81)" in reading order.
+            <bdi>{formatCategoryLabel(k)}</bdi>
+          ) : (
+            formatCategoryLabel(k)
+          )}
         </button>
       </li>
     );
@@ -206,9 +222,11 @@ const Legend = ({
   };
 
   return (
-    <StyledLegend style={style}>
-      <ul>{categories}</ul>
-    </StyledLegend>
+    <DirectionProvider direction={pageDirection}>
+      <StyledLegend style={style} dir={isRtl ? 'rtl' : undefined}>
+        <ul>{categories}</ul>
+      </StyledLegend>
+    </DirectionProvider>
   );
 };
 

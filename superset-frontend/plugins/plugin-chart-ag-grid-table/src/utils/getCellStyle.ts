@@ -29,6 +29,7 @@ import {
   isMainComparisonKey,
   stripMainComparisonPrefix,
 } from './mainComparison';
+import { toLogicalTextAlign } from './direction';
 
 type CellStyleParams = CellClassParams & {
   hasColumnColorFormatters: boolean | undefined;
@@ -156,8 +157,11 @@ const getCellStyle = (params: CellStyleParams) => {
     }
   }
 
-  const textAlign =
-    col?.config?.horizontalAlign || (col?.isNumeric ? 'right' : 'left');
+  // The style is applied inline, where nothing mirrors it: use the logical
+  // value so that the alignment follows the direction of the grid.
+  const textAlign = toLogicalTextAlign(
+    col?.config?.horizontalAlign || (col?.isNumeric ? 'right' : 'left'),
+  );
   const resolvedTextColor = getTextColorForBackground(
     { backgroundColor, color },
     cellSurfaceColor,

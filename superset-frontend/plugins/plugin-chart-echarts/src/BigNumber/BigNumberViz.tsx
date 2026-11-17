@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState, useEffect, useRef, MouseEvent } from 'react';
+import { useState, useEffect, useRef, MouseEvent, ReactNode } from 'react';
 import { t } from '@apache-superset/core/translation';
 import {
   getNumberFormatter,
@@ -26,7 +26,7 @@ import {
   BinaryQueryObjectFilterClause,
   DTTM_ALIAS,
 } from '@superset-ui/core';
-import { styled, useTheme } from '@apache-superset/core/theme';
+import { styled, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import Echart from '../components/Echart';
 import { BigNumberVizProps, HeaderAlignment } from './types';
 import { PROPORTION } from './constants';
@@ -38,6 +38,15 @@ const ALIGN_ITEMS: Record<HeaderAlignment, string> = {
   left: 'flex-start',
   center: 'center',
   right: 'flex-end',
+};
+
+// Logical counterparts of ALIGN_ITEMS for text: "left" is the start of the
+// line, so the text follows the same side as the flex items in a
+// right-to-left interface.
+const TEXT_ALIGN: Record<HeaderAlignment, 'start' | 'center' | 'end'> = {
+  left: 'start',
+  center: 'center',
+  right: 'end',
 };
 
 function BigNumberVis({
@@ -57,7 +66,14 @@ function BigNumberVis({
   ...props
 }: BigNumberVizProps) {
   const theme = useTheme();
+  const isRtl = useIsRtl();
   const alignItems = ALIGN_ITEMS[headerAlignment];
+  const textAlign = TEXT_ALIGN[headerAlignment];
+  // In a right-to-left interface each line is isolated so that it keeps its
+  // own reading order: numbers are always left-to-right (`-12.5%`, `$ 4.54B`),
+  // other text follows its first strong character.
+  const isolate = (text: ReactNode, dir?: 'ltr') =>
+    isRtl && text ? <bdi dir={dir}>{text}</bdi> : text;
 
   // Convert state to hooks
   const [elementsRendered, setElementsRendered] = useState(false);
@@ -140,10 +156,10 @@ function BigNumberVis({
         style={{
           fontSize,
           height: 'auto',
-          textAlign: headerAlignment,
+          textAlign,
         }}
       >
-        {text}
+        {isolate(text)}
       </div>
     );
   };
@@ -179,10 +195,10 @@ function BigNumberVis({
         style={{
           fontSize,
           height: 'auto',
-          textAlign: headerAlignment,
+          textAlign,
         }}
       >
-        {text}
+        {isolate(text)}
       </div>
     );
   };
@@ -191,18 +207,19 @@ function BigNumberVis({
     const { bigNumber, width, colorThresholdFormatters, onContextMenu } = props;
     // Format bigNumber based on its type: null/undefined -> "No data", number -> format, else -> string
     let text: string;
+    let isFormattedNumber = false;
     if (bigNumber === null || bigNumber === undefined) {
       text = t('No data');
     } else if (typeof bigNumber === 'number') {
       text = headerFormatter(bigNumber);
+      isFormattedNumber = true;
     } else if (typeof bigNumber === 'string') {
       text = bigNumber;
     } else {
       // For boolean/Date values, convert to number if possible, else show as string
       const numValue = Number(bigNumber);
-      text = Number.isNaN(numValue)
-        ? String(bigNumber)
-        : headerFormatter(numValue);
+      isFormattedNumber = !Number.isNaN(numValue);
+      text = isFormattedNumber ? headerFormatter(numValue) : String(bigNumber);
     }
 
     const hasThresholdColorFormatter =
@@ -255,7 +272,7 @@ function BigNumberVis({
         }}
         onContextMenu={handleContextMenu}
       >
-        {text}
+        {isolate(text, isFormattedNumber ? 'ltr' : undefined)}
       </div>
     );
   };
@@ -288,10 +305,10 @@ function BigNumberVis({
           style={{
             fontSize,
             height: maxHeight,
-            textAlign: headerAlignment,
+            textAlign,
           }}
         >
-          {text}
+          {isolate(text)}
         </div>
       );
     }
@@ -335,10 +352,10 @@ function BigNumberVis({
             style={{
               fontSize: `${fontSize}px`,
               height: maxHeight,
-              textAlign: headerAlignment,
+              textAlign,
             }}
           >
-            {text}
+            {isolate(text)}
           </div>
         </>
       );

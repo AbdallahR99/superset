@@ -16,14 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { t } from '@apache-superset/core/translation';
 import {
   ensureIsArray,
   fetchTimeRange,
   getTimeOffset,
 } from '@superset-ui/core';
-import { css, styled, useTheme } from '@apache-superset/core/theme';
+import { css, styled, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { Tooltip } from '@superset-ui/core/components';
 import { DEFAULT_DATE_PATTERN } from '@superset-ui/chart-controls';
 import { isEmpty } from 'lodash-es';
@@ -149,6 +149,15 @@ export default function PopKPI(props: PopKPIProps) {
   }, [currentTimeRangeFilter, shift, startDateOffset, dashboardTimeRange]);
 
   const theme = useTheme();
+  // Numbers are left-to-right by nature: in a right-to-left interface they are
+  // isolated so that signs, percent signs and currency symbols stay in place.
+  const isRtl = useIsRtl();
+  const ltrNumber = (value: ReactNode) =>
+    isRtl && value != null && value !== '' ? (
+      <bdi dir="ltr">{value}</bdi>
+    ) : (
+      value
+    );
   const flexGap = theme.sizeUnit * 5;
   const wrapperDivStyles = css`
     font-family: ${theme.fontFamily};
@@ -290,7 +299,7 @@ export default function PopKPI(props: PopKPIProps) {
         )}
 
         <div css={bigValueContainerStyles}>
-          {bigNumber}
+          {ltrNumber(bigNumber)}
           {percentDifferenceNumber !== 0 && (
             <ArrowIndicator indicatorColor={arrowIndicatorColor}>
               {percentDifferenceNumber > 0 ? '↑' : '↓'}
@@ -350,7 +359,7 @@ export default function PopKPI(props: PopKPIProps) {
                       {symbol_with_value.symbol}
                     </SymbolWrapper>
                   )}
-                  {symbol_with_value.value}{' '}
+                  {ltrNumber(symbol_with_value.value)}{' '}
                   {props.columnConfig?.[symbol_with_value.columnKey]
                     ?.customColumnName || ''}
                 </Tooltip>

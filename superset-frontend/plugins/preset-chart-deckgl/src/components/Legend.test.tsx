@@ -200,3 +200,39 @@ test('falls back to the top-right default when position is unset', () => {
 
   expect(screen.getByText('Alpha')).toBeInTheDocument();
 });
+
+test('follows the page direction while keeping the chosen corner physical', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  try {
+    const { container } = renderWithTheme(
+      <Legend
+        format=",.2f"
+        position="tr"
+        categories={{ '[1, 81)': { enabled: true, color: [0, 0, 0] } }}
+      />,
+    );
+
+    const legend = container.firstElementChild as HTMLElement;
+    expect(legend).toHaveAttribute('dir', 'rtl');
+    // "Top right" is an explicit choice of the author: it is not mirrored.
+    expect(legend.style.right).toBe('10px');
+    expect(legend.style.left).toBe('');
+    // Interval notation keeps its reading order inside the right-to-left row.
+    expect(screen.getByText('[1.00, 81.00)').tagName).toBe('BDI');
+  } finally {
+    document.documentElement.removeAttribute('dir');
+  }
+});
+
+test('keeps the legend markup unchanged on a left-to-right page', () => {
+  const { container } = renderWithTheme(
+    <Legend
+      format=",.2f"
+      position="tr"
+      categories={{ '[1, 81)': { enabled: true, color: [0, 0, 0] } }}
+    />,
+  );
+
+  expect(container.firstElementChild).not.toHaveAttribute('dir');
+  expect(container.querySelector('bdi')).toBeNull();
+});

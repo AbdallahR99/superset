@@ -18,7 +18,7 @@
  */
 import { useCallback } from 'react';
 import { useTable, Column } from 'react-table';
-import { act, render } from '@superset-ui/core/spec';
+import { act, fireEvent, render } from '@superset-ui/core/spec';
 import useSticky from '../../../src/DataTable/hooks/useSticky';
 
 // A value distinguishable from any real scrollbar width, so the width
@@ -284,6 +284,51 @@ test('sticky table paints once it gains a box, when first rendered inside a hidd
   } finally {
     host.remove();
     resizeObserver.restore();
+    jest.restoreAllMocks();
+  }
+});
+
+test('copies the horizontal scroll offset unchanged, negative values included, to header and footer', () => {
+  mockMeasurements();
+  // Columns wider than the container, so that the body scrolls horizontally.
+  jest
+    .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockImplementation(function mockWideRect(this: HTMLElement) {
+      const width = this.tagName === 'TH' ? MAX_WIDTH : 0;
+      return {
+        width,
+        height: 0,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => {},
+      } as DOMRect;
+    });
+
+  try {
+    const { container } = render(<StickyTableHarness />, { direction: 'rtl' });
+    const root = container.querySelector('[data-test="sticky-root"] > div');
+    const [headerDiv, bodyDiv, footerDiv] = Array.from(
+      root!.children,
+    ) as HTMLDivElement[];
+
+    // In a right-to-left container `scrollLeft` is 0 at the start (right)
+    // edge and goes negative while scrolling towards the end. Header, body
+    // and footer share one direction, so the value is copied as it is: no
+    // sign handling, and nothing to convert between directions.
+    bodyDiv.scrollLeft = -120;
+    fireEvent.scroll(bodyDiv);
+    expect(headerDiv.scrollLeft).toBe(-120);
+    expect(footerDiv.scrollLeft).toBe(-120);
+
+    bodyDiv.scrollLeft = 0;
+    fireEvent.scroll(bodyDiv);
+    expect(headerDiv.scrollLeft).toBe(0);
+    expect(footerDiv.scrollLeft).toBe(0);
+  } finally {
     jest.restoreAllMocks();
   }
 });

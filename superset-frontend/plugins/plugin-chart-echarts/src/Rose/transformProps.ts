@@ -130,12 +130,12 @@ export default function transformProps(
         const marker = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colorFn(
           entry.seriesName,
           sliceId,
-        )};margin-right:5px"></span>`;
+        )};margin-inline-end:5px"></span>`;
         const emphasis =
           entry.seriesName === highlightSeries ? 'font-weight:bold' : '';
-        return `<div style="${emphasis}">${marker}${escapeHtml(entry.seriesName)}: ${escapeHtml(
+        return `<div style="${emphasis}">${marker}<bdi>${escapeHtml(entry.seriesName)}</bdi>: <bdi>${escapeHtml(
           format(entry.value),
-        )}</div>`;
+        )}</bdi></div>`;
       })
       .join('');
     return `<div><b>${escapeHtml(period.label)}</b></div>${rows}`;
@@ -180,7 +180,7 @@ export default function transformProps(
                 e => e.seriesName === params.seriesName,
               );
               if (!period || !entry) return '';
-              return `<div><b>${escapeHtml(period.label)}</b></div>${escapeHtml(params.seriesName)}: ${escapeHtml(format(entry.value))}`;
+              return `<div><b>${escapeHtml(period.label)}</b></div><bdi>${escapeHtml(params.seriesName)}</bdi>: <bdi>${escapeHtml(format(entry.value))}</bdi>`;
             },
           }),
     },

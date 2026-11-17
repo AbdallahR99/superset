@@ -170,9 +170,9 @@ export default function transformProps(
           .filter(param => param.value?.[1] != null)
           .map(
             param =>
-              `${param.marker}${param.seriesName}: <b>${valueFormatter(
+              `${param.marker}<bdi>${param.seriesName}</bdi>: <b><bdi>${valueFormatter(
                 param.value[1] as number,
-              )}</b>`,
+              )}</bdi></b>`,
           );
         const axisTime = params[0]?.value?.[0];
         return [

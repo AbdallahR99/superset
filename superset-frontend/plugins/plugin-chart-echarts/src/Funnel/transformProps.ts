@@ -51,6 +51,7 @@ import { resolveLegendLayout } from '../utils/legendLayout';
 import { defaultGrid } from '../defaults';
 import { DEFAULT_LEGEND_FORM_DATA, OpacityEnum } from '../constants';
 import { getDefaultTooltip } from '../utils/tooltip';
+import { bidi } from '../utils/bidi';
 import { LegendOrientation, Refs } from '../types';
 
 const percentFormatter = getNumberFormatter(NumberFormats.PERCENT_2_POINT);
@@ -235,11 +236,11 @@ export default function transformProps(
       case EchartsFunnelLabelType.Percent:
         return formattedPercent;
       case EchartsFunnelLabelType.KeyValue:
-        return `${name}: ${formattedValue}`;
+        return bidi`${name}: ${formattedValue}`;
       case EchartsFunnelLabelType.KeyValuePercent:
-        return `${name}: ${formattedValue} (${formattedPercent})`;
+        return bidi`${name}: ${formattedValue} (${formattedPercent})`;
       case EchartsFunnelLabelType.KeyPercent:
-        return `${name}: ${formattedPercent}`;
+        return bidi`${name}: ${formattedPercent}`;
       case EchartsFunnelLabelType.ValuePercent:
         return `${formattedValue} (${formattedPercent})`;
       default:

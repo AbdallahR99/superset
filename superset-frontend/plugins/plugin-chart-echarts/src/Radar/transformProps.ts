@@ -50,6 +50,7 @@ import { resolveLegendLayout } from '../utils/legendLayout';
 import { defaultGrid } from '../defaults';
 import { LabelPositionEnum, Refs } from '../types';
 import { getDefaultTooltip } from '../utils/tooltip';
+import { bidi } from '../utils/bidi';
 import { findGlobalMax, renderNormalizedTooltip } from './utils';
 
 // ZRender anchors an "inside*" label to the named edge of its target and
@@ -106,7 +107,7 @@ export function formatLabel({
     case EchartsRadarLabelType.Value:
       return formattedValue;
     case EchartsRadarLabelType.KeyValue:
-      return formattedValue ? `${name}: ${formattedValue}` : name;
+      return formattedValue ? bidi`${name}: ${formattedValue}` : name;
     default:
       return name;
   }

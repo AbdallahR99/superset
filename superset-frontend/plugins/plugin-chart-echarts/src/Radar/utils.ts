@@ -64,7 +64,7 @@ export const renderNormalizedTooltip = (
   const { color, name = '', value: values } = params;
   const seriesName = name || 'series0';
 
-  const colorDot = `<span style="display:inline-block;margin-right:5px;border-radius:50%;width:5px;height:5px;background-color:${sanitizeHtml(color)}"></span>`;
+  const colorDot = `<span style="display:inline-block;margin-inline-end:5px;border-radius:50%;width:5px;height:5px;background-color:${sanitizeHtml(color)}"></span>`;
 
   // Get metric values with denormalization if needed
   const metricValues: TooltipMetricValue[] = metrics.map((metric, index) => {
@@ -93,10 +93,10 @@ export const renderNormalizedTooltip = (
     .map(
       ({ metric, value }) => `
         <div style="display:flex;">
-          <div>${colorDot}${sanitizeHtml(metric)}:</div>
-          <div style="font-weight:bold;margin-left:auto;">${sanitizeHtml(
+          <div>${colorDot}<bdi>${sanitizeHtml(metric)}</bdi>:</div>
+          <div style="font-weight:bold;margin-inline-start:auto;"><bdi>${sanitizeHtml(
             String(value),
-          )}</div>
+          )}</bdi></div>
         </div>
       `,
     )

@@ -30,4 +30,8 @@ describe('@superset-ui/plugin-chart-handlebars', () => {
   test('exists', () => {
     expect(HandlebarsChartPlugin).toBeDefined();
   });
+
+  test('follows the interface direction', () => {
+    expect(new HandlebarsChartPlugin().metadata.direction).toBe('inherit');
+  });
 });

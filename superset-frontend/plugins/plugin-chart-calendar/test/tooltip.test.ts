@@ -134,3 +134,41 @@ test('CalHeatMap destroy removes only the destroyed instance tooltips', () => {
 
   expect(getCalendarTooltips()).toHaveLength(0);
 });
+
+test('CalHeatMap tooltips stay left-to-right when the page is right-to-left', () => {
+  installCreateSVGPointMock();
+  document.documentElement.setAttribute('dir', 'rtl');
+
+  try {
+    let CalHeatMap!: new () => CalHeatMapInstance;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line global-require
+      CalHeatMap = require('../src/vendor/cal-heatmap')
+        .default as new () => CalHeatMapInstance;
+    });
+
+    const calendar = document.createElement('div');
+    document.body.append(calendar);
+    const heatmap = new CalHeatMap();
+    heatmap.init({
+      itemSelector: calendar,
+      paintOnLoad: false,
+      tooltip: true,
+      valueFormatter: String,
+      timeFormatter: String,
+    });
+
+    // The tooltips are appended to document.body, outside the chart
+    // container, so they carry their own direction.
+    const tooltips = getCalendarTooltips();
+    expect(tooltips).toHaveLength(2);
+    tooltips.forEach(tooltip => {
+      expect(tooltip.parentElement).toBe(document.body);
+      expect(tooltip.getAttribute('dir')).toBe('ltr');
+    });
+
+    heatmap.destroy();
+  } finally {
+    document.documentElement.removeAttribute('dir');
+  }
+});

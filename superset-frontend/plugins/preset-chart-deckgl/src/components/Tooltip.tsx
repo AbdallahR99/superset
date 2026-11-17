@@ -18,7 +18,11 @@
  */
 
 import { safeHtmlSpan } from '@superset-ui/core';
-import { styled } from '@apache-superset/core/theme';
+import {
+  DirectionProvider,
+  getDocumentDirection,
+  styled,
+} from '@apache-superset/core/theme';
 import { ReactNode } from 'react';
 
 export type TooltipProps = {
@@ -33,15 +37,15 @@ export type TooltipProps = {
   variant?: 'default' | 'custom';
 };
 
+// The pointer position is applied as an inline style, not here: a pixel
+// offset measured in JavaScript is physical, and a rule in a styled block is
+// mirrored in right-to-left layouts (and would be compiled into a new class
+// for every pointer move).
 const StyledDiv = styled.div<{
-  top: number;
-  left: number;
   variant: 'default' | 'custom';
 }>`
-  ${({ theme, top, left, variant }) => `
+  ${({ theme, variant }) => `
     position: absolute;
-    top: ${top}px;
-    left: ${left}px;
     z-index: 9;
     pointer-events: none;
     padding: ${theme.sizeUnit * 2}px;
@@ -66,9 +70,19 @@ export default function Tooltip(props: TooltipProps) {
   const safeContent =
     typeof content === 'string' ? safeHtmlSpan(content) : content;
 
+  // The map stays left-to-right, the tooltip is ordinary interface: its text
+  // follows the page direction. Left-to-right pages keep their markup.
+  const pageDirection = getDocumentDirection();
+
   return (
-    <StyledDiv top={y} left={x} variant={variant}>
-      {safeContent}
-    </StyledDiv>
+    <DirectionProvider direction={pageDirection}>
+      <StyledDiv
+        dir={pageDirection === 'rtl' ? 'rtl' : undefined}
+        style={{ top: y, left: x }}
+        variant={variant}
+      >
+        {safeContent}
+      </StyledDiv>
+    </DirectionProvider>
   );
 }

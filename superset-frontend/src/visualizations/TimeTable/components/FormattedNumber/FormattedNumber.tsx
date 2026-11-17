@@ -17,6 +17,7 @@
  * under the License.
  */
 import { formatNumber } from '@superset-ui/core';
+import { useIsRtl } from '@apache-superset/core/theme';
 import { parseToNumber } from '../../utils';
 
 interface FormattedNumberProps {
@@ -27,13 +28,18 @@ interface FormattedNumberProps {
 const FormattedNumber = ({ num = 0, format }: FormattedNumberProps) => {
   const displayNum = num ?? 0;
   const numericValue = parseToNumber(num);
+  // Numbers are left-to-right by nature: isolate them in a right-to-left
+  // table so that signs and units stay on the correct side of the digits.
+  const dir = useIsRtl() ? 'ltr' : undefined;
 
   if (format)
     return (
-      <span title={`${displayNum}`}>{formatNumber(format, numericValue)}</span>
+      <span dir={dir} title={`${displayNum}`}>
+        {formatNumber(format, numericValue)}
+      </span>
     );
 
-  return <span>{displayNum}</span>;
+  return <span dir={dir}>{displayNum}</span>;
 };
 
 export default FormattedNumber;

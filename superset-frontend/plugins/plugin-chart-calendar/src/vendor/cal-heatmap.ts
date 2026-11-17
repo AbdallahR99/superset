@@ -25,8 +25,12 @@ var CalHeatMap = function () {
   var self = this;
   // d3-tip assigns the .html() return value to the tip node via
   // innerHTML, so formatter output is HTML-escaped first.
+  // d3-tip appends its node to document.body, outside the chart container
+  // that keeps the plot left-to-right, so it would inherit the direction of a
+  // right-to-left page and reorder "date: value". Keep it left-to-right.
   self.tip = d3tip()
     .attr('class', `d3-tip ${CALENDAR_TOOLTIP_CLASS}`)
+    .attr('dir', 'ltr')
     .direction('n')
     .offset([-5, 0])
     .html(
@@ -38,6 +42,7 @@ var CalHeatMap = function () {
     );
   self.legendTip = d3tip()
     .attr('class', `d3-tip ${CALENDAR_TOOLTIP_CLASS}`)
+    .attr('dir', 'ltr')
     .direction('n')
     .offset([-5, 0])
     .html(d => escapeHtml(self.options.valueFormatter(d)));

@@ -306,3 +306,18 @@ test('marks the host painted only on the ECharts `finished` event', async () => 
   trigger('finished');
   expect(host).toHaveClass(ECHARTS_RENDER_FINISHED_CLASS);
 });
+
+test('keeps the canvas host left-to-right inside a right-to-left ancestor', async () => {
+  const { container } = render(renderEchart(), {
+    direction: 'rtl',
+    initialState,
+    useRedux: true,
+  });
+  await waitFor(() => expect(mockChart.setOption).toHaveBeenCalled());
+
+  expect(document.documentElement).toHaveAttribute('dir', 'rtl');
+  expect(container.querySelector(`.${ECHARTS_HOST_CLASS}`)).toHaveAttribute(
+    'dir',
+    'ltr',
+  );
+});

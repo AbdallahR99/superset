@@ -28,7 +28,7 @@ import {
 } from 'react';
 import { safeHtmlSpan } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
-import { supersetTheme } from '@apache-superset/core/theme';
+import { supersetTheme, useIsRtl } from '@apache-superset/core/theme';
 import PropTypes from 'prop-types';
 import {
   CaretUpOutlined,
@@ -384,6 +384,11 @@ export function TableRenderer(props: TableRendererProps) {
     onContextMenu,
     allowRenderHtml,
   } = props;
+
+  // Aggregated values are numbers: in a right-to-left table they keep their
+  // own left-to-right reading order, so that signs, percent signs and currency
+  // symbols stay on the correct side of the digits.
+  const valueCellDir = useIsRtl() ? 'ltr' : undefined;
 
   const [collapsedRows, setCollapsedRows] = useState<Record<string, boolean>>(
     {},
@@ -1487,6 +1492,7 @@ export function TableRenderer(props: TableRendererProps) {
           <td
             role="gridcell"
             className="pvtVal"
+            dir={valueCellDir}
             key={`pvtVal-${flatColKey}`}
             onClick={rowClickHandlers[flatColKey]}
             onContextMenu={e => onContextMenu(e, colKey, rowKey)}
@@ -1506,6 +1512,7 @@ export function TableRenderer(props: TableRendererProps) {
             role="gridcell"
             key="total"
             className="pvtTotal"
+            dir={valueCellDir}
             onClick={rowTotalCallbacks[flatRowKey]}
             onContextMenu={e => onContextMenu(e, undefined, rowKey)}
           >
@@ -1532,6 +1539,7 @@ export function TableRenderer(props: TableRendererProps) {
       collapsedRows,
       collapseRowsByDefault,
       collapsibleRowPrefixes,
+      valueCellDir,
     ],
   );
 
@@ -1583,6 +1591,7 @@ export function TableRenderer(props: TableRendererProps) {
           <td
             role="gridcell"
             className="pvtTotal pvtRowTotal"
+            dir={valueCellDir}
             key={`total-${flatColKey}`}
             onClick={colTotalCallbacks[flatColKey]}
             onContextMenu={e => onContextMenu(e, colKey, undefined)}
@@ -1602,6 +1611,7 @@ export function TableRenderer(props: TableRendererProps) {
             role="gridcell"
             key="total"
             className="pvtGrandTotal pvtRowTotal"
+            dir={valueCellDir}
             onClick={grandTotalCallback || undefined}
             onContextMenu={e => onContextMenu(e, undefined, undefined)}
           >
@@ -1624,6 +1634,7 @@ export function TableRenderer(props: TableRendererProps) {
       tableOptions.clickRowHeaderCallback,
       onContextMenu,
       allowRenderHtml,
+      valueCellDir,
     ],
   );
 

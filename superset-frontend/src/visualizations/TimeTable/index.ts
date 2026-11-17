@@ -26,6 +26,8 @@ import exampleDark from './images/example-dark.jpg';
 
 const metadata = new ChartMetadata({
   category: t('Table'),
+  // A table is a document, not a plot: it follows the interface direction.
+  direction: 'inherit',
   name: t('Time-series Table'),
   description: t(
     'Compare multiple time series charts (as sparklines) and related metrics quickly.',

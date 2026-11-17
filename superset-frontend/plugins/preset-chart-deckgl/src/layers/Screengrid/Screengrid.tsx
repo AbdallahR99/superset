@@ -80,13 +80,16 @@ function defaultTooltipGenerator(o: JsonObject, formData: QueryFormData) {
         <div style={{ marginTop: 8, fontSize: '12px' }}>
           <strong>{t('Records')}:</strong>
           {points.slice(0, 3).map((point: JsonObject, index: number) => (
-            <div key={index} style={{ marginTop: 4, paddingLeft: '8px' }}>
+            <div
+              key={index}
+              style={{ marginTop: 4, paddingInlineStart: '8px' }}
+            >
               {Object.entries(point).map(([key, value]) =>
                 key !== 'position' &&
                 key !== 'weight' &&
                 key !== '__timestamp' &&
                 key !== 'points' ? (
-                  <span key={key} style={{ marginRight: '8px' }}>
+                  <span key={key} style={{ marginInlineEnd: '8px' }}>
                     <strong>{key}:</strong> {String(value)}
                   </span>
                 ) : null,

@@ -42,6 +42,9 @@ export default class HandlebarsChartPlugin extends ChartPlugin {
   constructor() {
     const metadata = new ChartMetadata({
       description: t('Write a handlebars template to render the data'),
+      // Rendered HTML is a document: it follows the interface direction and
+      // the template author can override it with the `dir` attribute.
+      direction: 'inherit',
       name: t('Handlebars'),
       thumbnail,
       thumbnailDark,

@@ -24,6 +24,7 @@ import {
   LeftOutlined,
   RightOutlined,
 } from '@ant-design/icons';
+import { useIsRtl } from '@apache-superset/core/theme';
 import { Select } from '@superset-ui/core/components';
 import {
   PaginationContainer,
@@ -53,6 +54,13 @@ const Pagination: React.FC<PaginationProps> = ({
   onServerPageSizeChange = () => {},
   sliceId,
 }) => {
+  // The buttons follow the inline flow (first page at the inline start), so
+  // the arrows have to point the other way in a right-to-left pager.
+  const isRtl = useIsRtl();
+  const FirstPageIcon = isRtl ? VerticalLeftOutlined : VerticalRightOutlined;
+  const PrevPageIcon = isRtl ? RightOutlined : LeftOutlined;
+  const NextPageIcon = isRtl ? LeftOutlined : RightOutlined;
+  const LastPageIcon = isRtl ? VerticalRightOutlined : VerticalLeftOutlined;
   const totalPages = Math.ceil(totalRows / pageSize);
   const startRow = currentPage * pageSize + 1;
   const endRow = Math.min((currentPage + 1) * pageSize, totalRows);
@@ -107,13 +115,13 @@ const Pagination: React.FC<PaginationProps> = ({
           onClick={handleNavigateToFirstPage(currentPage === 0)}
           disabled={currentPage === 0}
         >
-          <VerticalRightOutlined />
+          <FirstPageIcon />
         </PageButton>
         <PageButton
           onClick={handlePrevPage(currentPage === 0)}
           disabled={currentPage === 0}
         >
-          <LeftOutlined />
+          <PrevPageIcon />
         </PageButton>
         <PageCount>
           {t('Page')} <span>{currentPage + 1}</span> {t('of')}{' '}
@@ -123,13 +131,13 @@ const Pagination: React.FC<PaginationProps> = ({
           onClick={handleNextPage(!!(currentPage >= totalPages - 1))}
           disabled={currentPage >= totalPages - 1}
         >
-          <RightOutlined />
+          <NextPageIcon />
         </PageButton>
         <PageButton
           onClick={handleNavigateToLastPage(!!(currentPage >= totalPages - 1))}
           disabled={currentPage >= totalPages - 1}
         >
-          <VerticalLeftOutlined />
+          <LastPageIcon />
         </PageButton>
       </ButtonGroup>
     </PaginationContainer>

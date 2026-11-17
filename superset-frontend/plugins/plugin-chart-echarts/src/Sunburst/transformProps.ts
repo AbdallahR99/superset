@@ -48,6 +48,7 @@ import {
 } from './types';
 import { getSunburstTimeGrain } from './timeGrain';
 import { getDefaultTooltip } from '../utils/tooltip';
+import { bidi, bidiSentence } from '../utils/bidi';
 import { getSunburstSelectionKey, isSunburstPathSelected } from './utils';
 
 export function getLinearDomain(
@@ -91,7 +92,7 @@ export function formatLabel({
     case EchartsSunburstLabelType.Value:
       return formattedValue;
     case EchartsSunburstLabelType.KeyValue:
-      return `${name}: ${formattedValue}`;
+      return bidi`${name}: ${formattedValue}`;
     default:
       return name;
   }
@@ -417,7 +418,10 @@ export default function transformProps(
           top: 'center',
           left: 'center',
           style: {
-            text: t('Total: %s', primaryValueFormatter(totalValue)),
+            text: bidiSentence(
+              value => t('Total: %s', value),
+              primaryValueFormatter(totalValue),
+            ),
             fontSize: 16,
             fontWeight: 'bold',
             fill: theme.colorText,
