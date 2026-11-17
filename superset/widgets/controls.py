@@ -29,13 +29,25 @@ mandatory leaves, leaving optional/styling fields behind a drill-in.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema
 from superset_core.widgets import MetricControl
 
-from superset.widgets.safety import column_defs_problem, echarts_option_problem
+from superset.widgets.safety import (
+    column_defs_problem,
+    echarts_formatter_problem,
+    echarts_option_problem,
+    string_problem,
+)
 
 
 class WidgetControls(BaseModel):
@@ -197,13 +209,31 @@ class MarkdownControls(WidgetControls):
     )
 
 
+def _echarts_text(value: str) -> str:
+    """Apply the raw ECharts string rules to an authored structured option."""
+    if problem := string_problem(value):
+        raise ValueError(problem)
+    return value
+
+
+def _axis_formatter(value: str) -> str:
+    """Apply the raw formatter rule to a structured axis label template."""
+    if problem := echarts_formatter_problem(value, "Axis label format"):
+        raise ValueError(problem)
+    return value
+
+
+EchartsText = Annotated[str, AfterValidator(_echarts_text)]
+EchartsFormatter = Annotated[EchartsText, AfterValidator(_axis_formatter)]
+
+
 class SeriesOverride(BaseModel):
     """One structured chart series' visual override, matched to a
     ``dataBinding`` metric by its stable label (the same label ECharts'
     `getMetricLabel`-equivalent computes and the query result column is
     named after), not by array position."""
 
-    color: str = Field(
+    color: EchartsText = Field(
         default="",
         title="Color",
         description="Empty keeps the palette-assigned default.",
@@ -214,7 +244,7 @@ class SeriesOverride(BaseModel):
         title="Visible",
         description="Unchecking omits this series from the rendered chart.",
     )
-    display_name: str = Field(
+    display_name: EchartsText = Field(
         default="",
         alias="displayName",
         title="Display name",
@@ -264,7 +294,7 @@ class EchartsChrome(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    title_text: str = Field(
+    title_text: EchartsText = Field(
         default="",
         alias="titleText",
         title="Title",
@@ -302,7 +332,7 @@ class EchartsChrome(BaseModel):
             "x-options": ["item", "axis"],
         },
     )
-    x_axis_name: str = Field(
+    x_axis_name: EchartsText = Field(
         default="",
         alias="xAxisName",
         title="X axis name",
@@ -316,7 +346,7 @@ class EchartsChrome(BaseModel):
         title="X axis label rotation (°)",
         description="0 leaves the axis's own `axisLabel.rotate` (or none) untouched.",
     )
-    x_axis_format: str = Field(
+    x_axis_format: EchartsFormatter = Field(
         default="",
         alias="xAxisFormat",
         title="X axis label format",
@@ -325,7 +355,7 @@ class EchartsChrome(BaseModel):
             "leaves the axis's own `axisLabel.formatter` (or none) untouched."
         ),
     )
-    y_axis_name: str = Field(
+    y_axis_name: EchartsText = Field(
         default="",
         alias="yAxisName",
         title="Y axis name",
@@ -339,7 +369,7 @@ class EchartsChrome(BaseModel):
         title="Y axis label rotation (°)",
         description="0 leaves the axis's own `axisLabel.rotate` (or none) untouched.",
     )
-    y_axis_format: str = Field(
+    y_axis_format: EchartsFormatter = Field(
         default="",
         alias="yAxisFormat",
         title="Y axis label format",

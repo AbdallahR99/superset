@@ -103,6 +103,10 @@ class TestUpdateDashboard:
             ),
         )
         mock_get.return_value = dash
+        mock_session.execute.return_value.scalar_one_or_none.return_value = (
+            dash.json_metadata
+        )
+        mock_session.execute.return_value.rowcount = 1
 
         position = {
             "DASHBOARD_VERSION_KEY": "v2",
@@ -620,6 +624,10 @@ class TestUpdateDashboard:
             id=42, json_metadata=json.dumps({"label_colors": {"A": "#111"}})
         )
         mock_get.return_value = dash
+        mock_session.execute.return_value.scalar_one_or_none.return_value = (
+            dash.json_metadata
+        )
+        mock_session.execute.return_value.rowcount = 1
 
         async with Client(mcp_server) as client:
             result = await client.call_tool(

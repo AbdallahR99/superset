@@ -74,7 +74,9 @@ def read_current_json_metadata(pk: int, lock: bool = True) -> str | None:
     return db.session.execute(statement).scalar_one_or_none()
 
 
-def compare_and_swap_json_metadata(pk: int, expected: str | None, new: str) -> bool:
+def compare_and_swap_json_metadata(
+    pk: int, expected: str | None, new: str | None
+) -> bool:
     """
     Store ``new`` as the dashboard's ``json_metadata`` if, and only if, the
     column still holds ``expected``.

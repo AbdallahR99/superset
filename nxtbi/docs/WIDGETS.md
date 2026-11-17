@@ -109,7 +109,7 @@ Arabic builder; the MCP tools. Browser checks fail on any uncaught page error or
 
 | Item | Detail |
 |---|---|
-| Databases | Concurrency was exercised on SQLite (unit tests) and PostgreSQL (the stack, sequential requests). Truly concurrent saves on PostgreSQL and anything on MySQL were not run; the MySQL comparison is binary-exact by construction only. |
+| Databases | SQLite unit tests exercise compare-and-swap and retries. The [PostgreSQL harness](../widgets/README.md#concurrent-dashboard-v2-saves-on-postgresql) checks overlapping V2 saves and a classic metadata edit on three independent connections. MySQL and MariaDB coverage checks the generated SQL. |
 | mypy / pre-commit | Not run; ruff, oxlint, oxfmt and tsc were. |
 | Semantic layer forms | Upstream's semantic layer and semantic view dialogs use the same JSON form library without the interpreting validator and are expected to fail under the production CSP. Not part of this work; not reproduced. |
 | Extension widgets | Tested against a simulated Module Federation container, not a real extension bundle. An extension that registers only on import and calls the core without naming a node from a timer or event handler cannot be attributed when two providers show its widgets; the call throws. In the builder, an extension's data call without a node id runs unfiltered. |

@@ -218,7 +218,38 @@ def test_a_restore_applies_the_authoring_rule_to_definitions_it_brings_back(
     assert _raw(v2_session, pk) == before
 
 
-def test_a_restore_of_a_classic_dashboard_writes_nothing_of_its_own(
+def test_a_restore_refuses_a_snapshot_with_a_malformed_document(
+    editor: None, v2_session: Session
+) -> None:
+    pk = _create("first")
+    before = _raw(v2_session, pk)
+    snapshot = json.dumps({"color_scheme": "old", "v2_document": {"nodes": []}})
+
+    with pytest.raises(
+        DashboardDocumentRestoreError, match="document.nodes must be an object"
+    ):
+        _restore(v2_session, pk, snapshot)
+    v2_session.rollback()
+
+    assert _raw(v2_session, pk) == before
+
+
+def test_a_restore_of_a_classic_dashboard_does_not_create_a_document(
+    session: Session,
+) -> None:
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    session.add(
+        Dashboard(id=9, dashboard_title="Classic", slices=[], json_metadata="{}")
+    )
+    session.flush()
+    _restore(session, 9, json.dumps({"color_scheme": "old"}))
+
+    assert json.loads(_raw(session, 9)) == {"color_scheme": "old"}
+
+
+def test_a_restore_keeps_a_document_added_after_reading_classic_metadata(
     mocker: MockerFixture, session: Session
 ) -> None:
     from superset.models.dashboard import Dashboard
@@ -228,12 +259,18 @@ def test_a_restore_of_a_classic_dashboard_writes_nothing_of_its_own(
         Dashboard(id=9, dashboard_title="Classic", slices=[], json_metadata="{}")
     )
     session.flush()
-    swap = mocker.spy(storage, "compare_and_swap_json_metadata")
+    stored = {**make_document("imported"), "revision": 1}
+    concurrent = json.dumps({"v2_document": stored})
+    mocker.patch(f"{SAVE}.read_current_json_metadata", side_effect=["{}", concurrent])
 
-    _restore(session, 9, json.dumps({"color_scheme": "old"}))
+    _restore(
+        session, 9, json.dumps({"color_scheme": "from_snapshot"}), behind=concurrent
+    )
 
-    assert json.loads(_raw(session, 9)) == {"color_scheme": "old"}
-    swap.assert_not_called()
+    assert json.loads(_raw(session, 9)) == {
+        "color_scheme": "from_snapshot",
+        "v2_document": stored,
+    }
 
 
 def test_replacing_metadata_gives_up_after_losing_every_attempt(

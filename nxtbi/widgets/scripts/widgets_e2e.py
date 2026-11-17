@@ -57,6 +57,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import subprocess
 import sys
@@ -102,8 +103,8 @@ def expect(condition: Any, message: str) -> None:
 
 
 def read_env() -> dict[str, str]:
-    """KEY=value pairs of nxtbi/widgets/.env."""
-    path = WIDGETS_DIR / ".env"
+    """Read the credentials and URLs for the selected widgets stack."""
+    path = Path(os.environ.get("NXTBI_WIDGETS_ENV_FILE") or WIDGETS_DIR / ".env")
     if not path.exists():
         sys.exit(f"{path} not found: run python nxtbi/widgets/scripts/gen_env.py")
     env: dict[str, str] = {}
@@ -153,8 +154,7 @@ def guest_token_request(
         ],
         "rls": list(rls),
     }
-    allowlist = list(dataset_allowlist)
-    if allowlist:
+    if allowlist := list(dataset_allowlist):
         body["datasets"] = allowlist
     return body
 
@@ -2431,6 +2431,10 @@ FLAG_GATED_ROUTES = [
 
 def compose(*arguments: str) -> subprocess.CompletedProcess[str]:
     """Run docker compose for the nxtbi-widgets project only."""
+    expect(
+        not os.environ.get("NXTBI_WIDGETS_ENV_FILE"),
+        "Start the flag-off service for the selected stack before running.",
+    )
     return subprocess.run(  # noqa: S603
         [
             "docker",
@@ -3336,7 +3340,6 @@ def main() -> int:
         for group, name, fn in CHECKS:
             print(f"{group}  {name}: {(fn.__doc__ or '').strip()}")
         return 0
-
     env = read_env()
     base = env.get("SUPERSET_PUBLIC_URL", "http://localhost:8089").rstrip("/")
     if not reachable(f"{base}/health"):

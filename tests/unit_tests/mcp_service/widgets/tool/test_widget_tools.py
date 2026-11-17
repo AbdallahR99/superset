@@ -44,6 +44,7 @@ from superset.mcp_service.widgets.tool.list_widget_types import (
 )
 from superset.mcp_service.widgets.utils import WIDGET_TOOL_NAMES
 from superset.utils import json
+from superset.widgets.controls import EchartsControls
 
 FLAG = "superset.mcp_service.widgets.utils.is_dashboard_v2_enabled"
 CAN_VIEW_METADATA = (
@@ -160,11 +161,8 @@ def test_get_widget_control_schema_bad_path_error() -> None:
 
 
 def test_get_widget_control_schema_falls_back_when_enrichment_fails() -> None:
-    widget = Mock()
-    widget.get_control_schema.side_effect = [
-        RuntimeError("boom"),
-        {"type": "object", "properties": {}},
-    ]
+    widget = Mock(controls_class=EchartsControls)
+    widget.get_control_schema.side_effect = RuntimeError("boom")
     with patch(
         "superset.mcp_service.widgets.tool.get_widget_control_schema.resolve_widget",
         return_value=widget,
@@ -173,7 +171,9 @@ def test_get_widget_control_schema_falls_back_when_enrichment_fails() -> None:
 
     assert result.warning is not None
     assert "boom" not in result.warning
-    assert widget.get_control_schema.call_args_list[-1].args == (None, None)
+    assert result.control_schema is not None
+    assert "dataBinding" in result.control_schema["properties"]
+    widget.get_control_schema.assert_called_once_with({"a": 1}, None)
 
 
 def test_get_widget_control_schema_requires_feature_flag(
@@ -194,6 +194,19 @@ def test_get_widget_control_schema_withheld_without_metadata_access(
 def test_control_schema_request_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         GetWidgetControlSchemaRequest(widget_type="echarts", sql="SELECT 1")
+
+
+@pytest.mark.parametrize(("field", "limit"), [("paths", 200), ("series", 500)])
+def test_control_schema_request_list_limits(field: str, limit: int) -> None:
+    """Schema discovery accepts the same list sizes over REST and MCP."""
+    values = ["metric"] * limit
+    GetWidgetControlSchemaRequest.model_validate(
+        {"widget_type": "echarts", field: values}
+    )
+    with pytest.raises(ValidationError):
+        GetWidgetControlSchemaRequest.model_validate(
+            {"widget_type": "echarts", field: [*values, "another"]}
+        )
 
 
 @pytest.mark.asyncio

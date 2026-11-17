@@ -42,7 +42,9 @@ from superset.commands.widget.saved import (
 )
 from superset.exceptions import SupersetSecurityException
 from superset.widgets.data import (
+    FilterValidationError,
     props_dataset_id,
+    resolved_filters_to_adhoc,
     validate_guest_inline_props,
     widget_dataset_id,
     WidgetContext,
@@ -88,6 +90,29 @@ def _saved_widget(props: dict[str, Any] | None = None) -> MagicMock:
     widget.props_dict = props or BAR_PROPS
     widget.created_by_fk = 2
     return widget
+
+
+def test_filter_operator_must_be_a_string() -> None:
+    """A JSON array in the operator field is a validation error."""
+    with pytest.raises(FilterValidationError, match="unsupported operator"):
+        resolved_filters_to_adhoc([{"column": "state", "operator": []}], {"state"})
+
+
+def test_guest_metric_column_name_must_be_a_string() -> None:
+    """Malformed column references fail validation before building a query."""
+    props = {
+        "dataBinding": {
+            "metrics": [
+                {
+                    "expressionType": "SIMPLE",
+                    "aggregate": "COUNT",
+                    "column": {"column_name": []},
+                }
+            ]
+        }
+    }
+    with pytest.raises(WidgetDataError, match="Guest metrics"):
+        validate_guest_inline_props(props, _datasource())
 
 
 @pytest.mark.parametrize(
@@ -250,7 +275,12 @@ def test_resolve_inline_guest_is_hardened(mocker: MockerFixture) -> None:
 
 
 def test_resolve_saved_widget(mocker: MockerFixture) -> None:
-    _security(mocker, "superset.commands.widget.utils", guest=False)
+    _security(
+        mocker,
+        "superset.commands.widget.utils",
+        "superset.commands.widget.data",
+        guest=False,
+    )
     saved = _saved_widget()
     mocker.patch(
         "superset.commands.widget.utils.SavedWidgetDAO.find_by_uuid",
@@ -260,6 +290,24 @@ def test_resolve_saved_widget(mocker: MockerFixture) -> None:
     assert props == BAR_PROPS
     assert context == WidgetContext(DATASET_ID, str(saved.uuid))
     assert not context.inline
+
+
+@pytest.mark.parametrize("granted", [True, False])
+def test_saved_query_requires_a_guest_dataset_grant(
+    mocker: MockerFixture, granted: bool
+) -> None:
+    """Verify the token binding before handing a saved definition to the widget."""
+    saved = _saved_widget()
+    mocker.patch("superset.commands.widget.data.load_saved_widget", return_value=saved)
+    sm = _security(mocker, "superset.commands.widget.data", guest=True)
+    sm.guest_widget_grants_dataset.return_value = granted
+    context = WidgetContext(DATASET_ID, str(saved.uuid))
+    if granted:
+        assert resolve_widget({"id": str(saved.uuid)})[2] == context
+    else:
+        with pytest.raises(SavedWidgetForbiddenError):
+            resolve_widget({"id": str(saved.uuid)})
+    sm.guest_widget_grants_dataset.assert_called_once_with(context)
 
 
 def test_resolve_saved_widget_guest_must_be_named(mocker: MockerFixture) -> None:

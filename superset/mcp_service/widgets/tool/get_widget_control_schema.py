@@ -20,6 +20,7 @@ import logging
 
 from fastmcp import Context
 from superset_core.mcp.decorators import tool, ToolAnnotations
+from superset_core.semantic_layers.config import build_configuration_schema
 
 from superset.extensions import event_logger
 from superset.mcp_service.privacy import (
@@ -81,7 +82,7 @@ def _get_widget_control_schema_impl(
             "Error enriching control schema for widget type %s", request.widget_type
         )
         warning = ENRICHMENT_WARNING
-        schema = widget.get_control_schema(None, None)
+        schema = build_configuration_schema(widget.controls_class)
 
     if not request.paths:
         return WidgetControlSchema(

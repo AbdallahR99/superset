@@ -165,6 +165,35 @@ const headerContainerStyle = (theme: SupersetTheme) => css`
   border-bottom: 1px solid ${theme.colorBorder};
 `;
 
+const stackedActionsStyle = (theme: SupersetTheme) => css`
+  @media (max-width: ${theme.screenXSMax}px) {
+    .header-with-actions {
+      flex-wrap: wrap;
+      row-gap: ${theme.sizeUnit * 2}px;
+      height: auto;
+      padding-block: ${theme.sizeUnit * 2}px;
+    }
+
+    .title-panel {
+      flex: 1;
+      margin-inline-end: 0;
+
+      > :last-child {
+        flex-shrink: 0;
+      }
+
+      [data-test='metadata-bar'] {
+        display: none;
+      }
+    }
+
+    .right-button-panel {
+      flex-basis: 100%;
+      justify-content: flex-end;
+    }
+  }
+`;
+
 const editButtonStyle = (theme: SupersetTheme) => css`
   color: ${theme.colorPrimary};
 `;
@@ -228,9 +257,13 @@ const discardChanges = () => {
 
 interface HeaderComponentProps {
   onOpenMobileFilters?: () => void;
+  stackActions?: boolean;
 }
 
-const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
+const Header = ({
+  onOpenMobileFilters,
+  stackActions,
+}: HeaderComponentProps): JSX.Element => {
   const dispatch = useDispatch();
   const theme = useTheme();
   const isMobile = useIsMobile();
@@ -857,7 +890,7 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
   });
   return (
     <div
-      css={headerContainerStyle}
+      css={[headerContainerStyle, stackActions && stackedActionsStyle]}
       data-test="dashboard-header-container"
       data-test-id={dashboardInfo.id}
       className="dashboard-header-container"

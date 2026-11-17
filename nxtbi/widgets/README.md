@@ -147,6 +147,10 @@ Results go to `nxtbi/out/widgets-e2e-results.json` (exit code 1 on a failure),
 screenshots of failed browser checks to `nxtbi/out/widgets-e2e/`. `nxtbi/out/` is
 git-ignored. The script deletes the dashboards and widgets it creates.
 
+Set `NXTBI_WIDGETS_ENV_FILE` to use a separate validation stack. The example
+app and Playwright runner read the same path. Start that stack's flag-off
+service before the run, since `--manage-flag-off` uses the default stack.
+
 | Group | What is checked | Needs |
 |---|---|---|
 | a | builder: place chart, AG Grid table, metric, filter and markdown widgets (each block's control form has to render), save, reload, every widget shows real content (table rows, a painted chart, a number), an edit made in the control form reaches the widget and the server | browser |
@@ -185,6 +189,23 @@ in one function, under "payloads under change" at the top of `widgets_e2e.py`:
 in the same place states the SQL authoring rule check f5 expects.
 
 ## 6. Other scripts
+
+### Concurrent Dashboard V2 saves on PostgreSQL
+
+```bash
+python nxtbi/widgets/scripts/dashboard_v2_concurrency.py \
+  --base-url http://localhost:8089 \
+  --env-file nxtbi/widgets/.env \
+  --db-container nxtbi-widgets-db-1
+```
+
+Run against a disposable copy of the widgets stack with database login and at
+least three concurrent web requests. The script creates a dashboard and holds
+its row lock until three separate PostgreSQL connections are waiting. It checks
+that one of two same-revision V2 saves wins, the other receives the committed
+revision in a 409, and a concurrent classic metadata edit survives. It then
+checks that a cyclic document returns 422 and leaves the dashboard unchanged
+before deleting the dashboard through the API.
 
 ### Migration cycle
 

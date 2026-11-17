@@ -63,6 +63,7 @@ from superset.dashboard_v2.document import (
     INITIAL_REVISION,
     load_stored_document,
     normalize_document,
+    V2_DOCUMENT_KEY,
     with_revision,
     write_stored_document,
 )
@@ -333,22 +334,29 @@ def store_replaced_json_metadata(
     The caller assigns the returned value to the model, so the ORM writes the
     same text the swap stored.
 
-    :returns: The ``json_metadata`` that is stored; ``json_metadata`` itself,
-        untouched and not written here, when neither side holds a document
+    :returns: The ``json_metadata`` that is stored
     :raises DashboardV2InvalidError: If the replacing document is invalid or
         binds data the caller may not author
     :raises DashboardV2ConflictError: If the write keeps losing against
         concurrent writers
     """
-    replacement = load_stored_document(json_metadata)
+    # A stored document is recognized by its shape. An incoming replacement
+    # must be validated even when it has the wrong shape.
+    try:
+        metadata = json.loads(json_metadata or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    replacement = metadata.get(V2_DOCUMENT_KEY) if isinstance(metadata, dict) else None
     validated: dict[str, Any] | None = None
     for _ in range(MAX_WRITE_ATTEMPTS):
         current_json = read_current_json_metadata(pk)
         current = load_stored_document(current_json)
         if replacement is None:
-            if current is None:
-                return json_metadata
-            revised = current
+            new_json = (
+                json_metadata
+                if current is None
+                else write_stored_document(json_metadata, current)
+            )
         else:
             if validated is None:
                 validated = normalize_and_validate(replacement)
@@ -358,7 +366,7 @@ def store_replaced_json_metadata(
                 validated,
                 INITIAL_REVISION if current is None else document_revision(current) + 1,
             )
-        new_json = write_stored_document(json_metadata, revised)
+            new_json = write_stored_document(json_metadata, revised)
         if compare_and_swap_json_metadata(pk, current_json, new_json):
             return new_json
     raise DashboardV2ConflictError(None)

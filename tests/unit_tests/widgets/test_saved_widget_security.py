@@ -196,10 +196,12 @@ def test_dataset_allowlist_still_narrows_an_inline_grant(
     mocker: MockerFixture, sm: SupersetSecurityManager
 ) -> None:
     _as_guest(mocker, sm, _guest([_dataset_resource()], datasets=[99]))
+    assert not sm.guest_widget_grants_dataset(_inline())
     with pytest.raises(SupersetSecurityException):
         sm.raise_for_access(query_context=_query_context(_inline(), _datasource()))
 
     _as_guest(mocker, sm, _guest([_dataset_resource()], datasets=[DATASET_ID]))
+    assert sm.guest_widget_grants_dataset(_inline())
     sm.raise_for_access(query_context=_query_context(_inline(), _datasource()))
 
 

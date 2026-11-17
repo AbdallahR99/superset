@@ -1168,11 +1168,9 @@ class DashboardDAO(BaseDAO[Dashboard]):
         """
         Serialize ``md`` for *dashboard* without changing its v2 document.
 
-        For a v2 dashboard the document in ``md`` is whatever the session
-        loaded, which a Dashboard v2 save may have replaced since. The
-        metadata is therefore written with a compare-and-swap that takes the
-        document from the row as it is at that moment, so this update can
-        neither alter the document nor roll back a concurrent save of it.
+        The session's copy may be older than a concurrent Dashboard v2 save
+        or an import that added a document to a classic dashboard. Persisted
+        rows use a compare-and-swap that takes the document from the current row.
 
         Every classic writer of ``json_metadata`` stores through here: the
         dashboard update, the native filter, chart customization and color
@@ -1181,11 +1179,7 @@ class DashboardDAO(BaseDAO[Dashboard]):
         :raises DashboardUpdateFailedError: If the write keeps losing against
             concurrent writers
         """
-        if (
-            not isinstance(md, dict)
-            or V2_DOCUMENT_KEY not in md
-            or dashboard.id is None
-        ):
+        if not isinstance(md, dict) or dashboard.id is None:
             return json.dumps(md)
         stored = write_metadata_keeping_document(dashboard.id, md)
         if stored is None:

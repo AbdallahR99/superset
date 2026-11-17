@@ -28,6 +28,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from superset.widgets.schema_tools import MAX_SCHEMA_PATHS, MAX_SCHEMA_SERIES
+
 MAX_SAVED_WIDGET_PAGE_SIZE = 100
 DEFAULT_SAVED_WIDGET_PAGE_SIZE = 25
 
@@ -55,6 +57,7 @@ class GetWidgetControlSchemaRequest(BaseModel):
     widget_type: str = Field(..., description="Widget type id from list_widget_types.")
     paths: list[str] = Field(
         default_factory=list,
+        max_length=MAX_SCHEMA_PATHS,
         description=(
             "x-path values of collapsed branches to expand. Empty returns the "
             "minimum-viable root schema."
@@ -69,6 +72,7 @@ class GetWidgetControlSchemaRequest(BaseModel):
     )
     series: list[str] | None = Field(
         default=None,
+        max_length=MAX_SCHEMA_SERIES,
         description="Known distinct dimension values, for x-dynamic branches.",
     )
 

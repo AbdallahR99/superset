@@ -52,7 +52,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WIDGETS_DIR="$(cd "$HERE/.." && pwd)"
 REPO_ROOT="$(cd "$WIDGETS_DIR/../.." && pwd)"
-ENV_FILE="$WIDGETS_DIR/.env"
+ENV_FILE="${NXTBI_WIDGETS_ENV_FILE:-$WIDGETS_DIR/.env}"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "$ENV_FILE not found: run python nxtbi/widgets/scripts/gen_env.py" >&2
