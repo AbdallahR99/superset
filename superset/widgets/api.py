@@ -26,6 +26,7 @@ from flask_babel import gettext as _
 from flask_jwt_extended.exceptions import JWTExtendedException
 from jwt.exceptions import PyJWTError
 from marshmallow import ValidationError
+from superset_core.semantic_layers.config import build_configuration_schema
 
 from superset import security_manager
 from superset.commands.exceptions import CommandException
@@ -44,7 +45,12 @@ from superset.extensions import event_logger
 from superset.utils import json
 from superset.views.base_api import BaseSupersetApi, statsd_metrics
 from superset.widgets.registry import registry
-from superset.widgets.schema_tools import get_subtrees, SchemaPathError
+from superset.widgets.schema_tools import (
+    get_subtrees,
+    MAX_SCHEMA_PATHS,
+    MAX_SCHEMA_SERIES,
+    SchemaPathError,
+)
 from superset.widgets.schemas import (
     SavedWidgetPostSchema,
     SavedWidgetPutSchema,
@@ -55,11 +61,6 @@ from superset.widgets.schemas import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Bounds on the caller-sized lists the control-schema route accepts.
-MAX_SCHEMA_PATHS = 200
-MAX_SCHEMA_SERIES = 500
-
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -225,10 +226,12 @@ class WidgetControlsRestApi(BaseSupersetApi):
                       type: object
                     series:
                       type: array
+                      maxItems: 500
                       items:
                         type: string
                     paths:
                       type: array
+                      maxItems: 200
                       items:
                         type: string
                       description: >-
@@ -256,10 +259,9 @@ class WidgetControlsRestApi(BaseSupersetApi):
         widget = registry.get(widget_type)
         if widget is None:
             return self.response_404()
-        # GET carries no body (and no CSRF); tolerate a missing/non-JSON body so
-        # the base schema is returned for a plain read. A body that IS present
-        # must be a JSON object.
-        body = request.get_json(silent=True) or {}
+        # An omitted body requests the base schema. A supplied body must parse
+        # as an object, including when its JSON value is false or null.
+        body = request.get_json(silent=True) if request.get_data() else {}
         if not isinstance(body, dict):
             return self.response_400(message="Request body must be a JSON object.")
         control_values = body.get("control_values")
@@ -267,27 +269,25 @@ class WidgetControlsRestApi(BaseSupersetApi):
         paths = body.get("paths")
         if problem := _control_schema_body_problem(control_values, series, paths):
             return self.response_400(message=problem)
-        if security_manager.is_guest_user():
-            # Enrichment lists datasets and columns for an author's pickers; an
-            # embedded guest renders widgets and never authors them.
-            control_values = series = None
-
         warning: str | None = None
-        try:
-            schema = widget.get_control_schema(control_values, series)
-        except Exception:  # pylint: disable=broad-except
-            # Enrichment can fail (e.g. malformed dynamic values); showing the
-            # base form is better than a hard error — mirror the Semantic Layer.
-            warning = str(
-                _(
-                    "Could not enrich the controls for this widget; showing the "
-                    "default form. See the server logs for details."
+        if security_manager.is_guest_user():
+            # Even empty control values run the dataset picker's enricher.
+            # A guest needs only the static shape of the controls.
+            schema = build_configuration_schema(widget.controls_class)
+        else:
+            try:
+                schema = widget.get_control_schema(control_values, series)
+            except Exception:  # pylint: disable=broad-except
+                warning = str(
+                    _(
+                        "Could not enrich the controls for this widget; showing the "
+                        "default form. See the server logs for details."
+                    )
                 )
-            )
-            logger.exception(
-                "Error enriching control schema for widget type %s", widget_type
-            )
-            schema = widget.get_control_schema(None, None)
+                logger.exception(
+                    "Error enriching control schema for widget type %s", widget_type
+                )
+                schema = build_configuration_schema(widget.controls_class)
 
         # `paths` narrows the response to just those drill-in subtrees; without
         # it the whole (enriched) schema is returned.
@@ -374,7 +374,7 @@ class WidgetControlsRestApi(BaseSupersetApi):
         widget = registry.get(widget_type)
         if widget is None:
             return self.response_404()
-        body = request.get_json(silent=True) or {}
+        body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return self.response_400(message="Request body must be a JSON object.")
         control_values = body.get("control_values")
@@ -598,7 +598,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
               $ref: '#/components/responses/403'
         """
         try:
-            body = SavedWidgetPostSchema().load(request.get_json(silent=True) or {})
+            body = SavedWidgetPostSchema().load(request.get_json(silent=True))
         except ValidationError as error:
             return _bad_request(self, error)
         try:
@@ -690,7 +690,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
               $ref: '#/components/responses/404'
         """
         try:
-            body = SavedWidgetPutSchema().load(request.get_json(silent=True) or {})
+            body = SavedWidgetPutSchema().load(request.get_json(silent=True))
         except ValidationError as error:
             return _bad_request(self, error)
         try:
@@ -774,7 +774,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
               $ref: '#/components/responses/404'
         """
         try:
-            body = WidgetDataPostSchema().load(request.get_json(silent=True) or {})
+            body = WidgetDataPostSchema().load(request.get_json(silent=True))
         except ValidationError as error:
             return _bad_request(self, error)
         filters = body.pop("filters")
@@ -828,7 +828,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
               $ref: '#/components/responses/404'
         """
         try:
-            body = WidgetValuesPostSchema().load(request.get_json(silent=True) or {})
+            body = WidgetValuesPostSchema().load(request.get_json(silent=True))
         except ValidationError as error:
             return _bad_request(self, error)
         try:

@@ -37,6 +37,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+MAX_SCHEMA_PATHS = 200
+MAX_SCHEMA_SERIES = 500
+
 
 class SchemaPathError(KeyError):
     """Raised when a drill-in ``path`` cannot be resolved against a schema."""

@@ -7387,14 +7387,17 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
 
         A saved widget must be named as a ``widget`` resource minted while it
         bound the dataset it binds on this request. An inline definition needs
-        a ``dataset`` resource for its dataset. The ``datasets`` claim is never
-        consulted here: it is an allowlist that narrows a token (enforced by
-        ``raise_for_guest_dataset_allowlist``), not a grant, so a
-        dashboard-scoped token can never serve an inline definition.
+        a ``dataset`` resource for its dataset. The optional ``datasets``
+        allowlist further narrows either grant before widget dispatch.
         """
         user = self.get_current_guest_user_if_guest()
         dataset_id = getattr(context, "dataset_id", None)
-        if not user or isinstance(dataset_id, bool) or not isinstance(dataset_id, int):
+        if (
+            not user
+            or isinstance(dataset_id, bool)
+            or not isinstance(dataset_id, int)
+            or not self._guest_token_allows_dataset(dataset_id)
+        ):
             return False
         saved_widget_uuid = getattr(context, "saved_widget_uuid", None)
         if saved_widget_uuid is not None:

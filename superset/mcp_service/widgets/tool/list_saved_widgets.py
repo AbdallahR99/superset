@@ -87,7 +87,9 @@ async def list_saved_widgets(
     request: ListSavedWidgetsRequest | None = None,
     ctx: Context | None = None,
 ) -> SavedWidgetList | WidgetToolError:
-    """List saved widgets: your own, or every saved widget for an admin.
+    """List your saved widgets and those bound to datasets you can read.
+
+    Admins see all saved widgets.
 
     Returns each widget's ``uuid``, ``widget_type``, ``title``, ``props`` and
     ``dataset_id``. Use ``get_widget_data`` with a ``uuid`` to fetch its rows.

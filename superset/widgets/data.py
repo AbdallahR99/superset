@@ -290,7 +290,7 @@ def resolved_filters_to_adhoc(
         operator = resolved.get("operator")
         if not isinstance(column, str) or column not in allowed_columns:
             raise FilterValidationError(f"filters[{index}]: unknown column {column!r}")
-        if operator not in FILTER_OPERATORS:
+        if not isinstance(operator, str) or operator not in FILTER_OPERATORS:
             raise FilterValidationError(
                 f"filters[{index}]: unsupported operator {operator!r}"
             )
@@ -532,7 +532,8 @@ def _require_guest_metric(
         or metric.get("sqlExpression")
         or str(metric.get("aggregate", "")).upper() not in GUEST_AGGREGATES
         or not isinstance(column, dict)
-        or column.get("column_name") not in columns
+        or not isinstance(column.get("column_name"), str)
+        or column["column_name"] not in columns
     ):
         raise WidgetDataError(
             "Guest metrics must be saved metrics or simple aggregates of a column."

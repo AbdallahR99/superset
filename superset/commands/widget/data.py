@@ -43,6 +43,7 @@ from superset.widgets.data import (
     raise_for_widget_sql,
     validate_guest_inline_props,
     widget_dataset_id,
+    widget_queries_data,
     WidgetContext,
     WidgetDataError,
     WidgetDatasetMissingError,
@@ -63,11 +64,16 @@ def resolve_widget(
         if widget_cls is None:
             raise WidgetInvalidError(f"Unknown widget type {saved.widget_type!r}.")
         props = saved.props_dict
-        return (
-            widget_cls,
-            props,
-            WidgetContext(widget_dataset_id(widget_cls, props), str(saved.uuid)),
-        )
+        context = WidgetContext(widget_dataset_id(widget_cls, props), str(saved.uuid))
+        # Reading a named definition and running its query are distinct grants.
+        # Check the binding before dispatch, including for extension widgets.
+        if (
+            security_manager.is_guest_user()
+            and widget_queries_data(widget_cls)
+            and not security_manager.guest_widget_grants_dataset(context)
+        ):
+            raise SavedWidgetForbiddenError()
+        return widget_cls, props, context
 
     spec = selector.get("widget")
     if not isinstance(spec, dict):

@@ -95,6 +95,8 @@ BAD_BODIES: list[tuple[str, str, Any]] = [
     ("POST", "/api/v1/widget/", {"widget_type": "echarts", "props": "nope"}),
     ("POST", "/api/v1/widget/", {"widget_type": "echarts", "props": {}, "x": 1}),
     ("PUT", f"/api/v1/widget/{WIDGET_UUID}", {"props": 3}),
+    ("PUT", f"/api/v1/widget/{WIDGET_UUID}", []),
+    ("PUT", f"/api/v1/widget/{WIDGET_UUID}", None),
     ("POST", "/api/v1/widget/data", {}),
     ("POST", "/api/v1/widget/data", {"id": "a", "widget": {"type": "x", "props": {}}}),
     ("POST", "/api/v1/widget/data", {"widget": {"props": {}}}),
@@ -102,6 +104,8 @@ BAD_BODIES: list[tuple[str, str, Any]] = [
     ("POST", "/api/v1/widget/values", {"widget": {"type": 5}}),
     ("POST", "/api/v1/widgets/type/echarts/control-schema", {"paths": "a"}),
     ("POST", "/api/v1/widgets/type/echarts/control-schema", {"series": [1]}),
+    ("POST", "/api/v1/widgets/type/echarts/control-schema", False),
+    ("POST", "/api/v1/widgets/type/echarts/validate", []),
 ]
 
 
@@ -109,9 +113,8 @@ BAD_BODIES: list[tuple[str, str, Any]] = [
 def test_malformed_request_is_400_with_a_message(
     client: Any, full_api_access: None, method: str, url: str, body: Any
 ) -> None:
-    payload = _assert_message(_post(client, url, body, method), 400)
 
-    if "errors" in payload:
+    if "errors" in (payload := _assert_message(_post(client, url, body, method), 400)):
         assert all(isinstance(error["message"], str) for error in payload["errors"])
         assert all(isinstance(error["loc"], list) for error in payload["errors"])
 
@@ -123,6 +126,20 @@ def test_schema_error_names_the_field(client: Any, full_api_access: None) -> Non
 
     assert payload["message"].startswith("widget.type: ")
     assert payload["errors"][0]["loc"] == ["widget", "type"]
+
+
+def test_guest_control_schema_uses_only_static_fields(
+    client: Any, full_api_access: None, mocker: MockerFixture
+) -> None:
+    """Serving a guest a filter's control schema requires no dataset lookups."""
+    from superset import security_manager
+
+    mocker.patch.object(security_manager, "is_guest_user", return_value=True)
+    datasets = mocker.patch("superset.daos.dataset.DatasetDAO.find_all")
+    response = client.get("/api/v1/widgets/type/filter.select/control-schema")
+    assert response.status_code == 200
+    assert response.get_json()["result"]["properties"]["datasetId"]["enum"] == []
+    datasets.assert_not_called()
 
 
 @pytest.mark.parametrize(

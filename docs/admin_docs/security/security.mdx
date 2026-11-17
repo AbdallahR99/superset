@@ -484,6 +484,19 @@ feature flag off.
 The setting assigns groups as *viewers*, not editors, so group members get read-only access and
 cannot modify or delete the asset.
 
+### Embedded widget access
+
+With `DASHBOARD_V2` enabled, a guest token can name a saved widget. When the token is
+issued, Superset records the widget's dataset. Updating that widget to use a different
+dataset requires a fresh token to fetch its rows or filter values. An inline widget
+requires an explicit `dataset` resource, and its definition must be SQL-free.
+The optional `datasets` allowlist further restricts either grant. The guest's token
+rules and guest role rules limit the rows returned.
+
+Guests receive static widget control schemas. Dataset and column pickers are available
+to authorized authors. REST and MCP control-schema requests accept up to 200 paths and
+500 series names. A REST request with a body must supply a JSON object.
+
 ### SQL Execution Security Considerations
 
 Apache Superset includes features designed to provide safeguards when interacting with connected databases, such as the `DISALLOWED_SQL_FUNCTIONS` configuration setting. This aims to prevent the execution of potentially harmful database functions or system variables directly from Superset interfaces like SQL Lab.

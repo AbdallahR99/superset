@@ -223,6 +223,16 @@ def _axis_link_problem(value: Any, path: str) -> str | None:
     return None
 
 
+def echarts_formatter_problem(value: Any, path: str) -> str | None:
+    """Validate a text template or the per-unit templates of a time axis."""
+    templates = value.values() if isinstance(value, dict) else [value]
+    if not all(isinstance(template, str) for template in templates):
+        return f"{path} must be a text template"
+    if any(_FUNCTION_SOURCE.search(template) for template in templates):
+        return f"{path} must be a text template, not a function"
+    return None
+
+
 def _echarts_value_problem(
     key: str, value: Any, path: str, parent: str | None = None
 ) -> str | None:
@@ -231,12 +241,7 @@ def _echarts_value_problem(
     component that holds it (``parent``, the nearest enclosing key).
     """
     if _is_formatter(key):
-        # A template, or the per-unit templates of a time axis.
-        templates = list(value.values()) if isinstance(value, dict) else [value]
-        if not all(isinstance(template, str) for template in templates):
-            return f"{path} must be a text template"
-        if any(_FUNCTION_SOURCE.search(template) for template in templates):
-            return f"{path} must be a text template, not a function"
+        return echarts_formatter_problem(value, path)
     if _is_axis_link(key, parent):
         return _axis_link_problem(value, path)
     if key in _LINK_KEYS and (

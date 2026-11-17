@@ -32,6 +32,7 @@ import pytest
 
 from superset.utils import json
 from superset.widgets.registry import registry
+from superset.widgets.safety import MAX_STRING_LENGTH
 
 # The widget REST routes exercised below answer 404 unless the Dashboard V2
 # feature is switched on.
@@ -126,6 +127,24 @@ def test_out_of_range_rotate_is_rejected() -> None:
     )
     locs = [tuple(error["loc"]) for error in errors]
     assert ("chrome", "xAxisRotate") in locs
+
+
+def test_structured_option_strings_follow_raw_option_limits() -> None:
+    """The same text bounds apply wherever an authored ECharts label is set."""
+    widget = registry.get("echarts")
+    assert widget is not None
+    text = "a" * (MAX_STRING_LENGTH + 1)
+    errors = widget.validate_control_values(
+        {
+            "dataBinding": {"datasetId": 1, "metrics": ["count"]},
+            "chrome": {"xAxisFormat": text},
+            "customize": {"series": {"count": {"displayName": text}}},
+        }
+    )
+    assert {tuple(error["loc"]) for error in errors} == {
+        ("chrome", "xAxisFormat"),
+        ("customize", "series", "count", "displayName"),
+    }
 
 
 def test_invalid_legend_position_is_rejected() -> None:
