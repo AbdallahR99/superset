@@ -1,9 +1,28 @@
 # Tests
 
-Host scripts need Python 3.11+ and `PYTHONIOENCODING=utf-8` on Windows. The
-merge baseline below was recorded on November 17, 2026, after both feature merges.
+Host scripts need Python 3.11+ and `PYTHONIOENCODING=utf-8` on Windows.
 
-## Final stabilization candidate
+## Main demo after rollout
+
+On November 18, 2026, the main demo web, worker, beat, and MCP containers
+switched to the verified image below. The demo uses Keycloak and runs with
+`DASHBOARD_V2` off. Both the [web health endpoint](http://localhost:8088/health)
+and the [MCP health endpoint](http://localhost:5008/health) returned HTTP 200.
+
+| Check | Result |
+|---|---|
+| `python nxtbi/out/stabilization/main-demo-rollout/smoke-preserving.py` | 34 passed, 0 failed, 0 skipped. Covered login and logout, tenant RLS, Arabic assets, REST and MCP reads, cached data, and existing demo dashboards. |
+| `python nxtbi/out/stabilization/main-demo-rollout/touch-smoke.py` | 2 passed, 0 failed, 0 skipped. Arabic and English at 390px, direct and in-app entry, filter drawer edge, and viewport restoration on Back. Repeat the touch cases with `python nxtbi/scripts/rtl_e2e.py --only 10b`. |
+| Celery worker ping | One node responded `pong`. |
+| Flag-off routes | `GET /api/v1/dashboard_v2/1` and `GET /dashboard/v2/new/` both returned 404. |
+| Deployment and persistence | All four app services ran the release image. Config, mounts, named volumes, eight metadata fingerprints, and PostgreSQL, Redis, init, and Keycloak container instances matched the pre-rollout snapshot. Migration remained at `3c9e1a7b5d2f`. |
+
+The main demo smoke selection omits checks that modify saved content or demo
+configuration. The full checks that need disposable data ran on isolated
+stacks. The local wrappers and receipts are under the git-ignored directory
+`nxtbi/out/stabilization/main-demo-rollout/`.
+
+## Final stabilization release verification
 
 November 18, 2026. Image `nxtbi/superset-fork:stabilization-final`, ID
 `sha256:e8c6d3e617875c5b9eacd15c88ef2588129301457906bbc0d787bd6604eec270`.
@@ -14,7 +33,7 @@ packaged copies byte-for-byte.
 
 | Check | Result |
 |---|---|
-| `pytest` for Dashboard V2, dashboard document storage, Widgets, widget security, and MCP widget/dashboard writers, using packaged source | Baseline 868 passed. Candidate 891 passed. |
+| `pytest` for Dashboard V2, dashboard document storage, Widgets, widget security, and MCP widget/dashboard writers, using packaged source | Baseline 868 passed. Release image 891 passed. |
 | `pytest tests/integration_tests/embedded/test_view.py` with fresh SQLite test metadata and isolated Redis | 8 passed |
 | `npx tsc --build` in the production Node build stage | Passed |
 | `npm run test -- --ci --maxWorkers=4 packages/superset-widgets/src src/core/dashboard src/pages/DashboardBuilderV2 src/dashboard/components/DashboardBuilder src/dashboard/components/Header src/extensions` | 73 suites, 910 tests passed |
@@ -25,6 +44,7 @@ packaged copies byte-for-byte.
 | Concurrent overwrite import and classic save; web-only restart | Both writes survived on the candidate. The stored Arabic edit, classic metadata and revision 2 survived restart. Stale saves still returned 409 with ETag 2. |
 | `python nxtbi/widgets/scripts/widgets_e2e.py --only a,b,c,d,e1-,e2-,e3-,f2-,f3-,f6-,f7-,f8-,f9-,g,h` | 22 passed on both the baseline and candidate |
 | `python nxtbi/widgets/scripts/widgets_e2e.py --only a,b,f6-,f7-,h` | 7 release-image checks passed, covering builder save/reopen, concurrent-edit UI, RLS, feature flags, Arabic rendering, and MCP |
+| `python -u nxtbi/widgets/scripts/widgets_e2e.py --api-only --only f2-,f3-,f8-,f9-,g4-` with `NXTBI_WIDGETS_ENV_FILE` pointing to the isolated release settings | 5 passed, 0 failed, 0 skipped on the release image at port 18089. Covered dashboard and dataset grant scope, widget dataset binding, guest role permissions, and REST rejection of invalid documents. |
 | `bash nxtbi/widgets/scripts/run_upstream_playwright.sh` | 20 passed on both the baseline and candidate |
 | `python nxtbi/scripts/browser_check.py` on the isolated Keycloak demo | 15 passed on both the baseline and candidate, including login, reauthentication after logout and tenant-scoped dashboard access |
 | `python nxtbi/out/stabilization/smoke-demo-selected.py` | 40 checks passed on the candidate, including authenticated REST/MCP, tenant RLS, Celery, and email report delivery |
@@ -52,9 +72,12 @@ The wider RTL functional run on the preceding candidate recorded 21 passes,
 one navigation timeout during rollout, and one English image-export skip.
 The English responsive check passed on retry, and Arabic JPG export passed.
 
-## Main demo (`http://localhost:8088`, Keycloak login, `DASHBOARD_V2` off)
+## Historical feature-merge baseline
 
-| Check | Command | Last result |
+Before stabilization, the November 17 main demo at port 8088 used Keycloak with
+`DASHBOARD_V2` off.
+
+| Check | Command | Baseline result |
 |---|---|---|
 | API and stack smoke | `python nxtbi/scripts/smoke_test.py` | 48 / 48 |
 | Browser walk-through | `python nxtbi/scripts/browser_check.py` | 15 / 15 |
@@ -63,17 +86,17 @@ The English responsive check passed on retry, and Arabic JPG export passed.
 | V2 routes with the flag off | `GET /api/v1/dashboard_v2/1` | 404 |
 | Migration head | `superset db current` in the web container | `3c9e1a7b5d2f (head)` |
 
-## Widgets stack (`http://localhost:8089`, flag on, production CSP)
+### Widgets stack (port 8089, flag on, production CSP)
 
-| Check | Command | Last result |
+| Check | Command | Baseline result |
 |---|---|---|
 | End to end: builder, conflict dialog, filters, example app (session and guest), guest-token scoping, RLS, REST validation, Arabic builder, MCP | `python nxtbi/widgets/scripts/widgets_e2e.py` (start the example app first, see `nxtbi/widgets/README.md`) | 25 / 25, none skipped |
 | Upstream Playwright `dashboard-v2` specs | `bash nxtbi/widgets/scripts/run_upstream_playwright.sh` | 20 / 20 |
 | Migration upgrade, downgrade, upgrade on a disposable PostgreSQL | `IMAGE=nxtbi/superset-fork:widgets bash nxtbi/widgets/scripts/migration_cycle.sh` | pass, single head |
 
-## Unit and static checks
+### Unit and static checks
 
-| Check | How | Last result |
+| Check | How | Baseline result |
 |---|---|---|
 | TypeScript | `fe-build type` (runs `npx tsc --build`) | clean |
 | oxlint on the widgets paths | in the `fe-build` container | clean |
@@ -88,4 +111,6 @@ Backend tests in the image (the image has no test dependencies):
 MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD/superset:/app/superset:ro" -v "$PWD/superset-core/src/superset_core:/app/superset-core/src/superset_core:ro" -v "$PWD/tests:/app/tests:ro" -v "$PWD/pytest.ini:/app/pytest.ini:ro" -v "$PWD/pyproject.toml:/app/pyproject.toml:ro" -v "$PWD/superset-frontend/src/features/apiKeys:/app/superset-frontend/src/features/apiKeys:ro" -w /app --entrypoint bash nxtbi/superset-fork:local -c "pip install -q --target /tmp/p pytest pytest-mock pytest-xdist pytest-asyncio flask-testing polib 'python-dateutil==2.9.0.post0' && pip install -q --no-deps --target /tmp/p freezegun && PYTHONPATH=/tmp/p python -m pytest -q -p no:cacheprovider tests/unit_tests/dashboard_v2"
 ```
 
-Not run: `mypy`, `pre-commit`, `tests/integration_tests`, the full upstream Jest and pytest suites.
+The feature-merge baseline did not include a repository-wide pre-commit,
+integration, Jest, or pytest run. The scoped comparisons and release rechecks
+above supply the stabilization evidence.

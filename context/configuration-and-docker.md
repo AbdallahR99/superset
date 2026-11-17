@@ -14,9 +14,11 @@ External, not managed here: Keycloak `ld-shared-keycloak-1` (port 8180, realm `n
 
 | Tag | Content |
 |---|---|
-| `nxtbi/superset-fork:local` | What the main demo runs. Built from `master` (same image as `:widgets`) |
-| `nxtbi/superset-fork:widgets` | What the widgets stack runs. Built from `master` |
-| `nxtbi/superset-fork:rtl-only` | Previous main-demo image (RTL branch only); kept for rollback |
+| `nxtbi/superset-fork:local` | Main demo Compose tag. Points to the verified stabilization image. |
+| `nxtbi/superset-fork:stabilization-final`, `nxtbi/superset-fork:stabilization-release` | Verified release image, ID `sha256:e8c6d3e617875c5b9eacd15c88ef2588129301457906bbc0d787bd6604eec270`. |
+| `nxtbi/superset-fork:main-demo-pre-stabilization` | Immediate main demo rollback, ID `sha256:03ab240d8c365b6aa2281707335860451d40a41d14b907a3df305b66b77d07bc`. |
+| `nxtbi/superset-fork:widgets` | Image for the existing widgets stack. Shares the pre-stabilization image ID. |
+| `nxtbi/superset-fork:rtl-only` | Older RTL-branch image retained locally. |
 | `nxtbi/fe-build:local` | Node toolchain for webpack, tsc and Jest on Linux (`--target superset-node-ci`) |
 
 Build (about 15 minutes cold, 12 GB of memory):
@@ -27,7 +29,34 @@ docker build --target superset --build-arg BUILD_TRANSLATIONS=true -t nxtbi/supe
 
 Without `BUILD_TRANSLATIONS=true` Arabic pages are right-to-left with English text.
 
-## Start
+## Start or refresh the existing main demo
+
+Run from the repository root with the existing `nxtbi/.env`, config, and volumes.
+For a full start, including the standard init job, use the first command. To
+refresh an already running stack with the verified image, use the tag and
+application-only commands below. The November 18 rollout refreshed only the
+four listed app services and kept PostgreSQL, Redis, init, and shared Keycloak
+in place. The database was already at `3c9e1a7b5d2f`.
+
+```bash
+docker compose -p nxtbi-superset -f nxtbi/docker-compose.yml up -d --no-build --pull never --wait --wait-timeout 180
+```
+
+```bash
+docker tag nxtbi/superset-fork:stabilization-final nxtbi/superset-fork:local
+docker compose -p nxtbi-superset -f nxtbi/docker-compose.yml up -d --no-deps --no-build --pull never --wait --wait-timeout 180 superset superset-worker superset-beat superset-mcp
+```
+
+To roll back the application, tag `nxtbi/superset-fork:main-demo-pre-stabilization`
+as `nxtbi/superset-fork:local` and rerun the same four-service Compose command.
+The release and rollback images use the same migration head. Check the
+[web health endpoint](http://localhost:8088/health) and
+[MCP health endpoint](http://localhost:5008/health) after either change.
+
+## First-time setup
+
+Generate settings and provision the demo Keycloak entries only when setting up
+a fresh main demo. Existing deployments use the startup commands above.
 
 ```bash
 python nxtbi/scripts/gen_env.py
@@ -56,7 +85,7 @@ Builder: `http://localhost:8089/dashboard/v2/new/`. Example app:
 
 ## Stabilization validation
 
-The release candidate is `nxtbi/superset-fork:stabilization-final`. It reuses the
+The verified release is `nxtbi/superset-fork:stabilization-final`. It reuses the
 merged production image's dependency layers and packages the stabilization
 source, freshly built production webpack assets, and compiled browser
 translations inside the image. The validation containers mount stack

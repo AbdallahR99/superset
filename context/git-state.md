@@ -11,15 +11,15 @@ Remotes: `origin` = `https://github.com/AbdallahR99/superset.git` (the fork), `u
 | `1febd3c5fa` | Merge of `feature/nxtbi-arabic-rtl` (12 commits; includes the NxtBI demo in `nxtbi/`) |
 | `a91f8e8181` | Merge of `feature/nxtbi-widgets` (36 commits; includes the `--no-ff` merge of upstream PR 44471 at `71be990689`) |
 | `7bbaf70890` | Context folder and refreshed demo screenshots |
+| `82b2dcd1c44aa87d0f44f298e863d6a3845bd951` | Merge of `fix/nxtbi-final-stabilization`. Pushed to `origin/master` and verified on GitHub on November 18, 2026. |
 
-Both merges were made with `--no-ff` and had no conflicts (master was an ancestor of both branches).
-After the second merge the tree was identical to `feature/nxtbi-widgets`, the tree the final image was
-built and tested from. Run `git log --oneline --first-parent -5 master` for the exact tip.
-
-On November 18, fetching the fork's `master` confirmed that both merges and the
-context commit had reached GitHub. Local `master` matched `origin/master` at
-`7bbaf70890`. Final stabilization started from this commit on
-`fix/nxtbi-final-stabilization`.
+The feature merges were conflict-free. The widgets merge produced the same tree
+as `feature/nxtbi-widgets` and supplied the application baseline. Stabilization
+started at `7bbaf70890` after confirming that local and remote `master` matched.
+The stabilization merge used `--no-ff`. Its packaged application code matches
+the [verified release on the main demo](configuration-and-docker.md#images).
+Run `git ls-remote origin refs/heads/master` for the published tip, which also
+includes the documentation closeout after the application merge.
 
 ## Branches
 
@@ -28,12 +28,14 @@ context commit had reached GitHub. Local `master` matched `origin/master` at
 | `feature/nxtbi-arabic-rtl` | `1ed4423fca` | Merged into master |
 | `feature/nxtbi-widgets` | `4b6702f0ce` | Merged into master |
 | `nxtbi-demo` | `976e975e99` | Original demo branch; its work is contained in the RTL branch |
-| `fix/nxtbi-final-stabilization` | `git rev-parse fix/nxtbi-final-stabilization` | Local stabilization branch |
+| `fix/nxtbi-final-stabilization` | `06e1042058893328f9e6a46cddef2547fe503744` | Merged into `master` |
 
 The stabilization branch contains the widget contract fix (`190eed4720`),
 extension view registration fix (`be98f86a2f`), concurrent metadata fix
 (`fbaff1425d`), phone dashboard fix (`c1beece899`), and touch viewport fix
-(`3fd6fef423`). The validation harness changes are in `41e235b5c2`.
+(`3fd6fef423`). The validation harness changes are in `41e235b5c2`, with an RTL
+test-only type annotation in `06e1042058` after the build. The prior validation
+documentation is in `92435d62eb`.
 
 Local worktrees used during the work (safe to remove once no longer needed):
 `../nxtbi-superset-widgets` (on `feature/nxtbi-widgets`) and `../nxtbi-superset-pr44471` (read-only

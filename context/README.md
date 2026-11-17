@@ -9,6 +9,11 @@ Superset at `f3f3d10d5c` (post 7.0.0rc2) plus three pieces of NxtBI work:
 3. **Dashboard V2 and embeddable widgets**, adopted from upstream PR apache/superset#44471 and repaired.
    Behind the feature flag `DASHBOARD_V2`, off by default.
 
+Stabilization merged at `82b2dcd1c4` and is live on the main demo with Dashboard
+V2 disabled. After rollout, all 34 smoke checks and both Arabic and English
+touch checks passed. See the [running image and rollback](configuration-and-docker.md#images),
+[verification results](testing.md), and [Git state](git-state.md).
+
 Read in this order:
 
 | File | What it answers |
