@@ -2,6 +2,37 @@
 
 Host scripts need Python 3.11+ and `PYTHONIOENCODING=utf-8` on Windows.
 
+## Upstream sync verification
+
+November 18, 2026. The repository Dockerfile's `superset` target built with
+`BUILD_TRANSLATIONS=true` at merge `19083873642fcf1a9dc7d8185690d544a5eba494`.
+The image `nxtbi/superset-fork:upstream-sync-6e54f477a0` has ID
+`sha256:ffd12f9d56bb0393d2dfa7f3835d7254a2ddf3ed5ef63e1b97a82719832d7c90`.
+
+| Area | Check and result |
+|---|---|
+| Backend and authorization | Pytest ran against packaged application code with read-only test mounts. All 873 selected tests passed across Dashboard V2, dashboard document storage, Widgets, widget data permissions, and the MCP widget and dashboard tools. |
+| Fresh startup and migrations | The isolated PostgreSQL 17 and Redis startup reached health on port 28189 after init exited 0. `superset db current` reported `3c9e1a7b5d2f (head)`. `nxtbi/widgets/scripts/migration_cycle.sh` passed all four checks, including downgrade to `b8f3a2c91d64` and re-upgrade. |
+| Concurrent dashboard saves | `nxtbi/widgets/scripts/dashboard_v2_concurrency.py` overlapped three PostgreSQL sessions on the same row. One V2 save won, one returned a conflict, the classic metadata save survived, and a cyclic update left the stored document intact. |
+| Keycloak and worker | All four isolated OIDC browser cases passed for role mapping, session continuity, application and SSO logout, and refusal of an unmapped user. The isolated Celery worker responded to `inspect ping`. |
+| Arabic and English | The isolated `rtl_e2e.py --only 03,04,10-theme,10b` selection passed all seven Chromium cases. It covered locale switching, mirrored popups, responsive navigation, and touch dashboard entry and exit in both directions. |
+| Dashboard V2 and Widgets | The isolated `widgets_e2e.py` selection passed 20 of 20 with zero skips. Coverage included save and reopen, stale revisions, session and guest embedding, CORS, tenant RLS, guest grant and dataset binding, flag-off routes, invalid documents, and MCP widget access. |
+| Dashboard V2 Playwright | `nxtbi/widgets/scripts/run_upstream_playwright.sh` passed all 20 Chromium specs against the isolated synced image. |
+| Compiled extension | Both browser checks passed. The builder persisted and reopened the compiled widget with real rows and a sibling filter. Session and guest hosts kept filters and row results separate across remounts while loading the same remote bundle. |
+| WebSocket | `npm ci`, `npm test`, `npm run type`, and `npm run build` passed in Node 24. Vitest passed 92 tests on both the baseline and the merge. The old and new bundles matched byte for byte in both the Node test environment and the production image. |
+| WebSocket dependency audit | Audits of both lockfiles reported the same five high-severity development findings and zero production findings with `npm audit --omit=dev`. |
+| Docs dependencies | `yarn install --frozen-lockfile --ignore-scripts --non-interactive` succeeded and Ant Design 6.7.0 rendered a Button with React 18. This check covered dependency resolution and component rendering. |
+| Workflows and Helm | The changed-path YAML and Zizmor hooks passed. `helm lint helm/superset` passed with a warning about missing local chart dependencies. Windows pre-commit failed to resolve the Helm Docs script path. The pinned `helm-docs` 1.14.2 hook passed in dry-run mode through Git Bash. |
+
+The main demo web and MCP health checks passed on the stabilization image.
+The main demo app, PostgreSQL, Redis, and shared Keycloak container identities
+and start times matched the pre-sync snapshot. Logs are in the git-ignored
+`nxtbi/out/upstream-sync-6e54f477a0/` directory.
+
+The production build completed with MapLibre and bundle-size warnings.
+The sync gates use focused suites. See [known limitations](known-limitations.md)
+for the prior stabilization coverage and remaining product gaps.
+
 ## Main demo after rollout
 
 On November 18, 2026, the main demo web, worker, beat, and MCP containers

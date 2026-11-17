@@ -1,13 +1,17 @@
 # Project context (start here)
 
-This repository is the NxtBI fork of Apache Superset (`AbdallahR99/superset`). `master` is upstream
-Superset at `f3f3d10d5c` (post 7.0.0rc2) plus three pieces of NxtBI work:
+This repository is the NxtBI fork of Apache Superset (`AbdallahR99/superset`).
+The upstream sync at `1908387364` incorporated Apache Superset `6e54f477a0`
+and preserved three pieces of NxtBI work.
 
 1. **NxtBI demo stack** in `nxtbi/`: Docker Compose, Keycloak single sign-on, tenant isolation, demo
    dashboards, theme, scripts. No upstream file is changed by it.
 2. **Arabic and right-to-left support** across the application (changes upstream frontend and backend).
 3. **Dashboard V2 and embeddable widgets**, adopted from upstream PR apache/superset#44471 and repaired.
    Behind the feature flag `DASHBOARD_V2`, off by default.
+
+See the [upstream sync verification](testing.md#upstream-sync-verification)
+for the current development baseline.
 
 Stabilization merged at `82b2dcd1c4` and is live on the main demo with Dashboard
 V2 disabled. After rollout, all 34 smoke checks and both Arabic and English

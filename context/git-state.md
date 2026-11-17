@@ -7,19 +7,20 @@ Remotes: `origin` = `https://github.com/AbdallahR99/superset.git` (the fork), `u
 
 | Commit | What |
 |---|---|
-| `f3f3d10d5c` | Upstream master the work is based on (post 7.0.0rc2) |
+| `f3f3d10d5cc3b934c9966d9ae9da7a09aee4d261` | Original Apache Superset base (post 7.0.0rc2) |
 | `1febd3c5fa` | Merge of `feature/nxtbi-arabic-rtl` (12 commits; includes the NxtBI demo in `nxtbi/`) |
 | `a91f8e8181` | Merge of `feature/nxtbi-widgets` (36 commits; includes the `--no-ff` merge of upstream PR 44471 at `71be990689`) |
 | `7bbaf70890` | Context folder and refreshed demo screenshots |
 | `82b2dcd1c44aa87d0f44f298e863d6a3845bd951` | Merge of `fix/nxtbi-final-stabilization`. Pushed to `origin/master` and verified on GitHub on November 18, 2026. |
+| `a49ed5afa3543a5cd0b6b9ad1555ac0499ba620b` | Fork tip before the upstream sync, including the stabilization closeout |
+| `19083873642fcf1a9dc7d8185690d544a5eba494` | Sync merge of Apache Superset master at `6e54f477a0fe9531d143007dd46d4db98a0911e0` |
 
 The feature merges were conflict-free. The widgets merge produced the same tree
 as `feature/nxtbi-widgets` and supplied the application baseline. Stabilization
 started at `7bbaf70890` after confirming that local and remote `master` matched.
 The stabilization merge used `--no-ff`. Its packaged application code matches
 the [verified release on the main demo](configuration-and-docker.md#images).
-Run `git ls-remote origin refs/heads/master` for the published tip, which also
-includes the documentation closeout after the application merge.
+Run `git ls-remote origin refs/heads/master` for the published tip.
 
 ## Branches
 
@@ -41,11 +42,16 @@ Local worktrees used during the work (safe to remove once no longer needed):
 `../nxtbi-superset-widgets` (on `feature/nxtbi-widgets`) and `../nxtbi-superset-pr44471` (read-only
 checkout of the PR head).
 
-## Updating from upstream
+## November 18 upstream sync
 
-`git fetch upstream && git merge upstream/master`. Expect conflicts only where the RTL and widgets work
-touch upstream files: shared UI wrappers in `packages/superset-ui-core/src/components`, the theme
-provider, `superset/security/manager.py`, `superset/config.py`, `superset-frontend/src/views/routes.tsx`,
-`superset-frontend/package.json` and the lockfile, and the translation catalogues. A new upstream
-migration needs `3c9e1a7b5d2f_add_saved_widgets` re-parented so there is a single head. If upstream
-lands its own Dashboard V2, prefer theirs and re-apply the fixes listed in `decisions-and-fixes.md`.
+`origin/master` and local `master` initially matched at `a49ed5afa3`. From the
+common base `f3f3d10d5c`, there were 61 fork-only commits and five upstream-only
+commits. The merge preview found zero overlapping paths. The two-parent merge on
+`codex/upstream-master-sync-6e54f477a0` completed without conflicts.
+
+The eight changed files cover GitHub Actions, Ant Design 6.7.0 for the docs
+site, and Vitest 5.1.0 for WebSocket development. The application, product
+frontend lockfile, NxtBI configuration and tests, and migrations match the
+pre-sync fork exactly. The existing single migration head remains
+`3c9e1a7b5d2f`. The verification image was built with the repository Dockerfile
+so it includes the WebSocket bundle from the updated lockfile.
