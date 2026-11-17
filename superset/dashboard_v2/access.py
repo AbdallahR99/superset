@@ -31,11 +31,15 @@ from typing import Any
 
 from superset import db, security_manager
 from superset.models.dashboard import Dashboard
-from superset.widgets.data import props_dataset_id
+from superset.widgets.data import widget_dataset_id
+from superset.widgets.registry import registry
 
 
 def bound_dataset_ids(stored: dict[str, Any]) -> set[int]:
-    """The ids of every dataset a stored document's nodes bind."""
+    """
+    The ids of every dataset a stored document's nodes bind, each resolved
+    the way the node's widget type reads it.
+    """
     nodes = stored.get("nodes")
     if not isinstance(nodes, dict):
         return set()
@@ -43,7 +47,12 @@ def bound_dataset_ids(stored: dict[str, Any]) -> set[int]:
         dataset_id
         for node in nodes.values()
         if isinstance(node, dict)
-        and (dataset_id := props_dataset_id(node.get("props"))) is not None
+        and (
+            dataset_id := widget_dataset_id(
+                registry.get(str(node.get("type"))), node.get("props")
+            )
+        )
+        is not None
     }
 
 

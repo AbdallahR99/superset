@@ -28,6 +28,12 @@ from superset.commands.base import BaseCommand
 from superset.commands.dataset.importers.v0 import import_dataset
 from superset.commands.exceptions import ImportFailedError
 from superset.connectors.sqla.models import SqlaTable, SqlMetric, TableColumn
+from superset.daos.dashboard import DashboardDAO
+from superset.dashboard_v2.document import (
+    load_stored_document,
+    V2_DOCUMENT_KEY,
+    without_stored_document,
+)
 from superset.exceptions import DashboardImportException
 from superset.migrations.shared.native_filters import migrate_dashboard
 from superset.models.dashboard import Dashboard
@@ -256,7 +262,23 @@ def import_dashboard(  # noqa: C901
 
     alter_native_filters(dashboard_to_import)
 
+    # This format predates the Dashboard v2 document, whose only writer is
+    # the Dashboard v2 API: one found in the file is dropped, and an
+    # overwritten dashboard keeps the document it has stored.
+    dashboard_to_import.json_metadata = without_stored_document(
+        dashboard_to_import.json_metadata
+    )
     if existing_dashboard:
+        stored_document = load_stored_document(existing_dashboard.json_metadata)
+        if stored_document is not None:
+            # Stored by compare-and-swap before the model is touched (a
+            # pending change of it would be flushed by the swap's own read);
+            # the override below then writes the same text again.
+            metadata = dashboard_to_import.params_dict
+            metadata[V2_DOCUMENT_KEY] = stored_document
+            dashboard_to_import.json_metadata = (
+                DashboardDAO.metadata_keeping_v2_document(existing_dashboard, metadata)
+            )
         existing_dashboard.override(dashboard_to_import)
     else:
         db.session.add(dashboard_to_import)

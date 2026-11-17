@@ -640,3 +640,232 @@ def test_import_without_a_document_is_untouched(import_session: Session) -> None
     dashboard = import_dashboard(copy.deepcopy(dashboard_config))
 
     assert "v2_document" not in json.loads(dashboard.json_metadata or "{}")
+
+
+def test_import_without_a_document_over_a_v2_dashboard_keeps_the_stored_one(
+    import_session: Session,
+) -> None:
+    """An import never removes a document, so its revision numbers can never
+    start over: a file without one leaves document and revision as stored."""
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    import_session.add(
+        Dashboard(
+            dashboard_title="Existing",
+            slices=[],
+            uuid=dashboard_config["uuid"],
+            json_metadata=json.dumps({"v2_document": _stored(5, "old")}),
+        )
+    )
+    import_session.flush()
+    config = copy.deepcopy(dashboard_config)
+    config["metadata"] = {**(config.get("metadata") or {}), "color_scheme": "new"}
+
+    without_key = import_dashboard(config, overwrite=True)
+
+    assert json.loads(without_key.json_metadata)["v2_document"] == _stored(5, "old")
+    assert json.loads(without_key.json_metadata)["color_scheme"] == "new"
+
+    with_null = import_dashboard(_import_config(None), overwrite=True)
+
+    assert json.loads(with_null.json_metadata)["v2_document"] == _stored(5, "old")
+
+
+def test_import_over_a_v2_dashboard_counts_from_the_row_not_the_loaded_copy(
+    import_session: Session,
+) -> None:
+    """A save that landed after the import loaded the dashboard still counts:
+    the imported document goes one past it."""
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    existing = Dashboard(
+        dashboard_title="Existing",
+        slices=[],
+        uuid=dashboard_config["uuid"],
+        json_metadata=json.dumps({"v2_document": _stored(5, "old")}),
+    )
+    import_session.add(existing)
+    import_session.flush()
+    table = Dashboard.__table__
+    import_session.execute(
+        table.update()
+        .where(table.c.id == existing.id)
+        .values(json_metadata=json.dumps({"v2_document": _stored(9, "meanwhile")}))
+    )
+
+    dashboard = import_dashboard(_import_config(_stored(2, "new")), overwrite=True)
+
+    assert json.loads(dashboard.json_metadata)["v2_document"] == _stored(10, "new")
+    assert _metadata(import_session, existing.id)["v2_document"] == _stored(10, "new")
+
+
+def _bound_document() -> dict[str, Any]:
+    document = make_document("chart")
+    document["nodes"]["chart"] = {
+        "type": "echarts",
+        "props": {"dataBinding": {"datasetId": 7}},
+    }
+    return document
+
+
+def test_import_applies_the_authoring_rule_of_the_importing_user(
+    import_session: Session, mocker: MockerFixture
+) -> None:
+    from superset.commands.dashboard.importers.v1 import utils
+    from superset.commands.widget.exceptions import SavedWidgetForbiddenError
+    from superset.models.dashboard import Dashboard
+
+    mocker.patch.object(utils, "get_user", return_value=mocker.MagicMock(id=1))
+    mocker.patch(
+        "superset.commands.dashboard_v2.save.raise_for_widget_authoring",
+        side_effect=SavedWidgetForbiddenError(),
+    )
+
+    with pytest.raises(ImportFailedError, match="chart"):
+        utils.import_dashboard(_import_config(_bound_document()))
+
+    assert import_session.query(Dashboard).count() == 0
+
+
+def test_import_without_a_user_is_not_asked_the_authoring_rule(
+    import_session: Session, mocker: MockerFixture
+) -> None:
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+
+    rule = mocker.patch(
+        "superset.commands.dashboard_v2.save.raise_for_widget_authoring"
+    )
+
+    dashboard = import_dashboard(_import_config(_bound_document()))
+
+    assert json.loads(dashboard.json_metadata)["v2_document"]["revision"] == 1
+    rule.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Classic create (POST /api/v1/dashboard/)
+# --------------------------------------------------------------------------
+
+#: What a caller of the classic API could try to store: a revision of its own
+#: choosing, an unknown type and a cyclic, dangling tree.
+SMUGGLED = {
+    "version": 1,
+    "revision": 41,
+    "nodes": {
+        "root": {"type": "grid", "children": ["a"]},
+        "a": {"type": "no-such-type", "children": ["a", "root", "ghost"]},
+    },
+}
+
+
+def test_classic_create_schema_drops_an_incoming_document(app_context: None) -> None:
+    from superset.dashboards.schemas import DashboardPostSchema
+
+    loaded = DashboardPostSchema().load(
+        {
+            "dashboard_title": "Classic",
+            "json_metadata": json.dumps({"color_scheme": "x", "v2_document": SMUGGLED}),
+        }
+    )
+
+    assert json.loads(loaded["json_metadata"]) == {"color_scheme": "x"}
+
+
+def test_classic_create_command_never_stores_an_incoming_document(
+    session: Session, mocker: MockerFixture
+) -> None:
+    """The real command, called past the schema with the raw metadata."""
+    from superset.commands.dashboard.create import CreateDashboardCommand
+    from superset.dashboard_v2.document import load_stored_document
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    mocker.patch("superset.commands.dashboard.create.populate_subjects")
+
+    created = CreateDashboardCommand(
+        {
+            "dashboard_title": "Classic",
+            "json_metadata": json.dumps({"color_scheme": "x", "v2_document": SMUGGLED}),
+        }
+    ).run()
+
+    stored = _metadata(session, created.id)
+    assert "v2_document" not in stored
+    assert stored["color_scheme"] == "x"
+    row = session.get(Dashboard, created.id)
+    assert row is not None
+    assert load_stored_document(row.json_metadata) is None
+
+
+# --------------------------------------------------------------------------
+# Copy: the document is added once, and only for a caller who may read it
+# --------------------------------------------------------------------------
+
+
+def test_copy_carries_no_document_for_a_caller_who_may_not_read_it(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any
+) -> None:
+    """The seed taken from the source never holds the document, so the read
+    rule alone decides whether the copy gets one."""
+    from superset.daos import dashboard as dao
+
+    mocker.patch.object(security_manager, "is_editor", return_value=True)
+    mocker.patch.object(security_manager, "is_admin", return_value=True)
+    mocker.patch.object(dao, "can_read_document", return_value=False)
+
+    duplicate = dao.DashboardDAO.copy_dashboard(
+        v2_dashboard,
+        {
+            "dashboard_title": "Sales (copy)",
+            "json_metadata": json.dumps({"color_scheme": "old"}),
+        },
+    )
+
+    metadata = _metadata(session, duplicate.id)
+    assert "v2_document" not in metadata
+    assert metadata["color_scheme"] == "old"
+
+
+# --------------------------------------------------------------------------
+# Legacy (v0) import
+# --------------------------------------------------------------------------
+
+
+def test_legacy_import_drops_a_document_from_the_file_and_keeps_the_stored_one(
+    session: Session, mocker: MockerFixture
+) -> None:
+    from superset.commands.dashboard.importers.v0 import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    mocker.patch("superset.commands.dashboard.importers.v0.migrate_dashboard")
+    session.add(
+        Dashboard(
+            id=V2_ID,
+            dashboard_title="Existing",
+            slices=[],
+            json_metadata=json.dumps(
+                {"remote_id": 555, "v2_document": _stored(3, "kept")}
+            ),
+        )
+    )
+    session.flush()
+
+    def from_file(remote_id: int) -> Dashboard:
+        return Dashboard(
+            id=remote_id,
+            dashboard_title="From a file",
+            slices=[],
+            json_metadata=json.dumps({"color_scheme": "x", "v2_document": SMUGGLED}),
+        )
+
+    overwritten = import_dashboard(from_file(555), import_time=1)
+    created = import_dashboard(from_file(556), import_time=1)
+
+    assert overwritten == V2_ID
+    metadata = _metadata(session)
+    assert metadata["v2_document"] == _stored(3, "kept")
+    assert metadata["color_scheme"] == "x"
+    assert "v2_document" not in _metadata(session, created)

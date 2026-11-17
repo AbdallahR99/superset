@@ -192,6 +192,63 @@ class MissingDatasourceError(Exception):
         super().__init__(message)
 
 
+class DashboardDocumentRestoreError(Exception):
+    """The snapshot's Dashboard v2 document cannot be stored.
+
+    A restore stores the snapshot's document like any other save of it: the
+    document has to pass the validation in force at the time of the restore
+    (widget types still installed, limits, widget safety rules) and the
+    restoring user has to be allowed to author the data definitions it brings
+    back. A snapshot that fails either is refused as a whole and the
+    dashboard is left unchanged. The message is user-facing.
+    """
+
+
+def _store_reverted_dashboard_metadata(entity: Any) -> None:
+    """Store the ``json_metadata`` a dashboard revert staged, keeping the
+    Dashboard v2 revision moving forward.
+
+    ``json_metadata`` is a versioned column and holds the v2 document together
+    with the revision that guards concurrent saves of it, so a plain revert
+    would put an old revision number back for content open editors never
+    loaded, and one of their saves would then be accepted over the restored
+    document. The reverted metadata is therefore stored through the
+    document's compare-and-swap: the snapshot's document is stamped with the
+    stored revision + 1, and a snapshot without a document keeps the stored
+    one. Runs before the revert's flush, which then writes the same text.
+    """
+    # pylint: disable=import-outside-toplevel
+    # Deferred: the command module pulls the DAO and widget registry graph.
+    from superset.commands.dashboard_v2.exceptions import (
+        DashboardV2ConflictError,
+        DashboardV2InvalidError,
+    )
+    from superset.commands.dashboard_v2.save import store_replaced_json_metadata
+
+    try:
+        entity.json_metadata = store_replaced_json_metadata(
+            entity.id, entity.json_metadata
+        )
+    except DashboardV2InvalidError as ex:
+        nodes: str = ", ".join(sorted(ex.errors)[:5])
+        detail: str = f" (widgets: {nodes})" if nodes else ""
+        raise DashboardDocumentRestoreError(
+            _(
+                "This dashboard version can't be restored because its Dashboard "
+                "v2 document can no longer be saved: %(reason)s%(detail)s",
+                reason=str(ex.message),
+                detail=detail,
+            )
+        ) from ex
+    except DashboardV2ConflictError as ex:
+        raise DashboardDocumentRestoreError(
+            _(
+                "The dashboard was changed while it was being restored. "
+                "Try the restore again."
+            )
+        ) from ex
+
+
 def _lock_chart_datasource(model_cls: type, target_version: Any) -> Any | None:
     """Lock and return the datasource a chart snapshot names, or refuse.
 
@@ -710,10 +767,15 @@ def restore_version(
             target_version.revert(relations=relations)
             _sync_chart_perms(entity, chart_datasource)
             if model_cls.__name__ == "Dashboard":
+                _store_reverted_dashboard_metadata(entity)
                 skipped_slice_ids, changed_slice_ids = _restore_dashboard_membership(
                     entity, transaction_id
                 )
             _stamp_audit_fields_for_restore(entity)
+    except DashboardDocumentRestoreError:
+        # A refusal, not a failed revert: nothing was flushed and the
+        # transaction rolls back, leaving the dashboard unchanged.
+        raise
     except Exception as ex:
         _raise_for_chart_purge_race(ex, changed_slice_ids)
         logger.exception(

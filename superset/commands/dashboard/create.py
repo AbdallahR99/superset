@@ -35,6 +35,7 @@ from superset.commands.soft_delete_collisions import (
 )
 from superset.commands.utils import populate_subjects
 from superset.daos.dashboard import DashboardDAO
+from superset.dashboard_v2.document import without_stored_document
 from superset.utils import json
 from superset.utils.decorators import on_error, transaction
 
@@ -48,6 +49,13 @@ class CreateDashboardCommand(CreateMixin, BaseCommand):
     @transaction(on_error=partial(on_error, reraise=DashboardCreateFailedError))
     def run(self) -> Model:
         self.validate()
+        # The Dashboard v2 API is the only writer of a v2 document: one in the
+        # metadata of a classic create is dropped before anything is stored,
+        # whoever built the properties.
+        if self._properties.get("json_metadata"):
+            self._properties["json_metadata"] = without_stored_document(
+                self._properties["json_metadata"]
+            )
         dashboard = DashboardDAO.create(attributes=self._properties)
         # Surface the INSERT here rather than at the transaction decorator's
         # commit, so a slug collision with a SOFT-DELETED dashboard (possible

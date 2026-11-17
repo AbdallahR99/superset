@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from datetime import timezone
 from typing import Any
 
 from superset import security_manager
@@ -101,7 +102,13 @@ def serialize_dashboard(dashboard: Dashboard, stored: dict[str, Any]) -> dict[st
         "id": dashboard.id,
         "uuid": str(dashboard.uuid),
         "dashboard_title": dashboard.dashboard_title,
-        "changed_on": dashboard.changed_on,
+        # The column is a naive timestamp in the server's zone; answer with an
+        # explicit offset so a client never has to guess the zone.
+        "changed_on": (
+            dashboard.changed_on.astimezone(timezone.utc)
+            if dashboard.changed_on
+            else None
+        ),
         "revision": document_revision(stored),
         "document": without_revision(stored),
         "embedded": embedded_summary,

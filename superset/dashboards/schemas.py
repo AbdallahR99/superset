@@ -21,7 +21,7 @@ from marshmallow import fields, post_dump, post_load, pre_load, Schema
 from marshmallow.validate import Length, OneOf, ValidationError
 
 from superset import security_manager
-from superset.dashboard_v2.document import V2_DOCUMENT_KEY
+from superset.dashboard_v2.document import without_stored_document
 from superset.subjects.schemas import SubjectReferenceField, SubjectResponseSchema
 from superset.tags.models import TagType
 from superset.utils import json
@@ -206,16 +206,7 @@ def without_v2_document(json_metadata: Any) -> Any:
     object-level read rule; the classic dashboard API never returns it.
     Anything that is not a JSON object holding the key is returned unchanged.
     """
-    if not isinstance(json_metadata, str) or V2_DOCUMENT_KEY not in json_metadata:
-        return json_metadata
-    try:
-        metadata = json.loads(json_metadata)
-    except json.JSONDecodeError:
-        return json_metadata
-    if not isinstance(metadata, dict) or V2_DOCUMENT_KEY not in metadata:
-        return json_metadata
-    del metadata[V2_DOCUMENT_KEY]
-    return json.dumps(metadata)
+    return without_stored_document(json_metadata)
 
 
 class DashboardJSONMetadataSchema(Schema):
@@ -229,8 +220,10 @@ class DashboardJSONMetadataSchema(Schema):
     chart_customization_config = fields.List(fields.Dict(), allow_none=True)
     # Dashboard v2 document (see superset.dashboard_v2.document). Accepted so
     # that metadata loaded from a v2 dashboard can be sent back, and ignored:
-    # the Dashboard v2 API is the only writer of the document, and
-    # ``DashboardDAO.set_dash_metadata`` carries the stored one forward.
+    # the Dashboard v2 API is the only writer of the document. A create drops
+    # the key (``DashboardPostSchema`` and ``CreateDashboardCommand``); an
+    # update carries the stored document forward
+    # (``DashboardDAO.set_dash_metadata``).
     v2_document = fields.Raw(allow_none=True)
     timed_refresh_immune_slices = fields.List(fields.Integer())
     # deprecated wrt dashboard-native filters
@@ -531,6 +524,19 @@ class DashboardPostSchema(BaseDashboardSchema):
     is_managed_externally = fields.Boolean(allow_none=True, dump_default=False)
     external_url = fields.String(allow_none=True, validate=validate_external_url)
     uuid = fields.UUID(allow_none=True)
+
+    # pylint: disable=unused-argument
+    @post_load
+    def drop_v2_document(self, data: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        """
+        Remove a Dashboard v2 document from the ``json_metadata`` of a create.
+
+        The Dashboard v2 API is the only writer of the document; one sent
+        here would be stored without any of its validation.
+        """
+        if data.get("json_metadata"):
+            data["json_metadata"] = without_stored_document(data["json_metadata"])
+        return data
 
 
 class DashboardCopySchema(Schema):

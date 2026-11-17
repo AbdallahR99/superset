@@ -58,6 +58,26 @@ INITIAL_REVISION = 1
 _NODE_KEYS = ("type", "layout", "children", "props", "style")
 _OBJECT_KEYS = ("layout", "props", "style")
 _NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+#: Ids no node may have: the member names of JavaScript's ``Object.prototype``
+#: plus ``prototype``. A client that keeps the nodes in a plain object would
+#: read or overwrite an inherited member instead of a node under such an id.
+RESERVED_NODE_IDS = frozenset(
+    {
+        "__proto__",
+        "constructor",
+        "prototype",
+        "hasOwnProperty",
+        "isPrototypeOf",
+        "propertyIsEnumerable",
+        "toLocaleString",
+        "toString",
+        "valueOf",
+        "__defineGetter__",
+        "__defineSetter__",
+        "__lookupGetter__",
+        "__lookupSetter__",
+    }
+)
 _MAX_TYPE_LENGTH = 128
 #: Deepest array/object nesting a request body may have, well below what any
 #: recursive JSON parser can handle.
@@ -79,7 +99,8 @@ class DocumentLimits:
     max_nodes: int = 500
     #: Maximum distance of any node from the root (the root is at depth 0).
     max_depth: int = 16
-    #: Maximum size in bytes of the request body and of the stored document.
+    #: Maximum size in UTF-8 bytes of the request body and of the document
+    #: (see :func:`document_size`).
     max_bytes: int = 1024 * 1024
     #: Maximum nesting of the JSON value held by ``layout``/``props``/``style``.
     max_value_depth: int = 32
@@ -231,6 +252,8 @@ def _normalize_node(
         raise DocumentValidationError(
             f"node id {str(node_id)[:80]!r} must match [A-Za-z0-9_-]{{1,64}}"
         )
+    if node_id in RESERVED_NODE_IDS:
+        raise DocumentValidationError(f"node id {node_id!r} is a reserved name")
     if not isinstance(node, dict):
         raise DocumentValidationError(
             f"node {node_id!r} must be an object with a string type"
@@ -381,16 +404,26 @@ def normalize_document(
     _check_tree(stored, limits.max_depth)
 
     result = {"version": DOCUMENT_VERSION, "nodes": stored}
-    size = len(
-        stdlib_json.dumps(result, allow_nan=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
-    )
+    size = document_size(result)
     if size > limits.max_bytes:
         raise DocumentValidationError(
             f"document is {size} bytes; the limit is {limits.max_bytes}"
         )
     return result, widgets
+
+
+def document_size(document: dict[str, Any]) -> int:
+    """
+    The size the document limit applies to: the bytes of the compact JSON
+    serialisation in UTF-8, non-ASCII text unescaped. The request body limit
+    counts UTF-8 bytes as well, so a character costs the same in both.
+    """
+    text = stdlib_json.dumps(
+        document, allow_nan=False, ensure_ascii=False, separators=(",", ":")
+    )
+    # A lone surrogate (valid in JSON as an escape) has no UTF-8 encoding of
+    # its own; it is counted by the three bytes of its generalised form.
+    return len(text.encode("utf-8", "surrogatepass"))
 
 
 def document_revision(stored: dict[str, Any]) -> int:
@@ -452,6 +485,24 @@ def load_stored_document(json_metadata: Any) -> dict[str, Any] | None:
     if not isinstance(document, dict) or not isinstance(document.get("nodes"), dict):
         return None
     return document
+
+
+def without_stored_document(json_metadata: Any) -> Any:
+    """
+    ``json_metadata`` without the v2 document.
+
+    Anything that is not a JSON object holding the key is returned unchanged.
+    """
+    if not isinstance(json_metadata, str) or V2_DOCUMENT_KEY not in json_metadata:
+        return json_metadata
+    try:
+        metadata = json.loads(json_metadata)
+    except json.JSONDecodeError:
+        return json_metadata
+    if not isinstance(metadata, dict) or V2_DOCUMENT_KEY not in metadata:
+        return json_metadata
+    del metadata[V2_DOCUMENT_KEY]
+    return json.dumps(metadata)
 
 
 def write_stored_document(json_metadata: Any, stored: dict[str, Any]) -> str:

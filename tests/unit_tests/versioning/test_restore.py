@@ -177,6 +177,7 @@ def test_restore_logs_original_error_after_failed_flush(
                     return_value=([], []),
                 ),
                 patch("superset.versioning.restore._stamp_audit_fields_for_restore"),
+                patch("superset.versioning.restore._store_reverted_dashboard_metadata"),
             ):
                 mock_db.session = session
                 with pytest.raises(IntegrityError) as failure:

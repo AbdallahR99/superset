@@ -40,11 +40,13 @@ from superset.commands.dashboard.exceptions import (
     DashboardUpdateFailedError,
 )
 from superset.daos.base import BaseDAO, ColumnOperator, ColumnOperatorEnum
+from superset.dashboard_v2.access import can_read_document
 from superset.dashboard_v2.document import (
     INITIAL_REVISION,
     load_stored_document,
     V2_DOCUMENT_KEY,
     with_revision,
+    without_stored_document,
     write_stored_document,
 )
 from superset.dashboard_v2.storage import write_metadata_keeping_document
@@ -1451,8 +1453,12 @@ class DashboardDAO(BaseDAO[Dashboard]):
 
         # Version forks opt into complete metadata to avoid inheriting settings
         # absent from the selected version. Other copies keep source seeding.
+        # The seed never carries the source's v2 document: whether the copy
+        # gets one is decided once, below.
         dash.params = (
-            "{}" if data.get("replace_metadata", False) else original_dash.params
+            "{}"
+            if data.get("replace_metadata", False)
+            else without_stored_document(original_dash.params)
         )
         cls.set_dash_metadata(
             dash,
@@ -1472,9 +1478,12 @@ class DashboardDAO(BaseDAO[Dashboard]):
             _copy_chart_metadata(dash.params_dict, chart_id_map)
         )
         # A v2 dashboard is copied with its document: the source's stored one
-        # (never one from the request), starting over at the initial revision.
+        # (never one from the request), starting over at the initial revision,
+        # and only for a caller who may read it.
         source_document = load_stored_document(original_dash.json_metadata)
-        if source_document is not None:
+        if source_document is not None and can_read_document(
+            original_dash, source_document
+        ):
             dash.json_metadata = write_stored_document(
                 dash.json_metadata, with_revision(source_document, INITIAL_REVISION)
             )

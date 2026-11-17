@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_module
-from typing import Any
+from typing import Any, cast
 
 from flask import current_app
 from marshmallow import ValidationError
 from pydantic import BaseModel, ValidationError as PydanticValidationError
 from sqlalchemy.exc import SQLAlchemyError
+from superset_core.widgets import Widget
 
 from superset import db, security_manager
 from superset.commands.base import BaseCommand
@@ -47,6 +48,12 @@ from superset.commands.dashboard_v2.exceptions import (
 )
 from superset.commands.dashboard_v2.get import serialize_dashboard
 from superset.commands.utils import populate_subjects
+from superset.commands.widget.exceptions import (
+    SavedWidgetForbiddenError,
+    WidgetInvalidError,
+    WidgetSqlForbiddenError,
+)
+from superset.commands.widget.utils import raise_for_widget_authoring
 from superset.daos.dashboard import DashboardDAO
 from superset.dashboard_v2.access import can_read_document
 from superset.dashboard_v2.document import (
@@ -75,6 +82,7 @@ from superset.models.helpers import skip_visibility_filter
 from superset.utils import json
 from superset.utils.core import get_user_id
 from superset.utils.decorators import transaction
+from superset.widgets.data import widget_dataset_id
 from superset.widgets.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -198,21 +206,162 @@ def normalize_and_validate(document: Any) -> dict[str, Any]:
     return stored
 
 
+#: The props that decide which data a node reads; see ``_binding_signature``.
+_BINDING_PROPS = ("dataBinding", "datasetId", "column")
+_DATASET_FORBIDDEN = "You don't have access to the dataset this widget reads."
+
+
+def _node_binds_dataset(node: dict[str, Any]) -> bool:
+    """Whether a node's definition reads a dataset, as its widget type sees it."""
+    widget_cls = registry.get(str(node.get("type")))
+    return widget_dataset_id(widget_cls, node.get("props")) is not None
+
+
+def _binding_signature(node: dict[str, Any]) -> str:
+    """
+    What identifies a node's data definition: its type and the props naming
+    the dataset, the columns, the metrics, the filters and any SQL. Two nodes
+    with one signature read the same data the same way.
+    """
+    props = node.get("props") or {}
+    return json.dumps(
+        {
+            "type": node.get("type"),
+            **{key: props[key] for key in _BINDING_PROPS if key in props},
+        },
+        sort_keys=True,
+    )
+
+
+def _stored_binding_signatures(previous: dict[str, Any] | None) -> set[str]:
+    """The data definitions a stored document already holds."""
+    nodes = previous.get("nodes") if previous is not None else None
+    if not isinstance(nodes, dict):
+        return set()
+    return {
+        _binding_signature(node)
+        for node in nodes.values()
+        if isinstance(node, dict) and _node_binds_dataset(node)
+    }
+
+
+def raise_for_document_authoring(
+    document: dict[str, Any], previous: dict[str, Any] | None
+) -> None:
+    """
+    Apply the saved-widget authoring rule to the data definitions a writer
+    adds to a document: read access to the dataset a node binds, and the
+    right to write SQL when the definition carries any.
+
+    Only definitions the stored document does not hold yet are checked: a
+    node that is new, or whose dataset, columns, metrics, filters or SQL
+    differ from every definition in ``previous``. A definition that is
+    already stored may be kept, moved, restyled or duplicated by any editor,
+    including one who cannot read its dataset; it reaches no further than it
+    did before.
+
+    :param document: The normalized document about to be stored
+    :param previous: The stored document it replaces, if any
+    :raises DashboardV2InvalidError: Naming every refused node
+    """
+    known = _stored_binding_signatures(previous)
+    errors: dict[str, Any] = {}
+    for node_id, node in document["nodes"].items():
+        if not _node_binds_dataset(node) or _binding_signature(node) in known:
+            continue
+        props = node.get("props") or {}
+        loc = ["dataBinding"] if "dataBinding" in props else ["datasetId"]
+        # An extension type without a backend class has no widget class; the
+        # rule then reads the dataset from the props, as the read rule does.
+        widget_cls = cast("type[Widget]", registry.get(str(node.get("type"))))
+        try:
+            raise_for_widget_authoring(widget_cls, props)
+        except SavedWidgetForbiddenError:
+            errors[node_id] = [{"loc": loc, "message": _DATASET_FORBIDDEN}]
+        except (WidgetSqlForbiddenError, WidgetInvalidError) as ex:
+            errors[node_id] = [{"loc": loc, "message": str(ex.message)}]
+    if errors:
+        raise DashboardV2InvalidError(
+            "You are not allowed to store some of the widget definitions.", errors
+        )
+
+
 def prepare_imported_document(
-    document: Any, existing_json_metadata: str | None
+    document: Any, *, check_authoring: bool = True
 ) -> dict[str, Any]:
     """
-    The document to store for an imported dashboard: validated exactly like a
-    save through the API and stamped with a fresh revision — the initial one
-    for a new dashboard, one past the stored revision when the import
-    overwrites a v2 dashboard. A revision inside the imported file is ignored.
+    The document to store for a dashboard an import creates: validated
+    exactly like a save through the API and stamped with the initial
+    revision. A revision inside the imported file is ignored.
 
-    :raises DashboardV2InvalidError: If the imported document is invalid
+    An import that overwrites a dashboard stores through
+    :func:`store_replaced_json_metadata` instead.
+
+    :param check_authoring: Apply the authoring rule to every data
+        definition; ``False`` only for an import that runs without a user
+    :raises DashboardV2InvalidError: If the imported document is invalid or
+        binds data its importer may not author
     """
     stored = normalize_and_validate(document)
-    existing = load_stored_document(existing_json_metadata)
-    revision = INITIAL_REVISION if existing is None else document_revision(existing) + 1
-    return with_revision(stored, revision)
+    if check_authoring:
+        raise_for_document_authoring(stored, None)
+    return with_revision(stored, INITIAL_REVISION)
+
+
+def store_replaced_json_metadata(
+    pk: int, json_metadata: str | None, *, check_authoring: bool = True
+) -> str | None:
+    """
+    Store the ``json_metadata`` with which a writer other than the Dashboard
+    v2 API replaces the whole column of an existing dashboard: a version
+    restore, an import that overwrites.
+
+    Such a writer brings a document of its own (an older one, or one from a
+    file) or none at all, and must never put a revision back that open
+    editors already hold for other content. So, with the row re-read at the
+    time of the write and stored by compare-and-swap:
+
+    - a document in ``json_metadata`` is validated like a save through the
+      API, checked against the authoring rule relative to the stored
+      document, and stamped with the stored revision + 1 (the initial
+      revision when the dashboard holds no document), whatever revision it
+      came with;
+    - without a document in ``json_metadata`` the stored document is carried
+      forward unchanged, revision included: these writers never remove a
+      document, so its revision numbers can never start over.
+
+    The caller assigns the returned value to the model, so the ORM writes the
+    same text the swap stored.
+
+    :returns: The ``json_metadata`` that is stored; ``json_metadata`` itself,
+        untouched and not written here, when neither side holds a document
+    :raises DashboardV2InvalidError: If the replacing document is invalid or
+        binds data the caller may not author
+    :raises DashboardV2ConflictError: If the write keeps losing against
+        concurrent writers
+    """
+    replacement = load_stored_document(json_metadata)
+    validated: dict[str, Any] | None = None
+    for _ in range(MAX_WRITE_ATTEMPTS):
+        current_json = read_current_json_metadata(pk)
+        current = load_stored_document(current_json)
+        if replacement is None:
+            if current is None:
+                return json_metadata
+            revised = current
+        else:
+            if validated is None:
+                validated = normalize_and_validate(replacement)
+                if check_authoring:
+                    raise_for_document_authoring(validated, current)
+            revised = with_revision(
+                validated,
+                INITIAL_REVISION if current is None else document_revision(current) + 1,
+            )
+        new_json = write_stored_document(json_metadata, revised)
+        if compare_and_swap_json_metadata(pk, current_json, new_json):
+            return new_json
+    raise DashboardV2ConflictError(None)
 
 
 def _raise_for_database_error(ex: Exception) -> None:
@@ -326,8 +475,12 @@ class CreateDashboardV2Command(BaseCommand):
         return serialize_dashboard(dashboard, stored)
 
     def validate(self) -> None:
-        """Validate the document and resolve the editors and default viewers."""
+        """
+        Validate the document, check the right to author its data
+        definitions, and resolve the editors and default viewers.
+        """
         self._stored = normalize_and_validate(self._properties["document"])
+        raise_for_document_authoring(self._stored, None)
         exceptions: list[ValidationError] = []
         populate_subjects(self._properties, exceptions)
         if exceptions:
@@ -412,8 +565,9 @@ class UpdateDashboardV2Command(BaseCommand):
 
     def validate(self) -> None:
         """
-        Check existence, editorship, the revision and the document, in that
-        order, before anything is written.
+        Check existence, editorship, the revision, the document and the right
+        to author the data definitions it adds, in that order, before anything
+        is written.
         """
         self._model = DashboardDAO.find_by_id(self._pk)
         current = (
@@ -430,3 +584,4 @@ class UpdateDashboardV2Command(BaseCommand):
         if (revision := document_revision(current)) != self._base_revision:
             raise DashboardV2ConflictError(revision)
         self._stored = normalize_and_validate(self._properties["document"])
+        raise_for_document_authoring(self._stored, current)

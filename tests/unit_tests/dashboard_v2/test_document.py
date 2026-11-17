@@ -23,6 +23,7 @@ import pytest
 
 from superset.dashboard_v2.document import (
     document_revision,
+    document_size,
     DocumentLimits,
     DocumentValidationError,
     load_stored_document,
@@ -580,3 +581,94 @@ def test_build_widget_query_uses_stored_binding() -> None:
 def test_build_widget_query_requires_binding(props: dict[str, Any]) -> None:
     with pytest.raises(WidgetDataError):
         build_widget_query(props, [])
+
+
+RESERVED_IDS = [
+    "__proto__",
+    "constructor",
+    "prototype",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "toString",
+    "valueOf",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+]
+
+
+@pytest.mark.parametrize("node_id", RESERVED_IDS)
+def test_object_prototype_member_names_are_refused_as_node_ids(node_id: str) -> None:
+    """A client that keeps the nodes in a plain object would lose a node
+    stored under one of these names, or mistake an inherited member for one."""
+    document = {
+        "version": 1,
+        "nodes": {
+            "root": {"type": "grid", "children": [node_id]},
+            node_id: {"type": "markdown", "props": {"content": "x"}},
+        },
+    }
+
+    with pytest.raises(DocumentValidationError, match="is a reserved name"):
+        normalize_document(document)
+
+
+@pytest.mark.parametrize(
+    "node_id",
+    ["node_1", "node_12_k3x9", "node_7_copy", "a", "0", "_", "-", "proto", "x" * 64],
+)
+def test_ids_the_builder_generates_stay_valid(node_id: str) -> None:
+    document = {
+        "version": 1,
+        "nodes": {
+            "root": {"type": "grid", "children": [node_id]},
+            node_id: {"type": "markdown", "props": {"content": "x"}},
+        },
+    }
+
+    stored, _ = normalize_document(document)
+
+    assert set(stored["nodes"]) == {"root", node_id}
+
+
+def _markdown_document(content: str) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "nodes": {
+            "root": {"type": "grid", "children": ["a"]},
+            "a": {"type": "markdown", "props": {"content": content}},
+        },
+    }
+
+
+def test_the_size_limit_counts_utf8_bytes_like_the_request_body() -> None:
+    """200,000 Cyrillic letters are 400,000 bytes of UTF-8 in the request
+    body and count the same against the document limit, not the 1,200,000
+    bytes of their ASCII-escaped form."""
+    document = _markdown_document("я" * 200_000)
+
+    assert document_size(document) == len(
+        json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    assert 400_000 < document_size(document) < 400_200
+    normalize_document(document, limits=DocumentLimits(max_bytes=1024 * 1024))
+    with pytest.raises(DocumentValidationError, match="the limit is 400000"):
+        normalize_document(document, limits=DocumentLimits(max_bytes=400_000))
+
+
+def test_the_size_limit_counts_astral_and_lone_surrogate_characters() -> None:
+    assert (
+        document_size(_markdown_document("😀")) - document_size(_markdown_document(""))
+        == 4
+    )
+    # A lone surrogate is valid JSON (as an escape) and must not break the
+    # measurement.
+    assert (
+        document_size(_markdown_document("\ud83d"))
+        - document_size(_markdown_document(""))
+        == 3
+    )
+    normalize_document(_markdown_document("\ud83d"))

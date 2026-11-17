@@ -19,21 +19,27 @@ Race-free writes of the ``json_metadata`` column that holds a v2 document.
 
 The document shares one text column with the rest of a dashboard's metadata,
 and that column has more than one writer (the Dashboard v2 API, the classic
-dashboard update). Every writer that touches a v2 dashboard goes through
-:func:`compare_and_swap_json_metadata`: an ``UPDATE`` that only matches while
-the column still holds the value the writer read. The statement is atomic on
-every supported database, so a lost update is impossible without relying on
-row locks; SQLite, which has none, is covered the same way as PostgreSQL and
-MySQL.
+dashboard update, version restore, import). Every writer that touches a v2
+dashboard goes through :func:`compare_and_swap_json_metadata`: an ``UPDATE``
+that only matches while the column still holds the value the writer read.
+The statement is atomic on every supported database, so a lost update is
+impossible without relying on row locks, provided the comparison is exact.
+
+The comparison is exact on SQLite and PostgreSQL, which compare text byte by
+byte. MySQL and MariaDB compare text by the column's collation, which by
+default ignores case, accents and trailing spaces, so there the statement
+compares the UTF-8 bytes of both sides instead (see
+:func:`_unchanged_condition`).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm.exc import StaleDataError
+from sqlalchemy.sql.elements import ClauseElement
 
 from superset import db
 from superset.dashboard_v2.document import load_stored_document, V2_DOCUMENT_KEY
@@ -60,7 +66,7 @@ def read_current_json_metadata(pk: int, lock: bool = True) -> str | None:
     database has one it returns the latest committed value even under
     snapshot isolation and makes concurrent writers queue instead of
     retrying; where it has none (SQLite) the clause is omitted. Correctness
-    never depends on the lock, only on the compare-and-swap that follows.
+    rests on the compare-and-swap that follows, not on the lock.
     """
     statement = select(Dashboard.json_metadata).where(Dashboard.id == pk)
     if lock:
@@ -77,15 +83,36 @@ def compare_and_swap_json_metadata(pk: int, expected: str | None, new: str) -> b
         changed the column after ``expected`` was read; nothing was written.
     """
     table = Dashboard.__table__
-    unchanged = (
-        table.c.json_metadata.is_(None)
-        if expected is None
-        else table.c.json_metadata == expected
-    )
+    unchanged = _unchanged_condition(expected, db.session.get_bind().dialect.name)
     result = db.session.execute(
         update(table).where(table.c.id == pk, unchanged).values(json_metadata=new)
     )
     return result.rowcount == 1
+
+
+#: Dialects whose text comparison follows a collation instead of the bytes.
+_COLLATING_DIALECTS = frozenset({"mysql", "mariadb"})
+
+
+def _unchanged_condition(expected: str | None, dialect_name: str) -> ClauseElement:
+    """
+    The ``WHERE`` condition "``json_metadata`` still holds ``expected``".
+
+    On MySQL and MariaDB ``=`` on a text column follows the column's
+    collation, under which values differing only in case, accents or trailing
+    spaces are equal. Both sides are therefore converted to ``utf8mb4`` and
+    compared as binary strings, which is exact whatever character set and
+    collation the column and the connection use.
+    """
+    column = Dashboard.__table__.c.json_metadata
+    if expected is None:
+        return column.is_(None)
+    if dialect_name in _COLLATING_DIALECTS:
+        return text(
+            "CAST(CONVERT(dashboards.json_metadata USING utf8mb4) AS BINARY) = "
+            "CAST(CONVERT(:expected_json_metadata USING utf8mb4) AS BINARY)"
+        ).bindparams(expected_json_metadata=expected)
+    return column == expected
 
 
 def is_concurrent_write_failure(ex: BaseException) -> bool:
