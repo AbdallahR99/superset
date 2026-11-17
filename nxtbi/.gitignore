@@ -1,0 +1,6 @@
+.env
+.keycloak-state.json
+__pycache__/
+*.pyc
+/out/
+/test-results/
