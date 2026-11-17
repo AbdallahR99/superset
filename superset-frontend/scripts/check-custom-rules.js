@@ -837,6 +837,7 @@ function main() {
     /\.stories\./,
     /\/demo\//,
     /\/examples\//,
+    /\/example\//,
     /\/color\/colorSchemes\//,
     /\/esm\//,
     /\/lib\//,

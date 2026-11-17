@@ -27,6 +27,10 @@
       "types": "./lib/chat/index.d.ts",
       "default": "./lib/chat/index.js"
     },
+    "./dashboard": {
+      "types": "./lib/dashboard/index.d.ts",
+      "default": "./lib/dashboard/index.js"
+    },
     "./navigation": {
       "types": "./lib/navigation/index.d.ts",
       "default": "./lib/navigation/index.js"
@@ -82,6 +86,10 @@
     "./storage": {
       "types": "./lib/storage/index.d.ts",
       "default": "./lib/storage/index.js"
+    },
+    "./widgets": {
+      "types": "./lib/widgets/index.d.ts",
+      "default": "./lib/widgets/index.js"
     }
   },
   "publishConfig": {

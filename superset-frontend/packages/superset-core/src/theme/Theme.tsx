@@ -259,9 +259,12 @@ export class Theme {
   SupersetThemeProvider({
     children,
     direction: directionProp,
+    withGlobalStyles = true,
   }: {
     children: React.ReactNode;
     direction?: Direction;
+    /** Off when rendering into a page Superset does not own (embedded blocks). */
+    withGlobalStyles?: boolean;
   }) {
     if (!this.theme || !this.antdConfig) {
       throw new Error('Theme is not initialized.');
@@ -327,7 +330,7 @@ export class Theme {
     return (
       <EmotionCacheProvider value={getEmotionCache(direction)}>
         <ThemeProvider theme={themeWithDirection}>
-          <GlobalStyles />
+          {withGlobalStyles && <GlobalStyles />}
           <ConfigProvider theme={themeState.antdConfig} direction={direction}>
             {children}
           </ConfigProvider>

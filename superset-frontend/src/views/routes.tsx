@@ -80,6 +80,13 @@ const Dashboard = lazyWithRetry(
   () => import(/* webpackChunkName: "Dashboard" */ 'src/pages/Dashboard'),
 );
 
+const DashboardBuilderV2 = lazyWithRetry(
+  () =>
+    import(
+      /* webpackChunkName: "DashboardBuilderV2" */ 'src/pages/DashboardBuilderV2'
+    ),
+);
+
 const DatabaseList = lazyWithRetry(
   () => import(/* webpackChunkName: "DatabaseList" */ 'src/pages/DatabaseList'),
 );
@@ -247,6 +254,10 @@ export const routes: Routes = [
     Component: DashboardList,
     mobileSupported: true,
   },
+  // Must precede DASHBOARD ("/dashboard/:idOrSlug/"): that pattern is a
+  // non-exact prefix match, so it would otherwise shadow this literal path.
+  { path: RoutePaths.DASHBOARD_V2_NEW, Component: DashboardBuilderV2 },
+  { path: RoutePaths.DASHBOARD_V2, Component: DashboardBuilderV2 },
   { path: RoutePaths.DASHBOARD, Component: Dashboard, mobileSupported: true },
   { path: RoutePaths.CHART_ADD, Component: ChartCreation },
   { path: RoutePaths.CHART_LIST, Component: ChartList },

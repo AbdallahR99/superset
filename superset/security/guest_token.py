@@ -252,6 +252,7 @@ def enforce_guest_token_identity(
 
 class GuestTokenResourceType(StrEnum):
     DASHBOARD = "dashboard"
+    WIDGET = "widget"
 
 
 class GuestTokenResource(TypedDict):
