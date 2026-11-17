@@ -99,6 +99,29 @@ test('chart and dashboard list pages get their own page types', async () => {
   expect(navigation.getPage()).toBe('dashboard_list');
 });
 
+test('Dashboard v2 is distinct from the classic dashboard route', async () => {
+  const { notifyLocationChanged, navigation } = await importNavigation();
+  notifyLocationChanged('/dashboard/v2/new/');
+  expect(navigation.getPage()).toBe('dashboard_v2');
+});
+
+test('a saved Dashboard v2 is the v2 page, not the classic dashboard', async () => {
+  const { notifyLocationChanged, navigation } = await importNavigation();
+  notifyLocationChanged('/dashboard/42/');
+  expect(navigation.getPage()).toBe('dashboard');
+  notifyLocationChanged('/dashboard/v2/42/');
+  expect(navigation.getPage()).toBe('dashboard_v2');
+  // A classic dashboard whose slug merely starts with "v2" is still classic.
+  notifyLocationChanged('/dashboard/v2-sales/');
+  expect(navigation.getPage()).toBe('dashboard');
+});
+
+test('a saved Dashboard v2 opened directly is the v2 page from the first read', async () => {
+  window.location.pathname = '/dashboard/v2/7/';
+  const { navigation } = await importNavigation();
+  expect(navigation.getPage()).toBe('dashboard_v2');
+});
+
 test('dataset list and single-dataset pages get distinct page types', async () => {
   const { notifyLocationChanged, navigation } = await importNavigation();
   notifyLocationChanged('/tablemodelview/list/');

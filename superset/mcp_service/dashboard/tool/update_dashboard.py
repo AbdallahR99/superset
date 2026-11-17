@@ -30,7 +30,10 @@ from fastmcp import Context
 from sqlalchemy.exc import SQLAlchemyError
 from superset_core.mcp.decorators import tool, ToolAnnotations
 
-from superset.commands.dashboard.exceptions import DashboardNotFoundError
+from superset.commands.dashboard.exceptions import (
+    DashboardNotFoundError,
+    DashboardUpdateFailedError,
+)
 from superset.exceptions import SupersetSecurityException
 from superset.extensions import db, event_logger
 from superset.mcp_service.dashboard.layout_validation import (
@@ -212,7 +215,13 @@ def _apply_field_updates(dashboard: Any, request: UpdateDashboardRequest) -> lis
 
     metadata_overrides: dict[str, Any] = _collect_metadata_overrides(request)
     if metadata_overrides:
-        dashboard.json_metadata = _merge_json_metadata(dashboard, metadata_overrides)
+        from superset.daos.dashboard import DashboardDAO
+
+        # A v2 dashboard's document is carried over from the row as stored at
+        # the time of the write, not from the copy this session loaded.
+        dashboard.json_metadata = DashboardDAO.metadata_keeping_v2_document(
+            dashboard, json.loads(_merge_json_metadata(dashboard, metadata_overrides))
+        )
         changed.append("json_metadata")
 
     if request.css is not None:
@@ -392,6 +401,27 @@ async def update_dashboard(
                     "returned values may not reflect database state."
                 )
 
+    except DashboardUpdateFailedError:
+        # The metadata of a Dashboard v2 dashboard is stored by
+        # compare-and-swap; this update kept losing against concurrent
+        # writers, so nothing of it is kept.
+        try:
+            db.session.rollback()  # pylint: disable=consider-using-transaction
+        except SQLAlchemyError:
+            logger.warning(
+                "Database rollback failed during error handling",
+                exc_info=True,
+            )
+        logger.warning(
+            "Dashboard %s update lost against concurrent writers", dashboard.id
+        )
+        return DashboardError(
+            error=(
+                "The dashboard was changed by someone else while it was being "
+                "updated. Nothing was saved; try again."
+            ),
+            error_type="Conflict",
+        )
     except SQLAlchemyError as db_err:
         try:
             db.session.rollback()  # pylint: disable=consider-using-transaction

@@ -138,3 +138,39 @@ class Dashboard(BaseSupersetView):
         return self.render_app_template(
             extra_bootstrap_data=bootstrap_data, entry="embedded"
         )
+
+
+class DashboardBuilderV2View(BaseSupersetView):
+    """Serves the Dashboard v2 prototype builder page (design-doc item 7.1).
+
+    A pure React-Router route with no server-side state of its own — this
+    view exists only so a full page load (refresh, direct URL, bookmark)
+    matches a Flask route and gets the SPA shell instead of a 404; the
+    actual page is rendered entirely client-side.
+
+    The shell carries no dashboard data: the document is fetched from
+    ``/api/v1/dashboard_v2/``, which enforces object-level access. Both routes
+    answer 404 while the ``DASHBOARD_V2`` feature flag is off (the app-level
+    gate in ``superset.dashboard_v2.feature`` covers them as well; the check
+    here keeps the view safe if it is ever registered on its own).
+    """
+
+    route_base = "/dashboard/v2"
+    class_permission_name = "Dashboard"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
+
+    @has_access
+    @expose("/new/")
+    def new(self) -> FlaskResponse:
+        """Serve the builder shell for a dashboard that is not saved yet."""
+        if not is_feature_enabled("DASHBOARD_V2"):
+            return Response(status=404)
+        return super().render_app_template()
+
+    @has_access
+    @expose("/<int:pk>/")
+    def show(self, pk: int) -> FlaskResponse:  # pylint: disable=unused-argument
+        """Serve the builder shell for an existing v2 dashboard."""
+        if not is_feature_enabled("DASHBOARD_V2"):
+            return Response(status=404)
+        return super().render_app_template()

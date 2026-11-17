@@ -1,0 +1,161 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+/**
+ * The one path either half of the Properties panel (the schema-driven form
+ * and the JSON editor) writes a schema-controlled widget's control values
+ * through.
+ *
+ * Both representations edit the same `node.props`, but neither may write to
+ * it directly: a candidate is merged, sent to the backend's
+ * `Widget.validate_control_values` gate — the same gate a save of the
+ * dashboard runs every widget through, reached here via its REST wrapper
+ * rather than a second, frontend-authored copy of its rules — and only
+ * committed to the store once that gate accepts it. A rejected candidate
+ * returns its errors and touches nothing: `node.props` is read here, never
+ * written to, until validation has already succeeded. What finally lands in
+ * the store is the endpoint's own normalized dump of the candidate, not the
+ * raw one this sent, so what is edited and what the server would store
+ * can't quietly disagree.
+ */
+import { SupersetClient } from '@superset-ui/core';
+import { describeErrorBody } from '@apache-superset/widgets/errors';
+import { provider } from 'src/core/dashboard/store';
+
+export type ControlValidationError = {
+  loc: (string | number)[];
+  message: string;
+};
+
+export type CommitPropsResult =
+  | { ok: true; values: Record<string, unknown> }
+  | { ok: false; errors: ControlValidationError[] };
+
+/**
+ * SupersetClient rejects a non-2xx response with the raw, unparsed `Response`
+ * object rather than an `Error`, so a plain `String(e)` yields the useless
+ * "[object Response]". Pull the actual `{message}`/`{errors:[...]}` body
+ * Superset sends back (same shape `chartData.ts` handles).
+ */
+export async function describeError(e: unknown): Promise<string> {
+  if (typeof Response !== 'undefined' && e instanceof Response) {
+    try {
+      const detail = describeErrorBody(await e.clone().json());
+      return detail
+        ? `${e.status} ${e.statusText}: ${detail}`
+        : `${e.status} ${e.statusText}`;
+    } catch {
+      return `${e.status} ${e.statusText}`;
+    }
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
+async function validateControlValues(
+  widgetType: string,
+  controlValues: Record<string, unknown>,
+): Promise<{
+  errors: ControlValidationError[];
+  values: Record<string, unknown> | null;
+}> {
+  const { json } = await SupersetClient.post({
+    endpoint: `/api/v1/widgets/type/${widgetType}/validate`,
+    jsonPayload: { control_values: controlValues },
+  });
+  return (
+    json as {
+      result: {
+        errors: ControlValidationError[];
+        values: Record<string, unknown> | null;
+      };
+    }
+  ).result;
+}
+
+/**
+ * Merges `delta` onto the node's current props, validates the merged
+ * candidate, and commits it to `node.props` only if the backend accepts it.
+ *
+ * `onBeforeCommit`, if given, runs synchronously immediately before the
+ * `provider.updateProps` call — not part of the merge/validate/commit
+ * contract itself, but the one hook a caller needs to both veto a commit
+ * that's gone stale during the async validation round-trip (returning
+ * `false` skips `updateProps` entirely — the caller's own sequence check
+ * can't do this after the fact, since by then the write already landed) and
+ * set a flag in the exact tick its own commit lands (e.g. `SchemaControlPanel`
+ * telling its own resync effect "this `props` change was mine").
+ */
+export async function commitWidgetProps(
+  nodeId: string,
+  widgetType: string,
+  delta: Record<string, unknown>,
+  options?: { onBeforeCommit?: () => boolean | void },
+): Promise<CommitPropsResult> {
+  const snapshot = provider.getNode(nodeId)?.props ?? {};
+  const candidate = { ...snapshot, ...delta };
+  // Which document the edit was made on. A node id says nothing about that:
+  // ids repeat between dashboards, and a reloaded copy of this one has the
+  // very ids the copy before it had.
+  const generation = provider.getDocumentGeneration();
+  const { errors, values } = await validateControlValues(widgetType, candidate);
+  // The tree was replaced while the round-trip was away (another dashboard
+  // was opened, or this one was reloaded to discard the author's edits).
+  // Whatever node carries this id is not the one the edit was made on, so
+  // neither the values nor the errors are about anything on screen.
+  if (provider.getDocumentGeneration() !== generation) {
+    return { ok: false, errors: [] };
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  // The round-trip took time, and the node did not wait for it. If it was
+  // removed meanwhile there is nothing left to commit to, and that is not an
+  // error of the candidate's.
+  const current = provider.getNode(nodeId);
+  if (current === undefined) {
+    return { ok: false, errors: [] };
+  }
+  // The backend's own Pydantic-normalized candidate (coerced types,
+  // alias-keyed) — not the raw one just sent for validation — so this
+  // commits exactly what the server's own control model holds, rather than
+  // something that can quietly disagree with it (e.g. a numeric field a
+  // `Select` stores as a
+  // string, which Pydantic accepts by coercion but a later reader would not
+  // recognize as the same value). Falls back to the raw candidate only if
+  // the backend genuinely had nothing to normalize (`control_values` itself
+  // was absent).
+  const normalized = { ...(values ?? candidate) };
+  // What was validated is the whole of the node's props as they stood before
+  // the round-trip, and writing all of that back would undo anything written
+  // to the node meanwhile by someone else: another control's own commit, or
+  // the id a widget is given when it is saved for embedding. A key this
+  // commit was not about, whose value changed while it was away, keeps the
+  // value it has.
+  const currentProps = current.props ?? {};
+  Object.keys(currentProps).forEach(key => {
+    if (!(key in delta) && currentProps[key] !== snapshot[key]) {
+      normalized[key] = currentProps[key];
+    }
+  });
+  if (options?.onBeforeCommit?.() === false) {
+    return { ok: false, errors: [] };
+  }
+  provider.updateProps(nodeId, normalized);
+  return { ok: true, values: normalized };
+}

@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@emotion/react",
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "strictNullChecks": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "typeRoots": ["../../../node_modules/@types"],
+    "paths": {
+      "@apache-superset/widgets": ["../src/index.ts"],
+      "@apache-superset/core": ["../../superset-core/src/index.ts"],
+      "@apache-superset/core/*": ["../../superset-core/src/*"],
+      "@superset-ui/core": ["../../superset-ui-core/src/index.ts"],
+      "@superset-ui/core/*": ["../../superset-ui-core/src/*"],
+      "echarts/types/src/*": ["../../../node_modules/echarts/types/src/*"]
+    }
+  },
+  "include": ["src", "../../superset-core/types", "../../superset-ui-core/types"]
+}

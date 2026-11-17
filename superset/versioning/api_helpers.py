@@ -529,6 +529,7 @@ def restore_version_endpoint(
     # bootstrap-cycle rationale as this module's other local imports).
     from superset.versioning.restore import (
         ChartPurgedDuringRestoreError,
+        DashboardDocumentRestoreError,
         MissingDatasourceError,
         PrunedChildHistoryError,
         RecycledChildIdentityError,
@@ -541,14 +542,16 @@ def restore_version_endpoint(
     except command_cls.forbidden_exc:
         return api.response_403()
     except (
+        DashboardDocumentRestoreError,
         MissingDatasourceError,
         PrunedChildHistoryError,
         RecycledChildIdentityError,
     ) as ex:
         # Fail-closed refusals: a chart snapshot's datasource no longer
         # exists, needed child history was pruned by retention
-        # (sc-120012), or a snapshot child id belongs to a different live
-        # child; the entity was left unchanged. The
+        # (sc-120012), a snapshot child id belongs to a different live
+        # child, or a dashboard snapshot's Dashboard v2 document cannot be
+        # stored again; the entity was left unchanged. The
         # exception's message is user-facing. Passes through the
         # command's @transaction untouched (on_error re-raises
         # non-SQLAlchemy exceptions as-is).

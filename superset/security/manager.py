@@ -2105,6 +2105,81 @@ def query_context_modified(query_context: "QueryContext") -> bool:
     return False
 
 
+def widget_context_grants_data_access(
+    sm: "SupersetSecurityManager",
+    query_context: Optional["QueryContext"],
+    datasource: "BaseDatasource | Explorable",
+) -> bool:
+    """
+    Guest data access for a query context a widget built server-side.
+    ``widget_context`` is never populated from a request, so a client cannot
+    claim a widget grant by forging form data.
+    """
+    # pylint: disable=import-outside-toplevel
+    from superset.widgets.data import WidgetContext
+
+    context = getattr(query_context, "widget_context", None)
+    if not isinstance(context, WidgetContext):
+        return False
+    return sm.guest_widget_grants_datasource(context, datasource)
+
+
+def _guest_token_dataset_resource_id(value: Any) -> Optional[int]:
+    """
+    The dataset a guest token ``dataset`` resource names, or ``None`` when its
+    ``id`` is not a positive integer written in plain decimal digits.
+    """
+    if isinstance(value, bool):
+        return None
+    text = str(value) if isinstance(value, (int, str)) else ""
+    if not text.isascii() or not text.isdigit() or text.startswith("0"):
+        return None
+    return int(text)
+
+
+def _guest_token_widget_dataset_ids(resources: GuestTokenResources) -> set[int]:
+    """
+    The datasets a guest token's ``widget`` and ``dataset`` resources grant:
+    the dataset recorded on each widget resource and the one each dataset
+    resource names.
+    """
+    dataset_ids: set[int] = set()
+    for resource in resources or []:
+        resource_type = resource.get("type")
+        granted: Any = None
+        if resource_type == GuestTokenResourceType.WIDGET.value:
+            granted = resource.get("dataset_id")
+        elif resource_type == GuestTokenResourceType.DATASET.value:
+            granted = _guest_token_dataset_resource_id(resource.get("id"))
+        if isinstance(granted, int) and not isinstance(granted, bool):
+            dataset_ids.add(granted)
+    return dataset_ids
+
+
+def _raise_for_guest_dataset_allowlist(
+    sm: "SupersetSecurityManager",
+    datasource: "BaseDatasource | Explorable",
+) -> None:
+    """
+    When the guest token carries a dataset allowlist, restrict access to only
+    those dataset IDs even if another check would grant it. Tokens without the
+    ``datasets`` claim keep the default behaviour.
+    """
+    if guest_user := sm.get_current_guest_user_if_guest():
+        allowed_datasets: Optional[list[int]] = guest_user.guest_token.get("datasets")
+        if allowed_datasets is not None and (
+            # Only physical/virtual datasets can be on the allowlist; other
+            # datasource types (semantic views) are never covered by it.
+            datasource.type != DatasourceType.TABLE
+            or not isinstance(allowed_datasets, list)
+            or not all(isinstance(d, int) for d in allowed_datasets)
+            or datasource.id not in allowed_datasets
+        ):
+            raise SupersetSecurityException(
+                sm.get_datasource_access_error_object(datasource)
+            )
+
+
 class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
     SecurityManager
 ):
@@ -5937,6 +6012,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                 # rather than the flag silently applying only to the
                 # database+table / query branch above.
                 or (allow_editorship and self.is_editor(datasource))
+                or widget_context_grants_data_access(self, query_context, datasource)
                 or (
                     # Grant access to the datasource only if dashboard RBAC is enabled
                     # or the user is an embedded guest user with access to the dashboard
@@ -6053,23 +6129,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                     self.get_datasource_access_error_object(datasource)
                 )
 
-            # When the guest token carries a dataset allowlist, restrict access
-            # to only those dataset IDs even if the chart/dashboard check above
-            # would otherwise grant it.  Tokens without the ``datasets`` claim
-            # retain the existing behaviour (all dashboard datasets accessible).
-            if guest_user := self.get_current_guest_user_if_guest():
-                allowed_datasets: Optional[list[int]] = guest_user.guest_token.get(
-                    "datasets"
-                )
-                if allowed_datasets is not None and (
-                    datasource.type != DatasourceType.TABLE
-                    or not isinstance(allowed_datasets, list)
-                    or not all(isinstance(d, int) for d in allowed_datasets)
-                    or datasource.id not in allowed_datasets
-                ):
-                    raise SupersetSecurityException(
-                        self.get_datasource_access_error_object(datasource)
-                    )
+            _raise_for_guest_dataset_allowlist(self, datasource)
 
         if dashboard:
             if self.is_guest_user():
@@ -6513,6 +6573,8 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         self, resources: GuestTokenResources, datasets: Optional[list[int]] = None
     ) -> None:
         # pylint: disable=import-outside-toplevel
+        from marshmallow import ValidationError
+
         from superset.commands.dashboard.embedded.exceptions import (
             EmbeddedDashboardAccessDeniedError,
             EmbeddedDashboardNotFoundError,
@@ -6521,7 +6583,8 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         from superset.models.dashboard import Dashboard
 
         for resource in resources:
-            if resource["type"] == GuestTokenResourceType.DASHBOARD.value:
+            resource_type = resource.get("type")
+            if resource_type == GuestTokenResourceType.DASHBOARD.value:
                 # TODO (embedded): remove this check once uuids are rolled out
                 dashboard = Dashboard.get(str(resource["id"]))
                 if not dashboard:
@@ -6546,6 +6609,270 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                     self._raise_for_guest_token_datasource_access(dashboard, datasets)
                 except SupersetSecurityException as ex:
                     raise EmbeddedDashboardAccessDeniedError() from ex
+            elif resource_type == GuestTokenResourceType.WIDGET.value:
+                # Recorded on the resource so the signed token carries the
+                # dataset the minter was checked against; a value the caller
+                # sent is always replaced.
+                resource["dataset_id"] = self._guest_token_widget_dataset(
+                    resource.get("id")
+                )
+            elif resource_type == GuestTokenResourceType.DATASET.value:
+                resource["id"] = str(
+                    self._guest_token_inline_dataset(resource.get("id"))
+                )
+            else:
+                # Fail closed: a resource type this method does not know how to
+                # authorize must never end up in a signed token.
+                raise ValidationError(
+                    f"Unknown guest token resource type {resource_type!r}."
+                )
+
+    def _guest_token_minter_dataset(self, dataset_id: int, missing: str) -> Any:
+        """
+        The SQL dataset a ``widget`` or ``dataset`` resource grants, once the
+        minting principal is shown to be entitled to it.
+
+        A guest reads the dataset on the strength of the token alone, so the
+        same reasoning as for dashboards applies: a principal holding only the
+        coarse ``grant_guest_token`` permission must not be able to hand a
+        guest data it cannot read itself.
+
+        :param dataset_id: The dataset the resource grants
+        :param missing: The validation message when it does not exist
+        :returns: The datasource
+        """
+        # pylint: disable=import-outside-toplevel
+        from marshmallow import ValidationError
+
+        from superset.commands.widget.exceptions import (
+            SavedWidgetGuestTokenDeniedError,
+        )
+        from superset.daos.datasource import DatasourceDAO
+        from superset.daos.exceptions import DatasourceNotFound
+
+        try:
+            datasource = DatasourceDAO.get_datasource(DatasourceType.TABLE, dataset_id)
+        except DatasourceNotFound as ex:
+            raise ValidationError(missing) from ex
+        if not self.can_access_datasource(datasource):
+            raise SavedWidgetGuestTokenDeniedError()
+        return datasource
+
+    def _guest_token_widget_dataset(self, widget_ref: Any) -> Optional[int]:
+        """
+        Authorize a ``widget`` resource and return the dataset it binds.
+
+        The saved widget must exist, be of a registered type, be readable by
+        the minting principal under the rule every reader of a saved widget is
+        held to (``raise_for_widget_read``: an admin, its creator, or someone
+        who can read the dataset it binds; a widget with no dataset is its
+        creator's and admins' only), and bind a dataset the minting principal
+        can read. A token hands a guest the widget's definition as well as its
+        data, so the first check holds even when there is no data to grant. A
+        widget that binds no dataset is accepted only when its type queries no
+        data at all (markdown, a filter bar); ``None`` is then recorded and the
+        token grants no data.
+
+        :param widget_ref: The saved widget uuid from the resource
+        :returns: The dataset the widget binds, to be recorded in the token
+        """
+        # pylint: disable=import-outside-toplevel
+        from marshmallow import ValidationError
+
+        from superset.commands.widget.exceptions import (
+            SavedWidgetForbiddenError,
+            SavedWidgetGuestTokenDeniedError,
+        )
+        from superset.commands.widget.utils import raise_for_widget_read
+        from superset.daos.saved_widget import SavedWidgetDAO
+        from superset.widgets.data import widget_dataset_id, widget_queries_data
+        from superset.widgets.registry import registry
+
+        widget = SavedWidgetDAO.find_by_uuid(str(widget_ref))
+        if widget is None:
+            raise ValidationError(f"Saved widget {widget_ref} not found.")
+        widget_cls = registry.get(str(widget.widget_type))
+        if widget_cls is None:
+            raise ValidationError(
+                f"Saved widget {widget_ref} has an unknown widget type."
+            )
+        if self.is_guest_user():
+            # A guest reads a widget on the strength of a token; that is not
+            # an entitlement it can pass on by minting another.
+            raise SavedWidgetGuestTokenDeniedError()
+        try:
+            raise_for_widget_read(widget)
+        except SavedWidgetForbiddenError as ex:
+            raise SavedWidgetGuestTokenDeniedError() from ex
+        dataset_id = widget_dataset_id(widget_cls, widget.props_dict)
+        if dataset_id is None:
+            if widget_queries_data(widget_cls):
+                raise ValidationError(
+                    f"Saved widget {widget_ref} queries data but binds no dataset."
+                )
+            return None
+        self._guest_token_minter_dataset(
+            dataset_id,
+            f"Saved widget {widget_ref} reads a dataset that does not exist.",
+        )
+        return dataset_id
+
+    def _guest_token_inline_dataset(self, dataset_ref: Any) -> int:
+        """
+        Authorize a ``dataset`` resource: the explicit grant that lets a guest
+        send inline, SQL-free widget definitions against one dataset.
+
+        Nothing else grants inline definitions: not a ``dashboard`` or
+        ``widget`` resource, and not the ``datasets`` claim, which only narrows
+        what the resources grant.
+
+        :param dataset_ref: The dataset id from the resource
+        :returns: The dataset id as an integer
+        """
+        # pylint: disable=import-outside-toplevel
+        from marshmallow import ValidationError
+
+        dataset_id = _guest_token_dataset_resource_id(dataset_ref)
+        if dataset_id is None:
+            raise ValidationError(
+                "A dataset resource id must be a positive integer dataset id."
+            )
+        self._guest_token_minter_dataset(dataset_id, f"Dataset {dataset_id} not found.")
+        return dataset_id
+
+    def _raise_for_guest_token_widget_rls(
+        self, resources: GuestTokenResources, rls: list[GuestTokenRlsRule]
+    ) -> None:
+        """
+        Refuse a token whose ``widget`` or ``dataset`` resources would read an
+        RLS-protected dataset without any row filter of its own, or would hand
+        a guest rows the minting principal cannot read itself.
+
+        A guest is not the widget's author: the role RLS rules that narrowed
+        what the author saw apply to a guest only as far as they cover the
+        guest role. The rows a guest sees are bounded by exactly two things,
+        the ``rls`` rules in the token and the RLS rules that apply to the
+        guest role (``GUEST_ROLE_NAME``). Two rules follow, each applied to the
+        dataset a resource grants and to every registered dataset a virtual
+        dataset's SQL reads:
+
+        - A dataset that carries RLS rules needs a token rule with a clause
+          that covers it: a rule without ``dataset``, one naming it, or one
+          naming the virtual dataset that reads it.
+        - The token's rules are written by the minting principal, so they are
+          only as narrow as that principal makes them. A principal who is not
+          an admin and whose own rows of the dataset are narrowed by RLS is
+          therefore refused: it cannot be shown that the scope it chose stays
+          inside its own. Its rules are not ANDed into the token instead,
+          because a rule's clause is a template evaluated for whoever runs the
+          query and would mean something else for the guest.
+
+        A virtual dataset whose tables cannot be worked out is treated as
+        protected. The guard is on unless the deployment sets
+        ``GUEST_TOKEN_WIDGET_RLS_GUARD = False`` to say that it decides the
+        row scope of its tokens some other way (for example in
+        ``GUEST_TOKEN_VALIDATOR_HOOK``). Having a hook does not by itself turn
+        the guard off: a hook written for dashboard tokens knows nothing about
+        these resources.
+
+        :param resources: The validated ``resources`` claim
+        :param rls: The token's ``rls`` rules
+        """
+        # pylint: disable=import-outside-toplevel
+        from marshmallow import ValidationError
+
+        from superset.daos.datasource import DatasourceDAO
+        from superset.daos.exceptions import DatasourceNotFound
+
+        dataset_ids = _guest_token_widget_dataset_ids(resources)
+        if not dataset_ids or not get_conf().get("GUEST_TOKEN_WIDGET_RLS_GUARD", True):
+            return
+        rules = [rule for rule in rls or [] if str(rule.get("clause") or "").strip()]
+        # A rule without a dataset applies to every dataset.
+        covers_all = any(not rule.get("dataset") for rule in rules)
+        covered = {str(rule.get("dataset")) for rule in rules}
+        minter_is_bound = not self.is_admin()
+        for dataset_id in sorted(dataset_ids):
+            try:
+                datasource = DatasourceDAO.get_datasource(
+                    DatasourceType.TABLE, dataset_id
+                )
+            except DatasourceNotFound:
+                continue  # nothing to read; the data request fails on its own
+            try:
+                underlying = self._guest_token_underlying_datasets(datasource)
+            except Exception as ex:  # pylint: disable=broad-except
+                # Parsing the SQL and resolving its tables can fail in many
+                # ways; none of them shows the dataset to be unprotected.
+                if covers_all and not minter_is_bound:
+                    underlying = []
+                else:
+                    raise ValidationError(
+                        f"The tables dataset {dataset_id} reads could not be "
+                        "determined, so its row level security cannot be "
+                        "checked: the guest token needs an rls rule without a "
+                        "dataset, minted by an admin."
+                    ) from ex
+            for dataset in [datasource, *underlying]:
+                if minter_is_bound and self.get_rls_filters(dataset):
+                    raise ValidationError(
+                        f"Dataset {dataset.id} is restricted for you by row "
+                        "level security: a widget or dataset resource on it "
+                        "can only be granted by a principal who reads all of "
+                        "its rows."
+                    )
+                if covers_all or {str(dataset_id), str(dataset.id)} & covered:
+                    continue
+                if getattr(dataset, "row_level_security_filters", None):
+                    raise ValidationError(
+                        f"Dataset {dataset.id} is protected by row level "
+                        "security: the guest token needs an rls rule that "
+                        "covers it."
+                    )
+
+    @staticmethod
+    def _guest_token_underlying_datasets(datasource: Any) -> list[Any]:
+        """
+        The registered datasets a virtual dataset's SQL reads, resolved the way
+        query-time RLS resolves a table reference to the datasets whose rules
+        it injects (``superset.utils.rls``). Empty for a physical dataset.
+
+        The SQL is parsed as stored. A statement that only parses after its
+        template is rendered raises, which the caller treats as protected.
+
+        :param datasource: The dataset a resource grants
+        :returns: The datasets behind it, without the dataset itself
+        """
+        # pylint: disable=import-outside-toplevel
+        from superset.sql.parse import folds_unquoted_object_names, SQLScript
+        from superset.utils.rls import find_datasets, qualify_table
+
+        sql = getattr(datasource, "sql", None)
+        if not isinstance(sql, str) or not sql.strip():
+            return []
+        database = datasource.database
+        script = SQLScript(sql, engine=database.db_engine_spec.engine)
+        default_catalog = database.get_default_catalog()
+        schema = (
+            datasource.schema or database.get_default_schema(datasource.catalog) or ""
+        )
+        fold = folds_unquoted_object_names(database.db_engine_spec.engine)
+        found: dict[int, Any] = {}
+        for statement in script.statements:
+            for table in sorted(statement.tables, key=str):
+                for candidate, any_schema in qualify_table(
+                    database, table, datasource.catalog, schema
+                ):
+                    for dataset in find_datasets(
+                        candidate,
+                        database,
+                        default_catalog,
+                        datasource.id,
+                        fold=fold,
+                        any_schema=any_schema,
+                    ):
+                        found[dataset.id] = dataset
+        return [found[key] for key in sorted(found)]
 
     def _raise_for_guest_token_datasource_access(
         self, dashboard: "Dashboard", datasets: Optional[list[int]]
@@ -6598,6 +6925,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         datasets: Optional[list[int]] = None,
     ) -> bytes:
         enforce_guest_token_identity(user, resources)
+        self._raise_for_guest_token_widget_rls(resources, rls)
         secret = get_conf()["GUEST_TOKEN_JWT_SECRET"]
         algo = get_conf()["GUEST_TOKEN_JWT_ALGO"]
         exp_seconds = get_conf()["GUEST_TOKEN_JWT_EXP_SECONDS"]
@@ -6983,6 +7311,114 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
             if str(resource["id"]) == str(dashboard.embedded[0].uuid):
                 return True
         return False
+
+    @staticmethod
+    def _normalize_uuid(value: Any) -> Optional[str]:
+        # pylint: disable=import-outside-toplevel
+        from uuid import UUID
+
+        try:
+            return str(UUID(str(value)))
+        except (TypeError, ValueError):
+            return None
+
+    def guest_token_names_widget(self, widget_uuid: str) -> bool:
+        """Whether the current guest token names this saved widget."""
+        user = self.get_current_guest_user_if_guest()
+        wanted = self._normalize_uuid(widget_uuid)
+        if not user or wanted is None:
+            return False
+        return any(
+            resource["type"] == GuestTokenResourceType.WIDGET
+            and self._normalize_uuid(resource["id"]) == wanted
+            for resource in user.resources
+        )
+
+    def guest_token_binds_widget_dataset(
+        self, widget_uuid: str, dataset_id: int
+    ) -> bool:
+        """
+        Whether the current guest token names this saved widget and was minted
+        while the widget bound ``dataset_id``.
+
+        The dataset is recorded in the ``widget`` resource at mint time, when
+        the minting principal was checked against it. A widget that has since
+        been pointed at another dataset, and a token that carries no recorded
+        dataset, grant no data.
+        """
+        user = self.get_current_guest_user_if_guest()
+        wanted = self._normalize_uuid(widget_uuid)
+        if not user or wanted is None:
+            return False
+        for resource in user.resources:
+            if (
+                not isinstance(resource, dict)
+                or resource.get("type") != GuestTokenResourceType.WIDGET
+                or self._normalize_uuid(resource.get("id")) != wanted
+            ):
+                continue
+            bound = resource.get("dataset_id")
+            if (
+                isinstance(bound, int)
+                and not isinstance(bound, bool)
+                and bound == dataset_id
+            ):
+                return True
+        return False
+
+    def guest_token_grants_inline_dataset(self, dataset_id: int) -> bool:
+        """
+        Whether the current guest token carries the explicit ``dataset``
+        resource that allows inline widget definitions against ``dataset_id``.
+        """
+        user = self.get_current_guest_user_if_guest()
+        if not user:
+            return False
+        return any(
+            isinstance(resource, dict)
+            and resource.get("type") == GuestTokenResourceType.DATASET
+            and _guest_token_dataset_resource_id(resource.get("id")) == dataset_id
+            for resource in user.resources
+        )
+
+    def guest_widget_grants_dataset(self, context: Any) -> bool:
+        """
+        Whether the current guest token covers a widget request.
+
+        A saved widget must be named as a ``widget`` resource minted while it
+        bound the dataset it binds on this request. An inline definition needs
+        a ``dataset`` resource for its dataset. The ``datasets`` claim is never
+        consulted here: it is an allowlist that narrows a token (enforced by
+        ``raise_for_guest_dataset_allowlist``), not a grant, so a
+        dashboard-scoped token can never serve an inline definition.
+        """
+        user = self.get_current_guest_user_if_guest()
+        dataset_id = getattr(context, "dataset_id", None)
+        if not user or isinstance(dataset_id, bool) or not isinstance(dataset_id, int):
+            return False
+        saved_widget_uuid = getattr(context, "saved_widget_uuid", None)
+        if saved_widget_uuid is not None:
+            return self.guest_token_binds_widget_dataset(saved_widget_uuid, dataset_id)
+        return self.guest_token_grants_inline_dataset(dataset_id)
+
+    def guest_widget_grants_datasource(
+        self, context: Any, datasource: "BaseDatasource | Explorable"
+    ) -> bool:
+        """
+        Whether the current guest may read ``datasource`` for a widget request
+        resolved server-side (see ``WidgetContext``): the token must cover the
+        request and the widget's own dataset must be the one queried.
+        """
+        if not self.is_guest_user() or getattr(datasource, "type", None) != "table":
+            return False
+        return context.dataset_id == getattr(
+            datasource, "id", None
+        ) and self.guest_widget_grants_dataset(context)
+
+    def raise_for_guest_dataset_allowlist(
+        self, datasource: "BaseDatasource | Explorable"
+    ) -> None:
+        _raise_for_guest_dataset_allowlist(self, datasource)
 
     def raise_for_editorship(self, resource: Model) -> None:
         """

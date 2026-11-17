@@ -36,6 +36,94 @@ logger = logging.getLogger(__name__)
 JSON_KEYS = {"position": "position_json", "metadata": "json_metadata"}
 
 
+def _raise_for_v2_document_error(ex: Exception) -> None:
+    """Report a refused Dashboard v2 document as a failed import."""
+    # pylint: disable=import-outside-toplevel
+    from superset.commands.dashboard_v2.exceptions import DashboardV2InvalidError
+
+    if isinstance(ex, DashboardV2InvalidError):
+        detail = f" {json.dumps(ex.errors)}" if ex.errors else ""
+        raise ImportFailedError(
+            f"The Dashboard v2 document is invalid: {ex.message}{detail}"
+        ) from ex
+    raise ImportFailedError(
+        "The dashboard was changed while it was being imported. Try again."
+    ) from ex
+
+
+def _prepare_v2_document(
+    config: dict[str, Any], existing: Dashboard | None, check_authoring: bool
+) -> None:
+    """
+    Validate the Dashboard v2 document of a dashboard the import creates and
+    give it the initial revision.
+
+    An imported document goes through the same validation as a save through
+    the Dashboard v2 API, and its own revision is ignored. The document of an
+    import that overwrites a dashboard is left as it is here and handled by
+    ``_store_overwritten_metadata``, which needs the stored row. A ``null``
+    document is the same as none.
+
+    :raises ImportFailedError: If the document is invalid
+    """
+    # pylint: disable=import-outside-toplevel
+    from superset.commands.dashboard_v2.exceptions import DashboardV2InvalidError
+    from superset.commands.dashboard_v2.save import prepare_imported_document
+    from superset.dashboard_v2.document import V2_DOCUMENT_KEY
+
+    metadata = config.get("metadata")
+    if not isinstance(metadata, dict) or V2_DOCUMENT_KEY not in metadata:
+        return
+    metadata = dict(metadata)
+    if metadata[V2_DOCUMENT_KEY] is None:
+        del metadata[V2_DOCUMENT_KEY]
+    elif existing is None:
+        try:
+            metadata[V2_DOCUMENT_KEY] = prepare_imported_document(
+                metadata[V2_DOCUMENT_KEY], check_authoring=check_authoring
+            )
+        except DashboardV2InvalidError as ex:
+            _raise_for_v2_document_error(ex)
+    config["metadata"] = metadata
+
+
+def _store_overwritten_metadata(
+    config: dict[str, Any], existing: Dashboard, check_authoring: bool
+) -> None:
+    """
+    Store the ``json_metadata`` with which an import overwrites a dashboard,
+    through the Dashboard v2 compare-and-swap, before the model is updated.
+
+    The imported document is validated like a save through the Dashboard v2
+    API and stored at one past the revision the row holds at that moment, so
+    open editors are told about the change and no revision number is ever
+    used twice. A file without a document leaves the stored document, and its
+    revision, as they are: an import never removes a document.
+
+    ``config["json_metadata"]`` is replaced by the text that was stored, which
+    the model update then writes again unchanged.
+
+    :raises ImportFailedError: If the document is invalid, binds data the
+        importer may not author, or the write keeps losing against concurrent
+        writers
+    """
+    # pylint: disable=import-outside-toplevel
+    from superset.commands.dashboard_v2.exceptions import (
+        DashboardV2ConflictError,
+        DashboardV2InvalidError,
+    )
+    from superset.commands.dashboard_v2.save import store_replaced_json_metadata
+
+    if "json_metadata" not in config:
+        return
+    try:
+        config["json_metadata"] = store_replaced_json_metadata(
+            existing.id, config["json_metadata"], check_authoring=check_authoring
+        )
+    except (DashboardV2InvalidError, DashboardV2ConflictError) as ex:
+        _raise_for_v2_document_error(ex)
+
+
 def find_chart_uuids(position: dict[str, Any]) -> set[str]:
     return set(build_uuid_to_id_map(position))
 
@@ -480,6 +568,10 @@ def import_dashboard(  # noqa: C901
     if "metadata" in config and "show_native_filters" in config["metadata"]:
         del config["metadata"]["show_native_filters"]
 
+    # A document is checked against the authoring rule of the importing
+    # user; an import without one (CLI, example loading) is trusted.
+    _prepare_v2_document(config, existing, check_authoring=user is not None)
+
     # Note: theme_id handling moved to higher level import logic
 
     for key, new_name in JSON_KEYS.items():
@@ -491,6 +583,8 @@ def import_dashboard(  # noqa: C901
                 logger.info("Unable to encode `%s` field: %s", key, value)
 
     extra = config.pop("extra", None)
+    if existing is not None:
+        _store_overwritten_metadata(config, existing, check_authoring=user is not None)
     dashboard = Dashboard.import_from_dict(config, recursive=False)
     if dashboard.id is None:
         db.session.flush()

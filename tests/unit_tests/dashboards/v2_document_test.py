@@ -1,0 +1,871 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+"""The classic dashboard paths and the Dashboard v2 document.
+
+The Dashboard v2 API is the only writer of the document. A classic update
+ignores an incoming one and carries the stored one forward, as do the native
+filter, chart customization, color and MCP metadata writers; a copy takes the
+source's stored document, an export carries it only for a caller who may read
+it, an import validates it and stamps a fresh revision, and the classic read
+never returns it."""
+
+from __future__ import annotations
+
+import copy
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
+from pytest_mock import MockerFixture
+from sqlalchemy.orm.session import Session
+
+from superset import security_manager
+from superset.commands.exceptions import ImportFailedError
+from superset.dashboard_v2 import storage
+from superset.utils import json
+from tests.integration_tests.fixtures.importexport import dashboard_config
+from tests.unit_tests.dashboard_v2.conftest import make_document
+
+V2_ID = 100
+
+
+def _stored(revision: int, *children: str) -> dict[str, Any]:
+    document = make_document(*children)
+    return {"version": 1, "revision": revision, "nodes": document["nodes"]}
+
+
+def _metadata(session: Session, pk: int = V2_ID) -> dict[str, Any]:
+    from superset.models.dashboard import Dashboard
+
+    session.flush()
+    session.expire_all()
+    dashboard = session.get(Dashboard, pk)
+    assert dashboard is not None
+    return json.loads(dashboard.json_metadata)
+
+
+@pytest.fixture
+def v2_dashboard(session: Session) -> Iterator[Any]:
+    """A v2 dashboard at revision 3 with one other metadata key."""
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    dashboard = Dashboard(
+        id=V2_ID,
+        dashboard_title="Sales",
+        slices=[],
+        published=True,
+        json_metadata=json.dumps(
+            {"color_scheme": "old", "v2_document": _stored(3, "kept")}
+        ),
+    )
+    session.add(dashboard)
+    session.flush()
+    yield dashboard
+    session.rollback()
+
+
+# --------------------------------------------------------------------------
+# Classic update (PUT /api/v1/dashboard/<id>, properties modal)
+# --------------------------------------------------------------------------
+
+
+def test_classic_update_ignores_an_incoming_document(
+    session: Session, v2_dashboard: Any
+) -> None:
+    """The properties modal sends back the metadata it loaded; a document in
+    it — stale, tampered with or rolled back — never replaces the stored one."""
+    from superset.daos.dashboard import DashboardDAO
+
+    DashboardDAO.set_dash_metadata(
+        v2_dashboard,
+        {"color_scheme": "new", "v2_document": _stored(1, "attacker")},
+    )
+
+    metadata = _metadata(session)
+    assert metadata["color_scheme"] == "new"
+    assert metadata["v2_document"] == _stored(3, "kept")
+
+
+def test_classic_update_without_a_document_keeps_the_stored_one(
+    session: Session, v2_dashboard: Any
+) -> None:
+    from superset.daos.dashboard import DashboardDAO
+
+    DashboardDAO.set_dash_metadata(v2_dashboard, {"color_scheme": "new"})
+
+    assert _metadata(session)["v2_document"] == _stored(3, "kept")
+
+
+def test_classic_update_cannot_roll_back_a_v2_save_made_after_it_loaded(
+    session: Session, v2_dashboard: Any
+) -> None:
+    """The session loaded revision 3; a Dashboard v2 save then stored revision
+    4. The classic update writes its own keys around the revision-4 document."""
+    from superset.daos.dashboard import DashboardDAO
+    from superset.models.dashboard import Dashboard
+
+    table = Dashboard.__table__
+    newer = json.dumps({"color_scheme": "old", "v2_document": _stored(4, "newer")})
+    session.execute(
+        table.update().where(table.c.id == V2_ID).values(json_metadata=newer)
+    )
+    assert json.loads(v2_dashboard.json_metadata)["v2_document"]["revision"] == 3
+
+    DashboardDAO.set_dash_metadata(
+        v2_dashboard, {"color_scheme": "new", "v2_document": _stored(3, "kept")}
+    )
+
+    metadata = _metadata(session)
+    assert metadata["color_scheme"] == "new"
+    assert metadata["v2_document"] == _stored(4, "newer")
+
+
+def test_classic_update_retries_when_a_v2_save_lands_during_its_write(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any
+) -> None:
+    from superset.daos.dashboard import DashboardDAO
+    from superset.models.dashboard import Dashboard
+
+    table = Dashboard.__table__
+    stale = v2_dashboard.json_metadata
+    newer = json.dumps({"color_scheme": "old", "v2_document": _stored(4, "newer")})
+    session.execute(
+        table.update().where(table.c.id == V2_ID).values(json_metadata=newer)
+    )
+    mocker.patch.object(
+        storage, "read_current_json_metadata", side_effect=[stale, newer]
+    )
+
+    DashboardDAO.set_dash_metadata(v2_dashboard, {"color_scheme": "new"})
+
+    assert _metadata(session)["v2_document"] == _stored(4, "newer")
+
+
+def test_classic_update_fails_rather_than_overwrite_when_it_keeps_losing(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any
+) -> None:
+    from superset.commands.dashboard.exceptions import DashboardUpdateFailedError
+    from superset.daos.dashboard import DashboardDAO
+
+    mocker.patch.object(storage, "compare_and_swap_json_metadata", return_value=False)
+
+    with pytest.raises(DashboardUpdateFailedError):
+        DashboardDAO.set_dash_metadata(v2_dashboard, {"color_scheme": "new"})
+
+    assert _metadata(session)["color_scheme"] == "old"
+
+
+def test_classic_dashboards_are_written_without_extra_queries(
+    mocker: MockerFixture, session: Session
+) -> None:
+    from superset.daos.dashboard import DashboardDAO
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    dashboard = Dashboard(id=7, dashboard_title="Classic", slices=[])
+    session.add(dashboard)
+    session.flush()
+    read = mocker.spy(storage, "read_current_json_metadata")
+
+    DashboardDAO.set_dash_metadata(
+        dashboard, {"color_scheme": "new", "v2_document": _stored(1, "smuggled")}
+    )
+
+    metadata = json.loads(dashboard.json_metadata)
+    assert metadata["color_scheme"] == "new"
+    assert "v2_document" not in metadata
+    read.assert_not_called()
+
+
+def test_json_metadata_schema_accepts_and_does_not_judge_a_document() -> None:
+    """A document echoed back by the properties modal must not fail the
+    request, whatever it holds: it is ignored further down."""
+    from superset.dashboards.schemas import DashboardJSONMetadataSchema
+
+    schema = DashboardJSONMetadataSchema()
+
+    assert schema.validate({"v2_document": _stored(3, "kept")}) == {}
+    assert schema.validate({"v2_document": {"nodes": "not even a tree"}}) == {}
+    assert schema.validate({"v2_document": None}) == {}
+
+
+# --------------------------------------------------------------------------
+# Classic read
+# --------------------------------------------------------------------------
+
+
+def test_classic_read_does_not_return_the_document() -> None:
+    from superset.dashboards.schemas import without_v2_document
+
+    json_metadata = json.dumps({"color_scheme": "x", "v2_document": _stored(3, "a")})
+
+    assert json.loads(without_v2_document(json_metadata)) == {"color_scheme": "x"}
+    assert without_v2_document('{"color_scheme": "x"}') == '{"color_scheme": "x"}'
+    assert without_v2_document("not json v2_document") == "not json v2_document"
+    assert without_v2_document(None) is None
+
+
+def test_dashboard_get_response_omits_the_document(mocker: MockerFixture) -> None:
+    from superset.dashboards.schemas import DashboardGetResponseSchema
+
+    mocker.patch.object(security_manager, "is_guest_user", return_value=False)
+    json_metadata = json.dumps({"color_scheme": "x", "v2_document": _stored(3, "a")})
+
+    dumped = DashboardGetResponseSchema().dump(
+        {"id": 1, "dashboard_title": "Sales", "json_metadata": json_metadata}
+    )
+
+    assert json.loads(dumped["json_metadata"]) == {"color_scheme": "x"}
+
+
+# --------------------------------------------------------------------------
+# The other classic writers of json_metadata
+# --------------------------------------------------------------------------
+
+
+def _store_newer_document(session: Session) -> None:
+    """A Dashboard v2 save lands after the session loaded revision 3."""
+    from superset.models.dashboard import Dashboard
+
+    table = Dashboard.__table__
+    newer = json.dumps({"color_scheme": "old", "v2_document": _stored(4, "newer")})
+    session.execute(
+        table.update().where(table.c.id == V2_ID).values(json_metadata=newer)
+    )
+
+
+def _update_native_filters(dashboard: Any) -> None:
+    from superset.daos.dashboard import DashboardDAO
+
+    DashboardDAO.update_native_filters_config(
+        dashboard, {"modified": [{"id": "NATIVE_FILTER-1", "targets": []}]}
+    )
+
+
+def _update_chart_customizations(dashboard: Any) -> None:
+    from superset.daos.dashboard import DashboardDAO
+
+    DashboardDAO.update_chart_customizations_config(
+        dashboard, {"modified": [{"id": "CUSTOMIZATION-1"}]}
+    )
+
+
+def _update_colors(dashboard: Any) -> None:
+    from superset.daos.dashboard import DashboardDAO
+
+    DashboardDAO.update_colors_config(dashboard, {"label_colors": {"a": "#fff"}})
+
+
+CLASSIC_WRITERS = [
+    pytest.param(
+        _update_native_filters,
+        ("native_filter_configuration", [{"id": "NATIVE_FILTER-1", "targets": []}]),
+        id="native_filters",
+    ),
+    pytest.param(
+        _update_chart_customizations,
+        ("chart_customization_config", [{"id": "CUSTOMIZATION-1"}]),
+        id="chart_customizations",
+    ),
+    pytest.param(_update_colors, ("label_colors", {"a": "#fff"}), id="colors"),
+]
+
+
+@pytest.mark.parametrize(("write", "expected"), CLASSIC_WRITERS)
+def test_classic_writer_keeps_the_stored_document(
+    session: Session, v2_dashboard: Any, write: Any, expected: tuple[str, Any]
+) -> None:
+    write(v2_dashboard)
+
+    metadata = _metadata(session)
+    assert metadata[expected[0]] == expected[1]
+    assert metadata["color_scheme"] == "old"
+    assert metadata["v2_document"] == _stored(3, "kept")
+
+
+@pytest.mark.parametrize(("write", "expected"), CLASSIC_WRITERS)
+def test_classic_writer_cannot_roll_back_a_v2_save_made_after_it_loaded(
+    session: Session, v2_dashboard: Any, write: Any, expected: tuple[str, Any]
+) -> None:
+    """The session still holds revision 3 when the writer runs; the document
+    it stores is the revision-4 one from the row."""
+    _store_newer_document(session)
+    assert json.loads(v2_dashboard.json_metadata)["v2_document"]["revision"] == 3
+
+    write(v2_dashboard)
+
+    metadata = _metadata(session)
+    assert metadata[expected[0]] == expected[1]
+    assert metadata["v2_document"] == _stored(4, "newer")
+
+
+@pytest.mark.parametrize(("write", "expected"), CLASSIC_WRITERS)
+def test_classic_writer_fails_rather_than_overwrite_when_it_keeps_losing(
+    mocker: MockerFixture,
+    session: Session,
+    v2_dashboard: Any,
+    write: Any,
+    expected: tuple[str, Any],
+) -> None:
+    from superset.commands.dashboard.exceptions import DashboardUpdateFailedError
+
+    mocker.patch.object(storage, "compare_and_swap_json_metadata", return_value=False)
+
+    with pytest.raises(DashboardUpdateFailedError):
+        write(v2_dashboard)
+
+    assert expected[0] not in _metadata(session)
+
+
+@pytest.mark.parametrize(("write", "expected"), CLASSIC_WRITERS)
+def test_classic_writer_of_a_classic_dashboard_runs_no_extra_queries(
+    mocker: MockerFixture, session: Session, write: Any, expected: tuple[str, Any]
+) -> None:
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    dashboard = Dashboard(id=7, dashboard_title="Classic", slices=[])
+    session.add(dashboard)
+    session.flush()
+    read = mocker.spy(storage, "read_current_json_metadata")
+
+    write(dashboard)
+
+    assert json.loads(dashboard.json_metadata)[expected[0]] == expected[1]
+    read.assert_not_called()
+
+
+def test_mcp_metadata_overrides_cannot_name_the_document() -> None:
+    from pydantic import ValidationError
+
+    from superset.mcp_service.dashboard.schemas import (
+        GenerateDashboardRequest,
+        UpdateDashboardRequest,
+    )
+
+    overrides = {"color_scheme": "x", "v2_document": _stored(1, "smuggled")}
+
+    with pytest.raises(ValidationError, match="v2_document"):
+        UpdateDashboardRequest(identifier=1, json_metadata_overrides=overrides)
+    with pytest.raises(ValidationError, match="v2_document"):
+        GenerateDashboardRequest(chart_ids=[1], json_metadata_overrides=overrides)
+    kept = UpdateDashboardRequest(
+        identifier=1, json_metadata_overrides={"color_scheme": "x"}
+    )
+    assert kept.json_metadata_overrides == {"color_scheme": "x"}
+
+
+def test_mcp_update_keeps_a_document_saved_after_the_dashboard_was_loaded(
+    session: Session, v2_dashboard: Any
+) -> None:
+    from superset.mcp_service.dashboard.schemas import UpdateDashboardRequest
+    from superset.mcp_service.dashboard.tool.update_dashboard import (
+        _apply_field_updates,
+    )
+
+    _store_newer_document(session)
+
+    changed = _apply_field_updates(
+        v2_dashboard,
+        UpdateDashboardRequest(
+            identifier=V2_ID, json_metadata_overrides={"color_scheme": "new"}
+        ),
+    )
+
+    assert changed == ["json_metadata"]
+    metadata = _metadata(session)
+    assert metadata["color_scheme"] == "new"
+    assert metadata["v2_document"] == _stored(4, "newer")
+
+
+# --------------------------------------------------------------------------
+# Export
+# --------------------------------------------------------------------------
+
+
+def _exported_metadata(dashboard: Any) -> dict[str, Any]:
+    import yaml
+
+    from superset.commands.dashboard.export import ExportDashboardsCommand
+
+    return yaml.safe_load(ExportDashboardsCommand._file_content(dashboard))["metadata"]
+
+
+def _caller(
+    mocker: MockerFixture, *, admin: bool = False, editor: bool = False
+) -> None:
+    mocker.patch.object(security_manager, "is_guest_user", return_value=False)
+    mocker.patch.object(security_manager, "is_admin", return_value=admin)
+    mocker.patch.object(security_manager, "is_editor", return_value=editor)
+    mocker.patch.object(security_manager, "is_viewer", return_value=False)
+
+
+def test_export_omits_the_document_for_a_caller_who_may_not_read_it(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any
+) -> None:
+    """The classic dashboard filter admits every authenticated user to a
+    published dashboard without charts; the document does not follow."""
+    _caller(mocker)
+
+    metadata = _exported_metadata(v2_dashboard)
+
+    assert metadata == {"color_scheme": "old"}
+    # The stored dashboard is untouched.
+    assert _metadata(session)["v2_document"] == _stored(3, "kept")
+
+
+@pytest.mark.parametrize("role", ["admin", "editor"])
+def test_export_carries_the_document_for_a_caller_who_may_read_it(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any, role: str
+) -> None:
+    _caller(mocker, **{role: True})
+
+    metadata = _exported_metadata(v2_dashboard)
+
+    assert metadata["v2_document"] == _stored(3, "kept")
+
+
+def test_export_applies_the_bound_dataset_rule(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any
+) -> None:
+    """Without editorship the document leaves only with access to every
+    dataset it binds, the rule of the Dashboard v2 read."""
+    from superset.dashboard_v2 import access
+
+    _caller(mocker)
+    document = _stored(3, "kept")
+    document["nodes"]["kept"] = {
+        "type": "echarts",
+        "props": {"dataBinding": {"datasetId": 17}},
+    }
+    v2_dashboard.json_metadata = json.dumps({"v2_document": document})
+    session.flush()
+    granted = mocker.patch.object(
+        access, "can_access_bound_datasets", return_value=False
+    )
+
+    assert "v2_document" not in _exported_metadata(v2_dashboard)
+    granted.assert_called_once_with({17})
+
+    granted.return_value = True
+    assert _exported_metadata(v2_dashboard)["v2_document"] == document
+
+
+def test_export_of_a_classic_dashboard_asks_no_document_question(
+    mocker: MockerFixture, session: Session
+) -> None:
+    from superset.commands.dashboard import export
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    dashboard = Dashboard(
+        id=9,
+        dashboard_title="Classic",
+        slices=[],
+        json_metadata=json.dumps({"color_scheme": "x"}),
+    )
+    session.add(dashboard)
+    session.flush()
+    rule = mocker.spy(export, "can_read_document")
+
+    assert _exported_metadata(dashboard) == {"color_scheme": "x"}
+    rule.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Copy ("Save as")
+# --------------------------------------------------------------------------
+
+
+def test_copy_takes_the_sources_stored_document_at_the_initial_revision(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any
+) -> None:
+    from superset.daos.dashboard import DashboardDAO
+
+    mocker.patch.object(security_manager, "is_editor", return_value=True)
+    mocker.patch.object(security_manager, "is_admin", return_value=True)
+
+    duplicate = DashboardDAO.copy_dashboard(
+        v2_dashboard,
+        {
+            "dashboard_title": "Sales (copy)",
+            "json_metadata": json.dumps(
+                {"color_scheme": "old", "v2_document": _stored(9, "from_request")}
+            ),
+        },
+    )
+
+    assert duplicate.id != V2_ID
+    assert _metadata(session, duplicate.id)["v2_document"] == _stored(1, "kept")
+    assert _metadata(session)["v2_document"] == _stored(3, "kept")
+
+
+def test_copy_of_a_classic_dashboard_gets_no_document(
+    mocker: MockerFixture, session: Session
+) -> None:
+    from superset.daos.dashboard import DashboardDAO
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    source = Dashboard(id=8, dashboard_title="Classic", slices=[], json_metadata="{}")
+    session.add(source)
+    session.flush()
+    mocker.patch.object(security_manager, "is_editor", return_value=True)
+    mocker.patch.object(security_manager, "is_admin", return_value=True)
+
+    duplicate = DashboardDAO.copy_dashboard(
+        source,
+        {
+            "dashboard_title": "Classic (copy)",
+            "json_metadata": json.dumps({"v2_document": _stored(1, "smuggled")}),
+        },
+    )
+
+    assert "v2_document" not in json.loads(duplicate.json_metadata)
+
+
+# --------------------------------------------------------------------------
+# Import
+# --------------------------------------------------------------------------
+
+
+def _import_config(document: Any) -> dict[str, Any]:
+    config = copy.deepcopy(dashboard_config)
+    config["metadata"] = {**(config.get("metadata") or {}), "v2_document": document}
+    return config
+
+
+@pytest.fixture
+def import_session(session: Session, mocker: MockerFixture) -> Iterator[Session]:
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    mocker.patch.object(security_manager, "can_access", return_value=True)
+    yield session
+    session.rollback()
+
+
+def test_import_validates_the_document_and_starts_at_the_initial_revision(
+    import_session: Session,
+) -> None:
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+
+    config = _import_config(_stored(41, "imported"))
+
+    dashboard = import_dashboard(config)
+
+    assert json.loads(dashboard.json_metadata)["v2_document"] == _stored(1, "imported")
+    # The caller's config is left as it was.
+    assert config["metadata"]["v2_document"]["revision"] == 41
+
+
+def test_import_over_a_v2_dashboard_moves_past_the_stored_revision(
+    import_session: Session,
+) -> None:
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    import_session.add(
+        Dashboard(
+            dashboard_title="Existing",
+            slices=[],
+            uuid=dashboard_config["uuid"],
+            json_metadata=json.dumps({"v2_document": _stored(5, "old")}),
+        )
+    )
+    import_session.flush()
+
+    dashboard = import_dashboard(_import_config(_stored(2, "new")), overwrite=True)
+
+    assert json.loads(dashboard.json_metadata)["v2_document"] == _stored(6, "new")
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        (
+            {"nodes": {"root": {"type": "grid", "children": ["ghost"]}}},
+            "unknown children",
+        ),
+        (
+            {
+                "nodes": {
+                    "root": {"type": "grid", "children": ["a"]},
+                    "a": {"type": "no-such-widget"},
+                }
+            },
+            "unknown type",
+        ),
+        (
+            {
+                "nodes": {
+                    "root": {"type": "grid", "children": ["a"]},
+                    "a": {"type": "markdown", "props": {"content": 5}},
+                }
+            },
+            "Widget props failed validation",
+        ),
+    ],
+)
+def test_import_of_an_invalid_document_fails(
+    import_session: Session, document: dict[str, Any], message: str
+) -> None:
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    with pytest.raises(ImportFailedError, match=message):
+        import_dashboard(_import_config(document))
+
+    assert import_session.query(Dashboard).count() == 0
+
+
+def test_import_without_a_document_is_untouched(import_session: Session) -> None:
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+
+    dashboard = import_dashboard(copy.deepcopy(dashboard_config))
+
+    assert "v2_document" not in json.loads(dashboard.json_metadata or "{}")
+
+
+def test_import_without_a_document_over_a_v2_dashboard_keeps_the_stored_one(
+    import_session: Session,
+) -> None:
+    """An import never removes a document, so its revision numbers can never
+    start over: a file without one leaves document and revision as stored."""
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    import_session.add(
+        Dashboard(
+            dashboard_title="Existing",
+            slices=[],
+            uuid=dashboard_config["uuid"],
+            json_metadata=json.dumps({"v2_document": _stored(5, "old")}),
+        )
+    )
+    import_session.flush()
+    config = copy.deepcopy(dashboard_config)
+    config["metadata"] = {**(config.get("metadata") or {}), "color_scheme": "new"}
+
+    without_key = import_dashboard(config, overwrite=True)
+
+    assert json.loads(without_key.json_metadata)["v2_document"] == _stored(5, "old")
+    assert json.loads(without_key.json_metadata)["color_scheme"] == "new"
+
+    with_null = import_dashboard(_import_config(None), overwrite=True)
+
+    assert json.loads(with_null.json_metadata)["v2_document"] == _stored(5, "old")
+
+
+def test_import_over_a_v2_dashboard_counts_from_the_row_not_the_loaded_copy(
+    import_session: Session,
+) -> None:
+    """A save that landed after the import loaded the dashboard still counts:
+    the imported document goes one past it."""
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    existing = Dashboard(
+        dashboard_title="Existing",
+        slices=[],
+        uuid=dashboard_config["uuid"],
+        json_metadata=json.dumps({"v2_document": _stored(5, "old")}),
+    )
+    import_session.add(existing)
+    import_session.flush()
+    table = Dashboard.__table__
+    import_session.execute(
+        table.update()
+        .where(table.c.id == existing.id)
+        .values(json_metadata=json.dumps({"v2_document": _stored(9, "meanwhile")}))
+    )
+
+    dashboard = import_dashboard(_import_config(_stored(2, "new")), overwrite=True)
+
+    assert json.loads(dashboard.json_metadata)["v2_document"] == _stored(10, "new")
+    assert _metadata(import_session, existing.id)["v2_document"] == _stored(10, "new")
+
+
+def _bound_document() -> dict[str, Any]:
+    document = make_document("chart")
+    document["nodes"]["chart"] = {
+        "type": "echarts",
+        "props": {"dataBinding": {"datasetId": 7}},
+    }
+    return document
+
+
+def test_import_applies_the_authoring_rule_of_the_importing_user(
+    import_session: Session, mocker: MockerFixture
+) -> None:
+    from superset.commands.dashboard.importers.v1 import utils
+    from superset.commands.widget.exceptions import SavedWidgetForbiddenError
+    from superset.models.dashboard import Dashboard
+
+    mocker.patch.object(utils, "get_user", return_value=mocker.MagicMock(id=1))
+    mocker.patch(
+        "superset.commands.dashboard_v2.save.raise_for_widget_authoring",
+        side_effect=SavedWidgetForbiddenError(),
+    )
+
+    with pytest.raises(ImportFailedError, match="chart"):
+        utils.import_dashboard(_import_config(_bound_document()))
+
+    assert import_session.query(Dashboard).count() == 0
+
+
+def test_import_without_a_user_is_not_asked_the_authoring_rule(
+    import_session: Session, mocker: MockerFixture
+) -> None:
+    from superset.commands.dashboard.importers.v1.utils import import_dashboard
+
+    rule = mocker.patch(
+        "superset.commands.dashboard_v2.save.raise_for_widget_authoring"
+    )
+
+    dashboard = import_dashboard(_import_config(_bound_document()))
+
+    assert json.loads(dashboard.json_metadata)["v2_document"]["revision"] == 1
+    rule.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Classic create (POST /api/v1/dashboard/)
+# --------------------------------------------------------------------------
+
+#: What a caller of the classic API could try to store: a revision of its own
+#: choosing, an unknown type and a cyclic, dangling tree.
+SMUGGLED = {
+    "version": 1,
+    "revision": 41,
+    "nodes": {
+        "root": {"type": "grid", "children": ["a"]},
+        "a": {"type": "no-such-type", "children": ["a", "root", "ghost"]},
+    },
+}
+
+
+def test_classic_create_schema_drops_an_incoming_document(app_context: None) -> None:
+    from superset.dashboards.schemas import DashboardPostSchema
+
+    loaded = DashboardPostSchema().load(
+        {
+            "dashboard_title": "Classic",
+            "json_metadata": json.dumps({"color_scheme": "x", "v2_document": SMUGGLED}),
+        }
+    )
+
+    assert json.loads(loaded["json_metadata"]) == {"color_scheme": "x"}
+
+
+def test_classic_create_command_never_stores_an_incoming_document(
+    session: Session, mocker: MockerFixture
+) -> None:
+    """The real command, called past the schema with the raw metadata."""
+    from superset.commands.dashboard.create import CreateDashboardCommand
+    from superset.dashboard_v2.document import load_stored_document
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    mocker.patch("superset.commands.dashboard.create.populate_subjects")
+
+    created = CreateDashboardCommand(
+        {
+            "dashboard_title": "Classic",
+            "json_metadata": json.dumps({"color_scheme": "x", "v2_document": SMUGGLED}),
+        }
+    ).run()
+
+    stored = _metadata(session, created.id)
+    assert "v2_document" not in stored
+    assert stored["color_scheme"] == "x"
+    row = session.get(Dashboard, created.id)
+    assert row is not None
+    assert load_stored_document(row.json_metadata) is None
+
+
+# --------------------------------------------------------------------------
+# Copy: the document is added once, and only for a caller who may read it
+# --------------------------------------------------------------------------
+
+
+def test_copy_carries_no_document_for_a_caller_who_may_not_read_it(
+    mocker: MockerFixture, session: Session, v2_dashboard: Any
+) -> None:
+    """The seed taken from the source never holds the document, so the read
+    rule alone decides whether the copy gets one."""
+    from superset.daos import dashboard as dao
+
+    mocker.patch.object(security_manager, "is_editor", return_value=True)
+    mocker.patch.object(security_manager, "is_admin", return_value=True)
+    mocker.patch.object(dao, "can_read_document", return_value=False)
+
+    duplicate = dao.DashboardDAO.copy_dashboard(
+        v2_dashboard,
+        {
+            "dashboard_title": "Sales (copy)",
+            "json_metadata": json.dumps({"color_scheme": "old"}),
+        },
+    )
+
+    metadata = _metadata(session, duplicate.id)
+    assert "v2_document" not in metadata
+    assert metadata["color_scheme"] == "old"
+
+
+# --------------------------------------------------------------------------
+# Legacy (v0) import
+# --------------------------------------------------------------------------
+
+
+def test_legacy_import_drops_a_document_from_the_file_and_keeps_the_stored_one(
+    session: Session, mocker: MockerFixture
+) -> None:
+    from superset.commands.dashboard.importers.v0 import import_dashboard
+    from superset.models.dashboard import Dashboard
+
+    Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
+    mocker.patch("superset.commands.dashboard.importers.v0.migrate_dashboard")
+    session.add(
+        Dashboard(
+            id=V2_ID,
+            dashboard_title="Existing",
+            slices=[],
+            json_metadata=json.dumps(
+                {"remote_id": 555, "v2_document": _stored(3, "kept")}
+            ),
+        )
+    )
+    session.flush()
+
+    def from_file(remote_id: int) -> Dashboard:
+        return Dashboard(
+            id=remote_id,
+            dashboard_title="From a file",
+            slices=[],
+            json_metadata=json.dumps({"color_scheme": "x", "v2_document": SMUGGLED}),
+        )
+
+    overwritten = import_dashboard(from_file(555), import_time=1)
+    created = import_dashboard(from_file(556), import_time=1)
+
+    assert overwritten == V2_ID
+    metadata = _metadata(session)
+    assert metadata["v2_document"] == _stored(3, "kept")
+    assert metadata["color_scheme"] == "x"
+    assert "v2_document" not in _metadata(session, created)

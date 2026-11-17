@@ -656,6 +656,22 @@
       "input_schema_bytes": 374,
       "output_schema_bytes": 1695
     },
+    "get_saved_widget": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": null,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "compact_description_chars": 285,
+      "description_chars": 382,
+      "entry_bytes": {
+        "structured": 2023,
+        "text_only": 919
+      },
+      "input_schema_bytes": 285,
+      "output_schema_bytes": 1088
+    },
     "get_schema": {
       "annotations": {
         "destructiveHint": false,
@@ -751,6 +767,38 @@
       },
       "input_schema_bytes": 269,
       "output_schema_bytes": 1528
+    },
+    "get_widget_control_schema": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": null,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "compact_description_chars": 86,
+      "description_chars": 897,
+      "entry_bytes": {
+        "structured": 3400,
+        "text_only": 2069
+      },
+      "input_schema_bytes": 879,
+      "output_schema_bytes": 1315
+    },
+    "get_widget_data": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": null,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "compact_description_chars": 298,
+      "description_chars": 683,
+      "entry_bytes": {
+        "structured": 2737,
+        "text_only": 1874
+      },
+      "input_schema_bytes": 924,
+      "output_schema_bytes": 847
     },
     "health_check": {
       "annotations": {
@@ -960,6 +1008,22 @@
       "input_schema_bytes": 2040,
       "output_schema_bytes": 4036
     },
+    "list_saved_widgets": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": null,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "compact_description_chars": 266,
+      "description_chars": 295,
+      "entry_bytes": {
+        "structured": 2454,
+        "text_only": 980
+      },
+      "input_schema_bytes": 428,
+      "output_schema_bytes": 1458
+    },
     "list_semantic_views": {
       "annotations": {
         "destructiveHint": false,
@@ -1039,6 +1103,22 @@
       },
       "input_schema_bytes": 2020,
       "output_schema_bytes": 3842
+    },
+    "list_widget_types": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": null,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "compact_description_chars": 250,
+      "description_chars": 271,
+      "entry_bytes": {
+        "structured": 1682,
+        "text_only": 600
+      },
+      "input_schema_bytes": 62,
+      "output_schema_bytes": 1066
     },
     "manage_dashboard_certification": {
       "annotations": {
@@ -1331,12 +1411,12 @@
   },
   "totals": {
     "catalog_bytes": {
-      "structured": 555469,
-      "text_only": 228596
+      "structured": 567770,
+      "text_only": 235043
     },
     "compact_catalog_bytes": {
-      "structured": 497902,
-      "text_only": 171029
+      "structured": 508797,
+      "text_only": 176070
     },
     "largest_entry": {
       "structured": {
@@ -1348,6 +1428,6 @@
         "name": "manage_native_filters"
       }
     },
-    "tool_count": 83
+    "tool_count": 88
   }
 }

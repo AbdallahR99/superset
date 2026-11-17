@@ -405,9 +405,13 @@ def remove_chart_from_dashboard(  # noqa: C901 — complexity is structural (lay
             from superset import db
 
             try:
-                updated_dashboard.json_metadata = json.dumps(metadata)
+                updated_dashboard.json_metadata = (
+                    DashboardDAO.metadata_keeping_v2_document(
+                        updated_dashboard, metadata
+                    )
+                )
                 db.session.commit()  # pylint: disable=consider-using-transaction
-            except SQLAlchemyError:
+            except (SQLAlchemyError, CommandException):
                 logger.warning(
                     "json_metadata cleanup commit failed for dashboard %s after "
                     "removing chart %s; chart removal succeeded",

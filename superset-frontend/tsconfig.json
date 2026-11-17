@@ -58,6 +58,8 @@
       "@superset-ui/switchboard": ["./packages/superset-ui-switchboard/src"],
       "@apache-superset/core": ["./packages/superset-core/src"],
       "@apache-superset/core/*": ["./packages/superset-core/src/*"],
+      "@apache-superset/widgets": ["./packages/superset-widgets/src"],
+      "@apache-superset/widgets/*": ["./packages/superset-widgets/src/*"],
       "@superset-ui/plugin-chart-*": ["./plugins/plugin-chart-*/src"],
       "@superset-ui/preset-chart-*": ["./plugins/preset-chart-*/src"],
       "echarts/types/src/*": ["./node_modules/echarts/types/src/*"],
@@ -78,6 +80,7 @@
   ],
   "references": [
     { "path": "./packages/superset-core" },
+    { "path": "./packages/superset-widgets" },
     { "path": "./packages/superset-ui-core" },
     { "path": "./packages/superset-ui-chart-controls" },
     { "path": "./packages/superset-ui-switchboard" },
@@ -106,6 +109,8 @@
     "packages/**/lib/**/*",
     "packages/**/esm/**/*",
     "plugins/**/lib/**/*",
-    "plugins/**/esm/**/*"
+    "plugins/**/esm/**/*",
+    // A standalone Vite app with its own tsconfig, toolchain and node_modules.
+    "./packages/superset-widgets/example"
   ]
 }

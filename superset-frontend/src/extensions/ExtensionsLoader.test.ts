@@ -324,6 +324,113 @@ test('each extension gets an isolated getContext via module federation custom sc
   cleanupWebpackSharing();
 });
 
+/** Loads one extension whose entry module evaluates to `entry`. */
+async function loadExtensionWithEntry(
+  id: string,
+  evaluate: () => unknown,
+): Promise<{ succeeded: boolean; restore: () => void }> {
+  const loader = ExtensionsLoader.getInstance();
+  const appendChildSpy = mockRemoteEntryLoad();
+  mockWebpackSharing({
+    '0.1.0': { get: () => Promise.resolve(() => ({})) },
+  });
+  const containerName = `container_${id}`;
+  const globals = window as unknown as Record<string, unknown>;
+  globals[containerName] = {
+    init: jest.fn().mockResolvedValue(undefined),
+    get: jest.fn().mockResolvedValue(evaluate),
+  };
+  const succeeded = await loader.initializeExtension(
+    createMockExtension({
+      id,
+      remoteEntry: `http://${id}/remoteEntry.js`,
+      moduleFederationName: containerName,
+    }),
+  );
+  return {
+    succeeded,
+    restore: () => {
+      appendChildSpy.mockRestore();
+      delete globals[containerName];
+      cleanupWebpackSharing();
+    },
+  };
+}
+
+test('calls an exported activate with the core scoped to that extension', async () => {
+  const order: string[] = [];
+  const activate = jest.fn(async (core: Namespaces) => {
+    order.push(`activated:${core.extensions.getContext().extension.id}`);
+  });
+
+  const { succeeded, restore } = await loadExtensionWithEntry(
+    'org.activating',
+    () => {
+      order.push('imported');
+      return { activate };
+    },
+  );
+
+  expect(succeeded).toBe(true);
+  expect(activate).toHaveBeenCalledTimes(1);
+  // After the module was imported, and with this extension's own context.
+  expect(order).toEqual(['imported', 'activated:org.activating']);
+  // The shared host APIs are the ones every extension gets.
+  expect(activate.mock.calls[0][0].commands).toBe(window.superset.commands);
+  expect(ExtensionsLoader.getInstance().getExtension('org.activating')).toEqual(
+    expect.objectContaining({ id: 'org.activating' }),
+  );
+  restore();
+});
+
+test('an extension that only registers on import still loads without an activate export', async () => {
+  const registerCommand = window.superset.commands
+    .registerCommand as unknown as jest.Mock;
+
+  const first = await loadExtensionWithEntry('org.side-effect', () => {
+    registerCommand('org.side-effect.hello');
+    // A module with exports, none of which is `activate`.
+    return { somethingElse: 1 };
+  });
+  const second = await loadExtensionWithEntry('org.no-exports', () => {
+    registerCommand('org.no-exports.hello');
+    return undefined;
+  });
+
+  expect(first.succeeded).toBe(true);
+  expect(second.succeeded).toBe(true);
+  expect(registerCommand.mock.calls.map(([id]) => id)).toEqual([
+    'org.side-effect.hello',
+    'org.no-exports.hello',
+  ]);
+  first.restore();
+  second.restore();
+});
+
+test('an activate that fails marks the extension as not initialized', async () => {
+  const errorSpy = jest.spyOn(logging, 'error').mockImplementation();
+
+  const { succeeded, restore } = await loadExtensionWithEntry(
+    'org.failing',
+    () => ({
+      activate: () => {
+        throw new Error('activate blew up');
+      },
+    }),
+  );
+
+  expect(succeeded).toBe(false);
+  expect(errorSpy).toHaveBeenCalledWith(
+    expect.stringContaining('Failed to initialize extension'),
+    expect.objectContaining({ message: 'activate blew up' }),
+  );
+  expect(
+    ExtensionsLoader.getInstance().getExtension('org.failing'),
+  ).toBeUndefined();
+  errorSpy.mockRestore();
+  restore();
+});
+
 test('throws when the container is missing from window', async () => {
   const loader = ExtensionsLoader.getInstance();
   const errorSpy = jest.spyOn(logging, 'error').mockImplementation();

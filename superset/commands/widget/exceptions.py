@@ -1,0 +1,92 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+from __future__ import annotations
+
+from typing import Any
+
+from flask_babel import lazy_gettext as _
+
+from superset.commands.dashboard.embedded.exceptions import (
+    EmbeddedDashboardAccessDeniedError,
+)
+from superset.commands.exceptions import (
+    CommandException,
+    CreateFailedError,
+    DeleteFailedError,
+    ForbiddenError,
+    ObjectNotFoundError,
+    UpdateFailedError,
+)
+
+
+class SavedWidgetNotFoundError(ObjectNotFoundError):
+    def __init__(self, identifier: str | None = None) -> None:
+        super().__init__("Widget", identifier)
+
+
+class SavedWidgetForbiddenError(ForbiddenError):
+    message = _("You don't have access to this widget.")
+
+
+class SavedWidgetGuestTokenDeniedError(EmbeddedDashboardAccessDeniedError):
+    """
+    The principal minting a guest token may not read the data it would grant.
+
+    Subclasses the embedded-dashboard denial so the guest token endpoint
+    answers it with the same 403 it gives for a dashboard the minter cannot
+    access.
+    """
+
+    message = _("You don't have access to the data this guest token would grant.")
+
+
+class WidgetSqlForbiddenError(ForbiddenError):
+    """The widget definition carries SQL its author is not allowed to write."""
+
+    message = _("You are not allowed to use SQL expressions in a widget.")
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or str(self.message))
+
+
+class WidgetInvalidError(CommandException):
+    status = 400
+
+    def __init__(self, message: str, errors: Any = None) -> None:
+        super().__init__(message)
+        self.errors = errors
+
+
+class WidgetDatasetNotFoundError(WidgetInvalidError):
+    """
+    The dataset a widget reads does not exist, typically because it was
+    deleted after the widget was saved. Answered as a missing object.
+    """
+
+    status = 404
+
+
+class SavedWidgetCreateFailedError(CreateFailedError):
+    message = _("Widget could not be created.")
+
+
+class SavedWidgetUpdateFailedError(UpdateFailedError):
+    message = _("Widget could not be updated.")
+
+
+class SavedWidgetDeleteFailedError(DeleteFailedError):
+    message = _("Widget could not be deleted.")

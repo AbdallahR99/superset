@@ -91,6 +91,7 @@
   },
   "dependencies": {
     "@apache-superset/core": "file:packages/superset-core",
+    "@apache-superset/widgets": "file:packages/superset-widgets",
     "@braintree/sanitize-url": "^7.1.2",
     "@deck.gl/aggregation-layers": "~9.4.0",
     "@deck.gl/core": "~9.4.0",
@@ -174,6 +175,7 @@
     "geostyler-style": "11.0.2",
     "geostyler-wfs-parser": "^3.0.1",
     "google-auth-library": "^11.1.0",
+    "gridstack": "^13.0.2",
     "html2canvas": "^1.4.1",
     "immer": "^11.1.21",
     "interweave": "^13.1.1",

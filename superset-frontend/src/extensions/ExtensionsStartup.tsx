@@ -25,6 +25,7 @@ import {
   chat,
   core,
   commands,
+  dashboard,
   editors,
   extensions,
   menus,
@@ -59,6 +60,14 @@ const ExtensionsStartup: React.FC<{ children?: React.ReactNode }> = ({
       chat,
       core,
       commands,
+      // The Dashboard v2 API is part of the contract only where Dashboard v2
+      // is turned on. With the flag off extensions are given no handle on a
+      // node tree no page renders, and the key is set rather than left out
+      // because the core package spread above carries a declaration-only
+      // `dashboard` of its own that would otherwise stand in for it.
+      dashboard: isFeatureEnabled(FeatureFlag.DashboardV2)
+        ? dashboard
+        : undefined,
       editors,
       extensions,
       menus,

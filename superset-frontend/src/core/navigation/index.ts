@@ -41,6 +41,12 @@ const PAGE_ROUTES: { path: string; page: Page }[] = [
   // greedily capture `/dashboard/list/` (idOrSlug='list'), so the more specific
   // list route has to win first — mirroring the `routes.tsx` Switch precedence.
   { path: RoutePaths.DASHBOARD_LIST, page: 'dashboard_list' },
+  // Both Dashboard v2 routes sit under the classic dashboard's own prefix
+  // (`/dashboard/v2/new/`, `/dashboard/v2/:dashboardId/`), so each has to be
+  // tried before `/dashboard/:idOrSlug/`, which would otherwise take them
+  // with idOrSlug='v2' and report a saved v2 dashboard as a classic one.
+  { path: RoutePaths.DASHBOARD_V2_NEW, page: 'dashboard_v2' },
+  { path: RoutePaths.DASHBOARD_V2, page: 'dashboard_v2' },
   { path: RoutePaths.DASHBOARD, page: 'dashboard' },
   { path: RoutePaths.QUERY_HISTORY, page: 'query_history' },
   { path: RoutePaths.SAVED_QUERIES, page: 'saved_queries' },

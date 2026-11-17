@@ -206,6 +206,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         from superset.charts.api import ChartRestApi
         from superset.charts.data.api import ChartDataRestApi
         from superset.css_templates.api import CssTemplateRestApi
+        from superset.dashboard_v2.api import DashboardV2RestApi
         from superset.dashboards.api import DashboardRestApi
         from superset.dashboards.filter_state.api import DashboardFilterStateRestApi
         from superset.dashboards.permalink.api import DashboardPermalinkRestApi
@@ -247,6 +248,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         from superset.views.css_templates import CssTemplateModelView
         from superset.views.dashboard.views import (
             Dashboard,
+            DashboardBuilderV2View,
             DashboardModelView,
         )
         from superset.views.database.views import DatabaseView
@@ -277,6 +279,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         from superset.views.user_registrations import UserRegistrationsView
         from superset.views.users.api import CurrentUserRestApi, UserRestApi
         from superset.views.users_list import UsersListView
+        from superset.widgets.api import SavedWidgetRestApi, WidgetControlsRestApi
 
         set_app_error_handlers(self.superset_app)
         self.register_request_handlers()
@@ -296,6 +299,22 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         appbuilder.add_api(CacheRestApi)
         appbuilder.add_api(ChartRestApi)
         appbuilder.add_api(ChartDataRestApi)
+        appbuilder.add_api(WidgetControlsRestApi)
+        appbuilder.add_api(SavedWidgetRestApi)
+        appbuilder.add_api(DashboardV2RestApi)
+        # Dashboard V2, saved widgets and the widget control schemas are one
+        # feature: all of their routes answer 404 unless DASHBOARD_V2 is on.
+        from superset.dashboard_v2.feature import register_dashboard_v2_gate
+
+        register_dashboard_v2_gate(
+            self.superset_app,
+            (
+                WidgetControlsRestApi,
+                SavedWidgetRestApi,
+                DashboardV2RestApi,
+                DashboardBuilderV2View,
+            ),
+        )
         appbuilder.add_api(CssTemplateRestApi)
         appbuilder.add_api(ThemeRestApi)
         appbuilder.add_api(CurrentUserRestApi)
@@ -499,6 +518,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         #
         appbuilder.add_view_no_menu(Api)
         appbuilder.add_view_no_menu(Dashboard)
+        appbuilder.add_view_no_menu(DashboardBuilderV2View)
         appbuilder.add_view_no_menu(Datasource)
         appbuilder.add_view_no_menu(DatasetEditor)
         appbuilder.add_view_no_menu(EmbeddedView)

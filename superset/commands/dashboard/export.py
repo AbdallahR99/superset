@@ -34,6 +34,8 @@ from superset.commands.export.models import (
 )
 from superset.commands.dataset.export import ExportDatasetsCommand
 from superset.daos.dataset import DatasetDAO
+from superset.dashboard_v2.access import can_read_document
+from superset.dashboard_v2.document import V2_DOCUMENT_KEY
 from superset.dashboards.dataset_references import (
     coerce_dataset_id as _coerce_dataset_id,
     dashboard_dataset_ids,
@@ -293,6 +295,24 @@ def _stabilize_chart_ids(payload: dict[str, Any]) -> None:
         metadata["chart_configuration"] = new_chart_configuration
 
 
+def _drop_unreadable_v2_document(model: Dashboard, metadata: dict[str, Any]) -> None:
+    """Remove the Dashboard v2 document from ``metadata`` unless the caller
+    may read it.
+
+    The export is open to everyone who passes the classic dashboard filter,
+    which for a published dashboard without member charts is every
+    authenticated user. The document holds dataset bindings, SQL expressions
+    and filter literals, so it leaves with the bundle only under the rule the
+    Dashboard v2 API applies to a read (``can_read_document``); for anyone
+    else the dashboard is exported without it.
+    """
+    if V2_DOCUMENT_KEY not in metadata:
+        return
+    document = metadata[V2_DOCUMENT_KEY]
+    if not can_read_document(model, document if isinstance(document, dict) else {}):
+        del metadata[V2_DOCUMENT_KEY]
+
+
 class ExportDashboardsCommand(ExportModelsCommand):
     dao = DashboardDAO
     not_found = DashboardNotFoundError
@@ -323,6 +343,7 @@ class ExportDashboardsCommand(ExportModelsCommand):
                     payload[new_name] = {}
 
         metadata = payload.get("metadata") or {}
+        _drop_unreadable_v2_document(model, metadata)
         export_dashboard_references(metadata)
 
         referenced_dataset_ids = dashboard_dataset_ids(metadata)

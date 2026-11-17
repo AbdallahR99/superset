@@ -97,6 +97,7 @@ TOOL_BUDGETS = {
     "get_rls_filter_info": 1_000,
     "get_role_info": 900,
     "get_saved_query_info": 1_200,
+    "get_saved_widget": 1_000,
     "get_schema": 1_100,
     # Includes semantic_selection_version and its explicit-reselection guidance:
     # 3,957 bytes, rounded up plus the standard 100-byte headroom.
@@ -105,6 +106,8 @@ TOOL_BUDGETS = {
     "get_task_info": 1_100,
     "get_theme_info": 1_000,
     "get_user_info": 1_000,
+    "get_widget_control_schema": 1_500,
+    "get_widget_data": 1_700,
     "health_check": 700,
     "list_annotation_layers": 2_700,
     # Include the deleted_state edit/restore audience and under-enumeration
@@ -122,11 +125,13 @@ TOOL_BUDGETS = {
     "list_rls_filters": 2_600,
     "list_roles": 2_700,
     "list_saved_queries": 3_000,
+    "list_saved_widgets": 1_200,
     "list_semantic_views": 1_200,  # Compact source index: 1,074 measured bytes.
     "list_tags": 3_100,
     "list_tasks": 2_700,
     "list_themes": 3_000,
     "list_users": 2_900,
+    "list_widget_types": 700,
     "manage_dashboard_certification": 1_900,
     "manage_dashboard_markdown": 7_000,
     "manage_dashboard_owners": 2_200,

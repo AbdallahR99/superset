@@ -37,6 +37,7 @@ from superset.utils.core import GenericDataType
 
 if TYPE_CHECKING:
     from superset.models.helpers import QueryResult
+    from superset.widgets.data import WidgetContext
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,10 @@ class QueryContext:
     is_async_execution: bool = False
 
     cache_values: dict[str, Any]
+
+    # Set only server-side, when a widget builds its own query, never from a
+    # request payload; raise_for_access trusts it to authorize guest access.
+    widget_context: WidgetContext | None = None
 
     _processor: QueryContextProcessor
 

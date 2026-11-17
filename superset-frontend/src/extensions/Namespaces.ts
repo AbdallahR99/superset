@@ -31,6 +31,7 @@ import type {
   chat,
   commands,
   core,
+  dashboard,
   editors,
   extensions,
   menus,
@@ -45,6 +46,8 @@ export interface Namespaces {
   core: typeof core;
   chat: typeof chat;
   commands: typeof commands;
+  /** Present only when the `DASHBOARD_V2` feature flag is on. */
+  dashboard?: typeof dashboard;
   editors: typeof editors;
   extensions: typeof extensions;
   menus: typeof menus;

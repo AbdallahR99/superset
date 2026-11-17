@@ -249,6 +249,20 @@ SUPERSET_DASHBOARD_PERIODICAL_REFRESH_WARNING_MESSAGE = None
 SUPERSET_DASHBOARD_MANUAL_REFRESH_STAGGER_MS: int = 0
 
 SUPERSET_DASHBOARD_POSITION_DATA_LIMIT = 65535
+
+# Limits on a Dashboard V2 document (feature flag DASHBOARD_V2), enforced on
+# every save and import. The first two are also sent to the frontend in the
+# common bootstrap payload so the builder applies the same bounds.
+#
+# Maximum number of nodes in one document, the root included.
+DASHBOARD_V2_MAX_NODES = 500
+# Maximum distance of any node from the root (the root is at depth 0).
+DASHBOARD_V2_MAX_DEPTH = 16
+# Maximum size in bytes of a save request's body (answered with 413) and of
+# the stored document (answered with 422).
+DASHBOARD_V2_MAX_DOCUMENT_BYTES = 1024 * 1024
+# Maximum nesting of the JSON value held by one node's layout, props or style.
+DASHBOARD_V2_MAX_VALUE_DEPTH = 32
 # A manager that overrides raise_for_access receives the complete query context,
 # so it turns off the semantic-view chart-data check that otherwise denies before
 # provider metadata is loaded.
@@ -392,6 +406,8 @@ WTF_CSRF_EXEMPT_LIST = [
     # Headless query endpoint for token-authenticated API clients, exempted for
     # the same reason as the chart data endpoint above.
     "superset.datasource.api.query",
+    "superset.widgets.api.data",
+    "superset.widgets.api.values",
     "superset.dashboards.api.cache_dashboard_screenshot",
     # Guest-token (embedded) sessions authenticate via the guest token
     # header and carry no CSRF token cookie; without the exemption their
@@ -754,6 +770,11 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Experimental PyArrow engine for CSV parsing (may have issues with dates/nulls)
     # @lifecycle: development
     "CSV_UPLOAD_PYARROW_ENGINE": False,
+    # Enables the Dashboard V2 builder: its pages, menu entry and the
+    # dashboard_v2, widgets and widget REST APIs. When disabled those routes
+    # respond with 404 and the frontend hides every entry point.
+    # @lifecycle: development
+    "DASHBOARD_V2": False,
     # Allow metrics and columns to be grouped into folders in the chart builder
     # @lifecycle: development
     "DATASET_FOLDERS": False,
@@ -3457,6 +3478,12 @@ GUEST_TOKEN_JWT_AUDIENCE: Callable[[], str] | str | None = None
 
 GUEST_TOKEN_VALIDATOR_HOOK = None
 
+# Refuse to mint a guest token with a `widget` or `dataset` resource on a dataset
+# protected by row-level security unless a rule in the token covers that dataset,
+# and refuse a minter who is restricted by row-level security on it. Set to False
+# only when GUEST_TOKEN_VALIDATOR_HOOK enforces an equivalent policy.
+GUEST_TOKEN_WIDGET_RLS_GUARD = True
+
 # Enables coarse-grained, runtime revocation of outstanding guest tokens.
 #
 # When True, every minted guest token carries a revocation version, and tokens
@@ -3748,6 +3775,16 @@ EXTENSION_DENYLIST: list[str] = []
 # be patched before it loads. Versions are compared with PEP 440 semantics, e.g.
 #   EXTENSION_VERSION_POLICY = {"acme.widget": "1.2.0"}
 EXTENSION_VERSION_POLICY: dict[str, str] = {}
+
+# Serve extensions' frontend bundles without authentication.
+#
+# A host page that embeds a widget contributed by an extension has to load that
+# extension's JavaScript from Superset, and the browser fetches those chunks
+# with plain <script> tags: no session cookie cross-origin, and no way to carry
+# the guest token. Turning this on publishes extension frontend files — the same
+# code any signed-in user already downloads — to anyone who can reach the
+# deployment. Extension backends, APIs and data are unaffected.
+EMBEDDED_EXTENSION_ASSETS_PUBLIC = False
 
 # Default polling interval for tasks (seconds)
 TASK_ABORT_POLLING_DEFAULT_INTERVAL = 10
