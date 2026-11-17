@@ -17,10 +17,15 @@
  * under the License.
  */
 import { DropTargetMonitor } from 'react-dnd';
+import { getDocumentDirection } from '@apache-superset/core/theme';
 import isValidChild from './isValidChild';
 import { TAB_TYPE, TABS_TYPE } from './componentTypes';
 import type { LayoutItem } from '../types';
 
+// DROP_LEFT and DROP_RIGHT name the two ends of a row in reading order:
+// DROP_LEFT is "before" the target (the lower child index) and DROP_RIGHT is
+// "after" it, which is how reorderItem and the tab drop indicators consume
+// them. In a right-to-left layout "before" is the visual right-hand side.
 export const DROP_TOP = 'DROP_TOP';
 export const DROP_RIGHT = 'DROP_RIGHT';
 export const DROP_BOTTOM = 'DROP_BOTTOM';
@@ -150,6 +155,13 @@ export default function getDropPosition(
   const deltaLeft = Math.abs(clientOffset.x - refBoundingRect.left);
   const deltaRight = Math.abs(clientOffset.x - refBoundingRect.right);
 
+  // Pointer coordinates are physical while siblings are laid out in reading
+  // order, so the physical left edge of a component is its "after" side when
+  // the page is right-to-left.
+  const isRtl = getDocumentDirection() === 'rtl';
+  const dropAtPhysicalLeft = isRtl ? DROP_RIGHT : DROP_LEFT;
+  const dropAtPhysicalRight = isRtl ? DROP_LEFT : DROP_RIGHT;
+
   // Most of the time we only want a drop indicator for shallow (top-level, non-nested) drop targets
   // However there are some cases where considering only shallow targets would result in NO drop
   // indicators which is a bad UX.
@@ -175,7 +187,9 @@ export default function getDropPosition(
       const refMiddleX =
         refBoundingRect.left +
         (refBoundingRect.right - refBoundingRect.left) / 2;
-      return clientOffset.x < refMiddleX ? DROP_LEFT : DROP_RIGHT;
+      return clientOffset.x < refMiddleX
+        ? dropAtPhysicalLeft
+        : dropAtPhysicalRight;
     }
     const refMiddleY =
       refBoundingRect.top + (refBoundingRect.bottom - refBoundingRect.top) / 2;
@@ -186,8 +200,8 @@ export default function getDropPosition(
   if (validSibling && validChild) {
     // if near enough to a sibling boundary, drop there
     if (siblingDropOrientation === 'vertical') {
-      if (deltaLeft < SIBLING_DROP_THRESHOLD) return DROP_LEFT;
-      if (deltaRight < SIBLING_DROP_THRESHOLD) return DROP_RIGHT;
+      if (deltaLeft < SIBLING_DROP_THRESHOLD) return dropAtPhysicalLeft;
+      if (deltaRight < SIBLING_DROP_THRESHOLD) return dropAtPhysicalRight;
     } else {
       if (deltaTop < SIBLING_DROP_THRESHOLD) return DROP_TOP;
       if (deltaBottom < SIBLING_DROP_THRESHOLD) return DROP_BOTTOM;

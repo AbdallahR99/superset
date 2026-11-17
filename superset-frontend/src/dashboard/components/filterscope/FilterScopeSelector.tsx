@@ -26,7 +26,7 @@ import {
 import cx from 'classnames';
 import { Button, Input } from '@superset-ui/core/components';
 import { t } from '@apache-superset/core/translation';
-import { css, styled } from '@apache-superset/core/theme';
+import { css, noFlip, styled } from '@apache-superset/core/theme';
 import buildFilterScopeTreeEntry from 'src/dashboard/util/buildFilterScopeTreeEntry';
 import getFilterScopeNodesTree from 'src/dashboard/util/getFilterScopeNodesTree';
 import getFilterFieldNodesTree from 'src/dashboard/util/getFilterFieldNodesTree';
@@ -248,6 +248,14 @@ const ScopeSelector = styled.div`
         flex-direction: column;
         color: ${theme.colorText};
         font-size: ${theme.fontSize}px;
+
+        /* react-checkbox-tree ships a plain stylesheet, which is not mirrored
+           for right-to-left layouts: its physical indent of nested nodes is
+           reset here and restated on the inline-start side. */
+        ol ol {
+          ${noFlip} padding-left: 0;
+          padding-inline-start: 24px;
+        }
 
         .filter-scope-type {
           padding: ${theme.sizeUnit * 2}px 0;

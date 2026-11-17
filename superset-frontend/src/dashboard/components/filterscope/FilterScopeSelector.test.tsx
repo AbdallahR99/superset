@@ -263,3 +263,24 @@ test('updates search text when typing in the search input', async () => {
 
   expect(searchInput).toHaveValue('Chart');
 });
+
+test.each(['ltr', 'rtl'] as const)(
+  'indents nested scope tree nodes on the inline-start side (%s)',
+  direction => {
+    const { container } = render(<FilterScopeSelector {...defaultProps} />, {
+      useRedux: true,
+      direction,
+    });
+    const selector = container.querySelector(
+      '.filters-scope-selector',
+    ) as HTMLElement;
+    // react-checkbox-tree indents with a physical padding-left in a plain
+    // stylesheet that is never mirrored: it is reset (and must stay physical
+    // in right-to-left) and replaced by a logical indent
+    const target = '.react-checkbox-tree ol ol';
+    expect(selector).toHaveStyleRule('padding-left', '0', { target });
+    expect(selector).toHaveStyleRule('padding-inline-start', '24px', {
+      target,
+    });
+  },
+);

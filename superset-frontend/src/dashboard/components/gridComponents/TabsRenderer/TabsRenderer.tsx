@@ -27,7 +27,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { css, styled } from '@apache-superset/core/theme';
+import { css, styled, useIsRtl } from '@apache-superset/core/theme';
 import { isMobileConsumptionEnabled } from 'src/hooks/useIsMobile';
 import {
   LineEditableTabs,
@@ -49,6 +49,7 @@ import HoverMenu from '../../menu/HoverMenu';
 import DragHandle from '../../dnd/DragHandle';
 import DeleteComponentButton from '../../DeleteComponentButton';
 import { StickyTabsOffsetContext } from './StickyTabsOffsetContext';
+import { rtlHorizontalListSortingStrategy } from './rtlHorizontalListSortingStrategy';
 
 // @z-index-above-dashboard-charts: above chart content, below the sticky
 // dashboard header (99) and the filter bar (11)
@@ -254,6 +255,7 @@ const TabsRenderer = memo<TabsRendererProps>(
     isEditingTabTitle = false,
   }) => {
     const [activeId, setActiveId] = useState<string | null>(null);
+    const isRtl = useIsRtl();
 
     // Sticky tab bars only apply in view mode: while editing, drag-and-drop
     // targets and hover menus are positioned against the tab bar's place in
@@ -374,7 +376,13 @@ const TabsRenderer = memo<TabsRendererProps>(
             data-test="nav-list"
             type={editMode ? 'editable-card' : 'card'}
             items={tabItems}
-            tabBarStyle={{ paddingLeft: tabBarPaddingLeft }}
+            // The padding belongs to the side the tab bar starts on. The
+            // `paddingLeft` key stays because the shared Tabs component looks
+            // for it to leave out its own tab bar padding.
+            tabBarStyle={{
+              paddingLeft: undefined,
+              paddingInlineStart: tabBarPaddingLeft,
+            }}
             fullHeight
             {...(editMode && {
               renderTabBar: (tabBarProps, DefaultTabBar) => (
@@ -388,7 +396,11 @@ const TabsRenderer = memo<TabsRendererProps>(
                 >
                   <SortableContext
                     items={tabIds}
-                    strategy={horizontalListSortingStrategy}
+                    strategy={
+                      isRtl
+                        ? rtlHorizontalListSortingStrategy
+                        : horizontalListSortingStrategy
+                    }
                   >
                     <DefaultTabBar {...tabBarProps}>
                       {(node: React.ReactElement) => (

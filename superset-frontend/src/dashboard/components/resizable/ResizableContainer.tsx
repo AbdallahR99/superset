@@ -28,7 +28,7 @@ import { createPortal } from 'react-dom';
 import { ResizeCallback, ResizeStartCallback, Resizable } from 're-resizable';
 import cx from 'classnames';
 import { addAlpha } from '@superset-ui/core';
-import { css, styled } from '@apache-superset/core/theme';
+import { css, noFlip, styled, useIsRtl } from '@apache-superset/core/theme';
 
 import {
   RightResizeHandle,
@@ -37,7 +37,7 @@ import {
 } from './ResizableHandle';
 import { isMobileConsumptionEnabled } from 'src/hooks/useIsMobile';
 import { RESIZE_HANDLE_Z_INDEX } from 'src/dashboard/constants';
-import resizableConfig from '../../util/resizableConfig';
+import { getResizableConfig } from '../../util/resizableConfig';
 import {
   GRID_BASE_UNIT,
   GRID_GUTTER_SIZE,
@@ -77,6 +77,13 @@ const HANDLE_CLASSES = {
   right: 'resizable-container-handle--right',
   bottom: 'resizable-container-handle--bottom',
 };
+// The "right" class and the handle components below describe the handles as
+// they look left-to-right. Their styles are mirrored for right-to-left, where
+// the width handles are the physical left ones (see getResizableConfig).
+const RTL_HANDLE_CLASSES = {
+  left: HANDLE_CLASSES.right,
+  bottom: HANDLE_CLASSES.bottom,
+};
 
 const CursorLabel = styled.div`
   ${({ theme }) => css`
@@ -91,7 +98,8 @@ const CursorLabel = styled.div`
     pointer-events: none;
     white-space: nowrap;
     z-index: 9999;
-    transform: translate(12px, 12px);
+    /* offset from the pointer position, which is set in physical pixels */
+    ${noFlip} transform: translate(12px, 12px);
   `}
 `;
 
@@ -222,6 +230,7 @@ export default function ResizableContainer({
 }: ResizableContainerProps) {
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const cursorLabelRef = useRef<HTMLDivElement | null>(null);
+  const isRtl = useIsRtl();
 
   useEffect(() => {
     if (!isResizing && cursorLabelRef.current) {
@@ -329,15 +338,23 @@ export default function ResizableContainer({
   );
 
   const handleComponent = useMemo(
-    () => ({
-      right: <RightResizeHandle />,
-      bottom: <BottomResizeHandle />,
-      bottomRight: <BottomRightResizeHandle />,
-    }),
-    [],
+    () =>
+      isRtl
+        ? {
+            left: <RightResizeHandle />,
+            bottom: <BottomResizeHandle />,
+            bottomLeft: <BottomRightResizeHandle />,
+          }
+        : {
+            right: <RightResizeHandle />,
+            bottom: <BottomResizeHandle />,
+            bottomRight: <BottomRightResizeHandle />,
+          },
+    [isRtl],
   );
 
   const enableConfig = useMemo(() => {
+    const resizableConfig = getResizableConfig(isRtl);
     if (editMode && adjustableWidth && adjustableHeight) {
       return resizableConfig.widthAndHeight;
     }
@@ -348,7 +365,7 @@ export default function ResizableContainer({
       return resizableConfig.heightOnly;
     }
     return resizableConfig.notAdjustable;
-  }, [editMode, adjustableWidth, adjustableHeight]);
+  }, [editMode, adjustableWidth, adjustableHeight, isRtl]);
 
   return (
     <>
@@ -392,7 +409,7 @@ export default function ResizableContainer({
           'resizable-container',
           isResizing && 'resizable-container--resizing',
         )}
-        handleClasses={HANDLE_CLASSES}
+        handleClasses={isRtl ? RTL_HANDLE_CLASSES : HANDLE_CLASSES}
       >
         {children}
       </StyledResizable>

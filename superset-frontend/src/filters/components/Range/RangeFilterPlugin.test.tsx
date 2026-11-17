@@ -980,3 +980,51 @@ test.each(
     }
   },
 );
+
+const renderRange = (direction: 'ltr' | 'rtl') =>
+  render(
+    <RangeFilterPlugin
+      {...(transformProps(
+        rangeProps as unknown as ChartProps,
+      ) as PluginFilterRangeProps)}
+      setDataMask={jest.fn()}
+    />,
+    { direction },
+  );
+
+test('number fields stay left-to-right in a right-to-left interface', () => {
+  renderRange('rtl');
+  // "-5" must not be reordered to "5-": the fields keep a left-to-right
+  // direction of their own while the rest of the filter follows the interface
+  screen.getAllByRole('spinbutton').forEach(input => {
+    expect(input).toHaveAttribute('dir', 'ltr');
+    expect(input.closest('.ant-input-number')).not.toHaveClass(
+      'ant-input-number-rtl',
+    );
+  });
+  // the slider is reversed by Ant Design, with the minimum on the right
+  expect(document.querySelector('.ant-slider')).toHaveClass('ant-slider-rtl');
+});
+
+test.each([
+  ['ltr', 'left'],
+  ['rtl', 'right'],
+] as const)(
+  'number fields keep their text at the inline-start edge (%s)',
+  (direction, textAlign) => {
+    renderRange(direction);
+    const wrapper = screen
+      .getAllByRole('spinbutton')[0]
+      .closest('.ant-input-number')?.parentElement as HTMLElement;
+    expect(wrapper).toHaveStyleRule('text-align', textAlign, {
+      target: '.ant-input-number .ant-input-number-input',
+    });
+  },
+);
+
+test('the slider tooltip shows its number left-to-right', async () => {
+  renderRange('rtl');
+  await userEvent.hover(screen.getAllByRole('slider')[0]);
+  const tooltip = await screen.findByRole('tooltip');
+  expect(tooltip.querySelector('[dir="ltr"]')).toHaveTextContent('10');
+});

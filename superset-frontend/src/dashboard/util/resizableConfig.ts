@@ -47,9 +47,36 @@ const notAdjustable = {
   right: false,
 };
 
-export default {
+const resizableConfig = {
   widthAndHeight: adjustableWidthAndHeight,
   widthOnly: adjustableWidth,
   heightOnly: adjustableHeight,
   notAdjustable,
 };
+
+type ResizableEdges = typeof adjustableWidthAndHeight;
+
+// A grid component is anchored at its inline-start edge and grows towards
+// inline-end, so the width handles belong on the inline-end edge: the
+// physical left one when the layout is right-to-left.
+const toInlineEnd = (edges: ResizableEdges): ResizableEdges => ({
+  ...edges,
+  right: edges.left,
+  left: edges.right,
+  bottomRight: edges.bottomLeft,
+  bottomLeft: edges.bottomRight,
+  topRight: edges.topLeft,
+  topLeft: edges.topRight,
+});
+
+const rtlResizableConfig: typeof resizableConfig = {
+  widthAndHeight: toInlineEnd(adjustableWidthAndHeight),
+  widthOnly: toInlineEnd(adjustableWidth),
+  heightOnly: toInlineEnd(adjustableHeight),
+  notAdjustable: toInlineEnd(notAdjustable),
+};
+
+export const getResizableConfig = (isRtl: boolean): typeof resizableConfig =>
+  isRtl ? rtlResizableConfig : resizableConfig;
+
+export default resizableConfig;

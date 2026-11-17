@@ -305,6 +305,19 @@ test('Should render title', () => {
   expect(screen.getByText('Vaccine Candidates per Phase')).toBeInTheDocument();
 });
 
+test('the link on the chart name takes its direction from the name itself', () => {
+  render(<SliceHeader {...createProps()} />, {
+    useRedux: true,
+    useRouter: true,
+    initialState,
+  });
+  // user-authored text: a left-to-right name must read correctly in a
+  // right-to-left interface and vice versa
+  expect(
+    screen.getByRole('link', { name: 'Vaccine Candidates per Phase' }),
+  ).toHaveAttribute('dir', 'auto');
+});
+
 test('Should render click to edit prompt and run onExploreChart on click', async () => {
   const props = createProps();
   const history = createMemoryHistory({

@@ -33,6 +33,7 @@ import {
   checkIsMissingRequiredValue,
   clearedCustomizationTarget,
   getAppliedFilterLogPayload,
+  getFilterBarToggleRotation,
   getOnlyExtraFormData,
   getFiltersToApply,
 } from './utils';
@@ -939,4 +940,17 @@ test('cross-filter verbose maps use each chart own labels on a shared datasource
     '14': {},
   });
   expect(datasource.verbose_map).toEqual({ shared_column: 'Dataset label' });
+});
+
+test('getFilterBarToggleRotation points the arrows at/away from the left edge in left-to-right', () => {
+  // the glyph is an arrow pointing up at a bar: -90deg points it left
+  // (collapse towards the left edge), 90deg points it right (expand)
+  expect(getFilterBarToggleRotation('collapse', false)).toBe('rotate(-90deg)');
+  expect(getFilterBarToggleRotation('expand', false)).toBe('rotate(90deg)');
+});
+
+test('getFilterBarToggleRotation turns both arrows around in right-to-left', () => {
+  // the filter bar is on the right: collapsing points right, expanding left
+  expect(getFilterBarToggleRotation('collapse', true)).toBe('rotate(90deg)');
+  expect(getFilterBarToggleRotation('expand', true)).toBe('rotate(-90deg)');
 });

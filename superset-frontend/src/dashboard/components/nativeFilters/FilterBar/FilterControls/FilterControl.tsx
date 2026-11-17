@@ -86,7 +86,8 @@ const FilterControl = ({
             id={`filter-name-${filter.id}`}
             data-test="filter-control-name"
           >
-            {name}
+            {/* written by a user: takes its direction from its own text */}
+            <span dir="auto">{name}</span>
           </FilterControlTitle>
           {isRequired && <RequiredFieldIndicator />}
           {isOutOfScope && <OutOfScopeFilterToolTip />}

@@ -81,6 +81,10 @@ interface DropIndicatorProps {
   pos: 'left' | 'right';
 }
 
+// `pos` is the side of the tab in reading order: 'left' marks a drop before
+// the tab (DROP_LEFT) and 'right' a drop after it. The rule is written for a
+// left-to-right layout and mirrored for a right-to-left one, where "before"
+// is the right-hand side.
 const DropIndicator = styled.div<DropIndicatorProps>`
   border: 2px solid ${({ theme }) => theme.colorPrimary};
   width: 5px;

@@ -44,7 +44,11 @@ import {
   FILTER_BAR_BOUNDED_CLASS,
   FILTER_BAR_SCROLL_CLASS,
 } from 'src/dashboard/util/embeddedLayout';
-import { getFilterBarTestId, useChartsVerboseMaps } from './utils';
+import {
+  getFilterBarTestId,
+  getFilterBarToggleRotation,
+  useChartsVerboseMaps,
+} from './utils';
 import { VerticalBarProps } from './types';
 import Header from './Header';
 import FilterControls from './FilterControls/FilterControls';
@@ -329,7 +333,10 @@ const VerticalFilterBar: FC<VerticalBarProps> = ({
             <Icons.VerticalAlignTopOutlined
               iconSize="l"
               css={{
-                transform: 'rotate(90deg)',
+                transform: getFilterBarToggleRotation(
+                  'expand',
+                  theme.direction === 'rtl',
+                ),
                 marginBottom: `${theme.sizeUnit * 3}px`,
               }}
               className="collapse-icon"

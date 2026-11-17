@@ -22,7 +22,7 @@ import { css, styled } from '@apache-superset/core/theme';
 import { memo, FC } from 'react';
 import { Icons } from '@superset-ui/core/components/Icons';
 import { Button } from '@superset-ui/core/components';
-import { getFilterBarTestId } from '../utils';
+import { getFilterBarTestId, getFilterBarToggleRotation } from '../utils';
 import FilterBarSettings from '../FilterBarSettings';
 
 const TitleArea = styled.div`
@@ -79,8 +79,11 @@ const Header: FC<HeaderProps> = ({ toggleFiltersBar }) => (
       >
         <Icons.VerticalAlignTopOutlined
           iconSize="xl"
-          css={css`
-            transform: rotate(-90deg);
+          css={theme => css`
+            transform: ${getFilterBarToggleRotation(
+              'collapse',
+              theme.direction === 'rtl',
+            )};
           `}
         />
       </HeaderButton>

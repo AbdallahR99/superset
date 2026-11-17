@@ -99,6 +99,7 @@ import {
   getFormData,
   mergeExtraFormData,
 } from 'src/dashboard/components/nativeFilters/utils';
+import { USER_TEXT_STYLE } from 'src/dashboard/util/userTextDirection';
 import { DatasetSelectLabel } from 'src/features/datasets/DatasetSelectLabel';
 import { ChartCustomizationPlugins } from 'src/constants';
 import {
@@ -1265,6 +1266,7 @@ const FiltersConfigForm = (
                     <Input
                       {...getFiltersConfigModalTestId('name-input')}
                       onChange={debouncedFormChanged}
+                      style={USER_TEXT_STYLE}
                     />
                   </StyledFormItem>
                   {isChartCustomization ? (
@@ -2126,7 +2128,10 @@ const FiltersConfigForm = (
                               <StyledLabel>{t('Description')}</StyledLabel>
                             }
                           >
-                            <Input.TextArea onChange={debouncedFormChanged} />
+                            <Input.TextArea
+                              onChange={debouncedFormChanged}
+                              style={USER_TEXT_STYLE}
+                            />
                           </StyledFormItem>
                           <FormItem
                             name={['filters', filterId, 'type']}

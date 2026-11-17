@@ -710,9 +710,11 @@ const DashboardBuilder = () => {
   const filterBarHeight = `calc(100vh - ${offset}px)`;
   const filterBarOffset = dashboardFiltersOpen ? 0 : barTopOffset + 20;
 
+  // Pulls the top-level tabs under the collapsed filter bar, which sits on
+  // the inline-start side of the header in both text directions.
   const draggableStyle = useMemo(
     () => ({
-      marginLeft:
+      marginInlineStart:
         !isNotMobile ||
         dashboardFiltersOpen ||
         editMode ||
