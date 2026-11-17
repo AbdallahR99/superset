@@ -1,112 +1,103 @@
-# NxtBI Arabic (العربية) and RTL on Superset master @ f3f3d10d5c
+# Arabic and right-to-left (RTL) support in the NxtBI Superset fork
 
-Source: `nxtbi/docs/research/05-theming-i18n-rtl.md` (R05), plus R01 and R06 where cited. V = verified in code, D = docs-claimed, U = unverified. Nothing here was executed. Effort sizes (S/M/L) in the phased plan are rough estimates written for this document, not taken from the research.
+Branch `feature/nxtbi-arabic-rtl` (base: Superset master `f3f3d10d5c`). This replaces the earlier
+"translated text only, RTL gaps documented" status: the application now runs right-to-left in Arabic.
+Research and the surface audit that drove the work are in [rtl/](rtl/).
 
-## 1. How Arabic is enabled
+## 1. How direction works
 
-| Step | Detail | Evidence |
+Direction is a property of the locale and is fixed for a page load (changing language is a full reload).
+
+| Layer | What happens | Where |
 |---|---|---|
-| Language list | `LANGUAGES` is overwritten to `{}` by default (English only, no picker). Enable with `{"en": {"flag": "us", "name": "English"}, "ar": {"flag": "sa", "name": "Arabic"}}`; picker appears when more than one language is configured | V `superset/config.py:586,590-624`; `superset/views/base.py:303-347` |
-| Default locale | `BABEL_DEFAULT_LOCALE = "en"` (or `"ar"`) | V `superset/config.py:614` |
-| Switching | `GET /lang/<locale>` sets `session["locale"]`; stored only in the session cookie, no per-user column | V `superset/initialization/__init__.py:1835-1854` |
-| Backend catalogues | `.po` compiled to `.mo` in the image only if build arg `BUILD_TRANSLATIONS=true` (`pybabel compile --use-fuzzy`) | V `Dockerfile:32,198-212` |
-| Frontend packs | `npm run build-translation` writes `messages.json` per language; the node stage runs it only if `BUILD_TRANSLATIONS=true` (default `false`) | V `superset-frontend/package.json:46`; `Dockerfile:131` |
-| Serving | `GET /language_pack/<lang>/` and hashed `script.js`, unauthenticated | V `superset/views/core.py:704-760` |
-| Repo state | `superset/translations/ar/LC_MESSAGES/` holds only `messages.po`; nothing is compiled | V directory listing (R05 s4) |
-| Failure mode | Without a pack the UI silently falls back to English (no crash) | V `superset/translations/utils.py:46-62`; `superset-frontend/src/preamble.ts:83-123` |
-| Verify | `/language_pack/ar/` must return 200 and the `script.js` URL must load | R05 s6 |
+| Server | The locale's direction comes from Babel CLDR data; `<html lang dir>` is rendered by the server and `common.direction` is in the bootstrap payload. `RTL_LAYOUT_ENABLED = False` keeps every locale left-to-right. | `superset/translations/utils.py`, `superset/views/base.py`, `superset/embedded/view.py`, `superset/templates/superset/spa.html`, `superset/config.py` |
+| Theme provider | `SupersetThemeProvider` resolves direction (prop, else parent, else document) and provides one Emotion cache per direction. The RTL cache runs `stylis-plugin-rtl`, so physical CSS in `css` / `styled` is mirrored automatically. Ant Design gets `ConfigProvider direction`. | `packages/superset-core/src/theme/Theme.tsx`, `direction.ts` |
+| Isolation | `LtrIsolate` / `DirectionProvider` switch a subtree back to left-to-right with the `dir` attribute and a nested provider (never CSS `direction`, which the mirroring step would flip). `noFlip` stops one rule from mirroring. | `packages/superset-core/src/theme/LtrIsolate.tsx` |
+| Popups | The shared Tooltip, Popover, Dropdown, Popconfirm, DatePicker and Drawer wrappers mirror an explicit placement. Callers pass the left-to-right value. | `packages/superset-ui-core/src/components/*` |
+| Charts | `ChartMetadata.direction`: plots stay left-to-right (axis semantics preserved); tables, pivot tables, Big Number, handlebars and the time-series table inherit the interface direction with numbers isolated left-to-right. Decided in one place, `SuperChartCore`. | `packages/superset-ui-core/src/chart` |
+| Code | SQL, JSON, stack traces, identifiers, format strings and URL slugs stay left-to-right. User-authored text (titles, descriptions, markdown) takes its direction from its own content. | editors, `CodeSyntaxHighlighter`, inputs |
+| Ant Design strings | Ant Design's own locale pack and the dayjs locale load for `ar`, `fa`, `he`, `ur`. | `src/hooks/useLocale.ts`, `src/theme/AntdLocaleProvider.tsx` |
 
-The research image `nxtbi/superset-fork:local` is described as having Arabic language packs built; whether `/language_pack/ar/` returns 200 on it has not been checked here (see Demo status).
+Left-to-right output is unchanged by design: RTL-only rules are emitted only in the RTL cache, `dir`
+attributes on chart containers are added only on RTL pages. The exceptions are deliberate and
+direction-neutral (`<bdi>` in chart tooltips, `dir="auto"` on user-authored titles, `dir="ltr"` on code).
 
-## 2. Arabic catalogue completeness
+## 2. Arabic catalogue
 
-Read-only count over `superset/translations/*/LC_MESSAGES/messages.po` (R05 s4): 5950 msgids in total.
+`superset/translations/ar/LC_MESSAGES/messages.po`, 5,951 entries.
 
-| Measure | Arabic |
-|---|---|
-| Translated, non-fuzzy | 3223 (54.2%) |
-| Fuzzy | 2718 |
-| Untranslated | 9 |
-
-For comparison: de 99.0%, fa 58.1%, nl 55.1%, it/pt/sl/fr/ja about 83%, fi/th/ko near empty. The backend `.mo` build uses `--use-fuzzy` (fuzzy strings are shown). Frontend `po2json` fuzzy handling is U (likely excluded), so up to about 46% of React UI strings may appear in English. Action: review and accept fuzzy `ar` entries for demo screens in the fork's `.po`, then rebuild. FAB-served pages (classic login form) use FAB catalogues (D, upstream #29509).
-
-## 3. What works under locale `ar`
-
-| Area | Status | Evidence |
+| | Before | After |
 |---|---|---|
-| Translated strings | Works, about 54% non-fuzzy | R05 s4 |
-| ECharts month/day names | Works (locale map includes AR) | V `superset-frontend/plugins/plugin-chart-echarts/src/components/echartsLocale.ts` |
-| Arabic glyphs | Needs an Arabic-capable font; default Inter has none | R05 s2 |
-| dayjs / antd locale | Missing `ar`: date pickers, relative time and antd built-in strings stay English | V `superset-frontend/src/hooks/useLocale.ts:23-60` |
-| D3 number/date formats | Configurable through `D3_FORMAT`, `D3_TIME_FORMAT` | V `superset/config.py:627-701` |
-| Layout direction | Stays LTR everywhere; Arabic text aligns through Unicode bidi only | R05 s5 |
-| Keycloak `locale` claim | No hook; needs custom code that sets `session["locale"]` | U (R05 s4) |
+| Translated, not fuzzy | 3,223 | 5,950 |
+| Fuzzy (machine or fuzzy-matched) | 2,718 | 1 |
+| Untranslated | 9 | 0 |
 
-## 4. RTL gap table
+Two passes: 345 corrections from the catalogue audit, then a full review of every entry in ten chunks
+(1,644 corrections applied, 1,618 fuzzy entries confirmed as correct). The review was done by language
+models with placeholder, whitespace and plural-form validation in code, not by a native-speaker
+proofreader; treat the catalogue as good and consistent, not as certified copy. Technical terms (SQL,
+CSS, JSON, engine names, format strings, code identifiers) stay in Latin script. Details:
+[rtl/04-arabic-catalogue.md](rtl/04-arabic-catalogue.md), [rtl/05-arabic-changes.md](rtl/05-arabic-changes.md).
 
-No RTL support exists (V): no `dir`, `rtl`, `rtlcss`, `stylis-plugin-rtl` or emotion RTL cache; `spa.html` emits a bare `<html>`; the theme `ConfigProvider` sets no `direction`. Upstream: apache/superset#25258 (open since 2023-10, no delivery) and #29509 (Persian).
+## 3. Verification
 
-| Gap | Severity | Proper fix |
-|---|---|---|
-| No `dir`/`lang` on `<html>`; antd `ConfigProvider direction` not tied to locale | High | Set in `spa.html` and `Theme.tsx` from the bootstrap locale |
-| Emotion CSS uses physical properties (margin-left/right, left/right) across the app | High | Emotion cache + `stylis-plugin-rtl`, or migrate to logical properties (large audit) |
-| Dashboard grid (resize/drag handles, positions) | High | Library RTL support or mirrored handles |
-| ECharts axes, legend, tooltips, y-axis side | Medium | Per-chart option transforms (`yAxis.position`, `inverse`) |
-| SQL Lab / Ace editor (code must stay LTR) | Medium | Force `dir=ltr` on editor and results, mirror chrome only |
-| Tables (DataTable, ag-grid pinned columns, sort icons) | Medium | ag-grid `enableRtl`; antd via `ConfigProvider` |
-| Popovers, dropdowns, date pickers (placement, no `ar` locale) | Medium | `ConfigProvider direction` + `ar` locales |
-| Directional icons (arrows, chevrons, breadcrumbs) | Low-Med | CSS mirror under `[dir=rtl]` |
-| FAB login/auth pages | Low | Override Jinja templates or use a Keycloak-themed login |
-| Emails, reports, screenshots | Low | Out of scope |
-
-## 5. Demo customisations chosen (low risk)
-
-Decision: **LTR layout + Arabic translation + Arabic-capable font + NxtBI theme tokens.** Global RTL is shown only as a clearly labelled experiment, if at all.
-
-1. Mount `./nxtbi/static` to `/app/superset/static/nxtbi:ro` (logos, favicon, optional self-hosted fonts); do not shadow `static/assets` (R05 s2).
-2. Theme (STABLE): `THEME_DEFAULT` / `THEME_DARK` with `brandAppName`, `brandLogoUrl`, `fontFamily` `'IBM Plex Sans Arabic', 'Noto Sans Arabic', Inter, ...` and `fontUrls`. Google Fonts hosts are already in the CSP allowlist; an offline demo needs self-hosted woff2 plus `@font-face` in `head_custom_extra.html`. Other font hosts need both `THEME_FONT_URL_ALLOWED_DOMAINS` and `TALISMAN_CONFIG` overridden (R05 s2, s7).
-3. Set `ENABLE_UI_THEME_ADMINISTRATION = False` so a DB theme cannot silently override the config themes (R05 s3, s7).
-4. Build with `BUILD_TRANSLATIONS=true`, set `LANGUAGES` (en + ar), check `/language_pack/ar/`.
-5. Optional `D3_TIME_FORMAT` Arabic `months`, `shortMonths`, `days`; keep Latin digits.
-6. Optional `EXTRA_CATEGORICAL_COLOR_SCHEMES` entry `nxtbi` (`isDefault: True`).
-7. Arabic data content (for example `region_ar` columns) renders through bidi without any change (R06 s6).
-8. Optional experiment: `html{direction:rtl}` via `head_custom_extra.html`. It flips only inline flow; physical CSS, popups, drawers, sliders and antd stay unmirrored, so icons and carets misalign (R05 s5). Inline scripts need a CSP nonce; visibility of `macros.get_nonce()` there is U.
-
-## 6. Phased plan for real RTL support
-
-Rough sizes only. All work is frontend and needs a custom image build (no config-only path).
-
-| Phase | Work package | Effort | Gap closed | Upstream / reference |
-|---|---|---|---|---|
-| 0 | Add `lang`/`dir` to `spa.html`; `ConfigProvider direction` from locale in `Theme.tsx`; add `dayjs/locale/ar` and `antd/locale/ar_EG` in `useLocale.ts`; accept fuzzy `ar` entries | S | No `dir`/`lang`; missing `ar` locales | #25258 |
-| 1 | Emotion cache with `stylis-plugin-rtl` for the app theme provider; force `dir=ltr` on Ace/SQL Lab results; ag-grid `enableRtl` | M | Physical CSS (first pass), SQL Lab, tables | #25258 |
-| 2 | Dashboard grid RTL (drag/resize handles, positioning) | L | Dashboard grid | no upstream work known |
-| 3 | ECharts per-chart option transforms (axis side, legend, tooltip); mirror directional icons under `[dir=rtl]` | M | ECharts, icons | #25258 |
-| 4 | Logical-properties migration of remaining emotion styles; popover/dropdown placement audit | L | Residual physical CSS, popovers | #25258 |
-| 5 | Keycloak-themed or overridden login pages; Keycloak `locale` claim to `session["locale"]` | S | FAB auth pages, locale persistence | #29509 |
-| 6 | Playwright visual-regression suite per screen in `ar`; upstream the generic parts | M | QA, maintenance | https://github.com/apache/superset/issues/25258 |
-
-Risks: the fork would diverge from master on high-churn frontend files (Ant Design 6 migration is recent, R05 header); no upstream maintainer commitment exists (#29509: maintainer unaware of any RTL effort).
-
-## Demo status
-
-Run on 2026-11-17 against the demo stack (`nxtbi/scripts/smoke_test.py`, `nxtbi/scripts/browser_check.py`; screenshots `11-arabic-dashboard-list.png` and `12-arabic-dashboard.png` in `nxtbi/docs/screenshots/`).
+Scripts and how to run them: [../tests/README.md](../tests/README.md). Final run on the production image
+built from the branch (no dev overlay):
 
 | Check | Result |
 |---|---|
-| Image built with `BUILD_TRANSLATIONS=true` | Arabic `messages.mo` and `messages.json` are in the image |
-| `GET /language_pack/ar/` | 200, 5,941 non-empty entries (fuzzy entries are included by the build) |
-| Language picker | English and Arabic offered; `/lang/ar` switches the session |
-| Navigation, buttons, filter bar actions, pivot totals | Rendered in Arabic |
-| Arabic data values (`sector_ar`, `region_ar`, org names) | Stored, queried (SQL Lab, MCP, REST) and rendered correctly |
-| Font | `IBM Plex Sans Arabic` applied through theme tokens (loaded from Google Fonts by the browser) |
-| Layout direction under `ar` | `ltr` (measured with `getComputedStyle(document.documentElement).direction`): no RTL |
+| `rtl_audit.py`, 53 screens, Arabic + English, light, desktop | 106 / 106 clean |
+| Same, dark theme, Arabic | 53 / 53 clean |
+| Same, dark theme, English | 53 / 53 clean |
+| Same, 390px phone viewport, Arabic + English | 42 clean, 22 with warnings, 42 not applicable at that width; every warning also occurs in English |
+| `rtl_e2e.py`, 12 functional checks x 2 languages | 20 passed, 2 failed, 1 skipped |
+| `rtl_e2e.py --after-restart` (session, locale and a saved dashboard survive a restart) | 3 / 3 |
+| `smoke_test.py` (existing demo checks) | 48 / 48 |
+| `browser_check.py` (existing demo checks) | 15 / 15 |
+| Jest sweep over every touched area | 11,645 passed; 2 suites fail the same way on master (`MetadataBar`, `ProgressBar`) |
+| Backend unit tests (translations, document direction, error page) | 122 passed |
+| TypeScript | clean except 5 errors in an upstream test file this branch does not touch |
 
-Observed in the Arabic screenshots (these are the visible symptoms of the gaps above):
+The two E2E failures are one check in both languages: at 390px the dashboard header overflows
+horizontally. It happens in English on master too (the vertical filter bar keeps 260px, leaving 130px
+for the header). Upstream's answer is `MOBILE_CONSUMPTION_MODE`; it is not enabled here.
 
-- The navigation bar, filter bar and tables keep the left-to-right order; only the text inside each element is Arabic.
-- Mixed-direction labels are scrambled by the browser's bidi algorithm because nothing sets a direction: pie labels read `%19.11 :label` and the pie total reads `4.54 :label B`.
-- Strings that are missing or untranslated stay English next to Arabic ones (for example `SQL`, chart titles and filter names, which are content, not UI strings).
-- Date pickers and relative times stay English: the frontend ships no `ar` locale for dayjs or Ant Design.
+A visual baseline for every combination is committed under `nxtbi/tests/rtl-visual/baseline`
+(`rtl_audit.py --compare` diffs against it).
 
-Not done: no global `dir="rtl"` experiment was shipped, because it produces a half-mirrored interface.
+## 4. Known limitations
+
+| Item | Detail |
+|---|---|
+| Phone layout | Dashboard and Explore headers overflow at 390px in both languages (upstream). |
+| Static error pages | The 404 page gets the session's `lang` and `dir`, but its three strings are English; the 500 page handlers are unchanged. |
+| Untranslatable strings | A few upstream strings are not wrapped for translation (for example the Explore results row-limit options "1k rows", "Untitled Query N" tab names). |
+| Chart fonts | The theme font has no Arabic glyphs; canvas text in ECharts falls back to a system Arabic font. |
+| Embedded host override | Controls drawn inside a left-to-right chart island (ECharts extra controls, Gantt, deck.gl legend/tooltip) read the page direction from the document, so a host that forces a direction different from `<html dir>` gets those four pieces wrong. Resizable modals opened from inside such an island have the same caveat. |
+| Legends | Translated legend buttons are wider, so ECharts legends paginate earlier in Arabic. |
+| "Save as" | Saving a copy of a dashboard also writes metadata to the source dashboard (upstream, both languages). |
+| Undo/redo icons | Kept un-mirrored in dashboard edit mode. |
+| Not exercised | deck.gl maps, Gantt, cartodiagram and the remaining less common plugins have unit tests for direction but no browser check; alerts/reports screenshots were not compared in Arabic. |
+
+## 5. Upstream work reused
+
+| Upstream | Use |
+|---|---|
+| PR #34629 (closed RTL attempt) | Approach reviewed; its global CSS overrides were not adopted. The stylis plugin idea is kept, behind one cache per direction. |
+| PR #29586, #41705 (Arabic) | Catalogue baseline and language registration. |
+| PR #42323 (RTL-safe filter fix) | Pattern for direction-safe overflow handling in the filter bar. |
+
+See [rtl/01-upstream-prs.md](rtl/01-upstream-prs.md).
+
+## 6. Development loop
+
+`nxtbi/docker-compose.dev.yml` adds a Linux webpack runner (about 25 seconds per rebuild) and mounts the
+built assets, the changed backend files and the Arabic language pack into the web container:
+
+```bash
+docker compose -f nxtbi/docker-compose.yml -f nxtbi/docker-compose.dev.yml run --rm fe-build dev
+docker compose -f nxtbi/docker-compose.yml -f nxtbi/docker-compose.dev.yml run --rm fe-build translations
+docker compose -f nxtbi/docker-compose.yml -f nxtbi/docker-compose.dev.yml up -d superset
+```
+
+Other modes: `prod`, `type`, `test <jest args>`.
