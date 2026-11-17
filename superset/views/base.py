@@ -73,7 +73,10 @@ from superset.themes.utils import (
     enforce_theme_algorithm,
     is_valid_theme,
 )
-from superset.translations.utils import get_language_pack_version
+from superset.translations.utils import (
+    get_language_pack_version,
+    get_text_direction,
+)
 from superset.utils import core as utils, json
 from superset.utils.filters import get_dataset_access_filters
 from superset.utils.version import get_version_metadata, visible_version_metadata
@@ -673,6 +676,7 @@ def cached_common_bootstrap_data(  # pylint: disable=unused-argument
         "static_assets_prefix": app.config["STATIC_ASSETS_PREFIX"],
         "conf": frontend_config,
         "locale": language,
+        "direction": get_text_direction(language),
         "d3_format": app.config.get("D3_FORMAT"),
         "d3_time_format": app.config.get("D3_TIME_FORMAT"),
         "currencies": app.config.get("CURRENCIES"),
@@ -714,6 +718,19 @@ def common_bootstrap_payload() -> dict[str, Any]:
     # and takes precedence over the script tag.
     payload.setdefault("language_pack", None)
     return payload
+
+
+def get_document_locale_template_context(common: dict[str, Any]) -> dict[str, Any]:
+    """Template vars for the ``lang`` and ``dir`` attributes of ``<html>``.
+
+    Rendering them on the server gives the first paint the right direction;
+    the frontend reads the same value from ``common.direction``.
+    """
+    language = common.get("locale") or "en"
+    return {
+        "html_lang": str(language).replace("_", "-"),
+        "html_dir": common.get("direction") or get_text_direction(language),
+    }
 
 
 def get_language_pack_template_context(common: dict[str, Any]) -> dict[str, Any]:
@@ -898,6 +915,7 @@ def get_spa_template_context(
         "spinner_svg_data_uri": spinner_svg_data_uri,
         "default_title": default_title,
         **get_language_pack_template_context(payload.get("common") or {}),
+        **get_document_locale_template_context(payload.get("common") or {}),
         **template_kwargs,
     }
 

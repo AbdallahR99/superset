@@ -23,10 +23,12 @@ import { theme as antdThemeImport, ConfigProvider } from 'antd';
 import {
   ThemeProvider,
   CacheProvider as EmotionCacheProvider,
+  useTheme as useEmotionTheme,
 } from '@emotion/react';
-import createCache from '@emotion/cache';
 import { mergeWith } from 'lodash-es';
 import { GlobalStyles } from './GlobalStyles';
+import { getDocumentDirection, getEmotionCache } from './direction';
+import type { Direction } from './direction';
 import {
   AntdThemeConfig,
   AnyThemeConfig,
@@ -128,6 +130,12 @@ export class Theme {
     const mergedConfig = Theme.mergeConfig(config, baseTheme) ?? config;
     const antdConfig = normalizeThemeConfig(mergedConfig);
 
+    // Direction belongs to the locale, never to a theme: a stored theme must
+    // not be able to flip the interface for everyone who applies it.
+    if (antdConfig.token && 'direction' in antdConfig.token) {
+      delete (antdConfig.token as Record<string, unknown>).direction;
+    }
+
     if (antdConfig.token?.colorPrimary && !antdConfig.token?.colorLink) {
       antdConfig.token.colorLink = antdConfig.token.colorPrimary;
     }
@@ -157,11 +165,7 @@ export class Theme {
     } as SupersetTheme;
 
     // Update every mounted provider with the fully formed theme
-    this.notifyProviders(
-      this.theme,
-      this.antdConfig,
-      createCache({ key: 'superset' }),
-    );
+    this.notifyProviders(this.theme, this.antdConfig);
   }
 
   /**
@@ -233,34 +237,54 @@ export class Theme {
   // the previous provider's callback and only the most-recently-rendered
   // provider would ever hear about a setConfig/toggleDarkMode call.
   private providerListeners = new Set<
-    (
-      theme: SupersetTheme,
-      antdConfig: AntdThemeConfig,
-      emotionCache: any,
-    ) => void
+    (theme: SupersetTheme, antdConfig: AntdThemeConfig) => void
   >();
 
   private notifyProviders(
     theme: SupersetTheme,
     antdConfig: AntdThemeConfig,
-    emotionCache: any,
   ): void {
-    this.providerListeners.forEach(listener =>
-      listener(theme, antdConfig, emotionCache),
-    );
+    this.providerListeners.forEach(listener => listener(theme, antdConfig));
   }
 
-  SupersetThemeProvider({ children }: { children: React.ReactNode }) {
+  /**
+   * Provides this theme to a React subtree.
+   *
+   * Direction (left-to-right or right-to-left) is not part of a theme. It is
+   * inherited from the enclosing provider, and at the root it comes from the
+   * document (`<html dir>`, set by the server from the active locale). The
+   * optional `direction` prop overrides both, for tests, Storybook and hosts
+   * that embed a provider in a page they do not own.
+   */
+  SupersetThemeProvider({
+    children,
+    direction: directionProp,
+  }: {
+    children: React.ReactNode;
+    direction?: Direction;
+  }) {
     if (!this.theme || !this.antdConfig) {
       throw new Error('Theme is not initialized.');
     }
 
     // eslint-disable-next-line react-hooks/rules-of-hooks
+    const parentTheme = useEmotionTheme() as { direction?: Direction };
+    const direction: Direction =
+      directionProp ?? parentTheme?.direction ?? getDocumentDirection();
+
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     const [themeState, setThemeState] = React.useState({
       theme: this.theme,
       antdConfig: this.antdConfig,
-      emotionCache: createCache({ key: 'superset' }),
     });
+
+    // `theme.direction` lets styled components and hooks read the direction
+    // of the subtree they render in (see useDirection).
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const themeWithDirection = React.useMemo(
+      () => ({ ...themeState.theme, direction }),
+      [themeState.theme, direction],
+    );
 
     // Register (and, on unmount, deregister) this provider instance's own
     // listener rather than assigning a single shared callback on every
@@ -284,12 +308,10 @@ export class Theme {
       const listener = (
         nextTheme: SupersetTheme,
         nextAntdConfig: AntdThemeConfig,
-        nextEmotionCache: any,
       ) => {
         setThemeState({
           theme: nextTheme,
           antdConfig: nextAntdConfig,
-          emotionCache: nextEmotionCache,
         });
       };
       this.providerListeners.add(listener);
@@ -299,11 +321,14 @@ export class Theme {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // One Emotion cache per direction for the whole page (see
+    // getEmotionCache): theme updates and nested providers reuse it instead
+    // of creating a new cache, and a new style container, on every change.
     return (
-      <EmotionCacheProvider value={themeState.emotionCache}>
-        <ThemeProvider theme={themeState.theme}>
+      <EmotionCacheProvider value={getEmotionCache(direction)}>
+        <ThemeProvider theme={themeWithDirection}>
           <GlobalStyles />
-          <ConfigProvider theme={themeState.antdConfig}>
+          <ConfigProvider theme={themeState.antdConfig} direction={direction}>
             {children}
           </ConfigProvider>
         </ThemeProvider>

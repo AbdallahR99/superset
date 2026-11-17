@@ -18,9 +18,31 @@ import hashlib
 import json
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+
+from babel import Locale
+from flask import current_app
 
 logger = logging.getLogger(__name__)
+
+TextDirection = Literal["ltr", "rtl"]
+
+
+def get_text_direction(locale: Optional[str]) -> TextDirection:
+    """Text direction of the user interface for a locale.
+
+    Derived from CLDR through Babel, so there is no hand-maintained list of
+    right-to-left languages on the server. Anything that cannot be parsed is
+    left-to-right. ``RTL_LAYOUT_ENABLED = False`` keeps every locale
+    left-to-right (translated text only).
+    """
+    if not locale or not current_app.config.get("RTL_LAYOUT_ENABLED", True):
+        return "ltr"
+    try:
+        parsed = Locale.parse(str(locale).replace("-", "_"), sep="_")
+    except (ValueError, LookupError, TypeError):
+        return "ltr"
+    return "rtl" if parsed.text_direction == "rtl" else "ltr"
 
 # Global caching for JSON language packs
 ALL_LANGUAGE_PACKS: dict[str, dict[str, Any]] = {"en": {}}

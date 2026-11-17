@@ -110,6 +110,13 @@ export interface ColorVariants {
 }
 
 export interface SupersetSpecificTokens {
+  /**
+   * Text direction of the subtree, injected at runtime by the theme provider
+   * from the active locale. It is not a theme setting: it is never read from
+   * or written to a theme configuration.
+   */
+  direction?: 'ltr' | 'rtl';
+
   // Label variant tokens — Published/Draft (dashboard status)
   labelPublishedColor?: string;
   labelPublishedBg?: string;

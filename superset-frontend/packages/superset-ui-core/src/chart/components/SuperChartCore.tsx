@@ -25,8 +25,14 @@ import {
   useRef,
 } from 'react';
 import { t } from '@apache-superset/core/translation';
+import {
+  DirectionProvider,
+  useDirection,
+  type Direction,
+} from '@apache-superset/core/theme';
 import { createSelector } from 'reselect';
 import getChartComponentRegistry from '../registries/ChartComponentRegistrySingleton';
+import getChartMetadataRegistry from '../registries/ChartMetadataRegistrySingleton';
 import getChartTransformPropsRegistry from '../registries/ChartTransformPropsRegistrySingleton';
 import ChartProps from '../models/ChartProps';
 import createLoadableRenderer from './createLoadableRenderer';
@@ -36,10 +42,34 @@ import {
   TransformProps,
   PostTransformProps,
 } from '../types/TransformFunction';
-import { HandlerFunction } from '../types/Base';
+import { Behavior, HandlerFunction } from '../types/Base';
 
 function IDENTITY<T>(x: T) {
   return x;
+}
+
+/**
+ * Layout direction of a chart in a right-to-left interface. Plots keep
+ * left-to-right axis semantics unless their metadata opts in to following
+ * the interface; native filters and chart customizations are interface
+ * controls and always follow it.
+ */
+export function resolveChartDirection(
+  chartType: string,
+  pageDirection: Direction,
+): Direction {
+  if (pageDirection === 'ltr') {
+    return 'ltr';
+  }
+  const metadata = getChartMetadataRegistry().get(chartType);
+  if (metadata?.direction) {
+    return metadata.direction === 'inherit' ? pageDirection : 'ltr';
+  }
+  const behaviors = metadata?.behaviors ?? [];
+  return behaviors.includes(Behavior.NativeFilter) ||
+    behaviors.includes(Behavior.ChartCustomization)
+    ? pageDirection
+    : 'ltr';
 }
 
 const EMPTY = () => null;
@@ -296,6 +326,9 @@ const SuperChartCore = forwardRef<SuperChartCoreRef, Props>(
       overrideTransformProps,
     });
 
+    const pageDirection = useDirection();
+    const chartDirection = resolveChartDirection(chartType, pageDirection);
+
     // Do not render if chartProps is set to null.
     // but the pre-loading has been started in createLoadableRendererSelector
     // to prepare for rendering once chartProps becomes available.
@@ -306,7 +339,12 @@ const SuperChartCore = forwardRef<SuperChartCoreRef, Props>(
     const containerProps: {
       id?: string;
       className?: string;
+      dir?: Direction;
     } = {};
+    if (pageDirection === 'rtl') {
+      // Left-to-right pages keep their markup unchanged.
+      containerProps.dir = chartDirection;
+    }
     if (id) {
       containerProps.id = id;
     }
@@ -314,15 +352,20 @@ const SuperChartCore = forwardRef<SuperChartCoreRef, Props>(
       containerProps.className = className;
     }
 
+    // Every chart plugin renders into this container, so this is the single
+    // place where a chart's layout direction is decided (see
+    // ChartMetadata.direction).
     return (
       <div {...containerProps} ref={setRef}>
-        <Renderer
-          preTransformProps={preTransformProps}
-          postTransformProps={postTransformProps}
-          chartProps={chartProps}
-          onRenderSuccess={onRenderSuccess}
-          onRenderFailure={onRenderFailure}
-        />
+        <DirectionProvider direction={chartDirection}>
+          <Renderer
+            preTransformProps={preTransformProps}
+            postTransformProps={postTransformProps}
+            chartProps={chartProps}
+            onRenderSuccess={onRenderSuccess}
+            onRenderFailure={onRenderFailure}
+          />
+        </DirectionProvider>
       </div>
     );
   },

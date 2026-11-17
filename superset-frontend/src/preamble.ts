@@ -18,6 +18,7 @@
  */
 import { configure, LanguagePack } from '@apache-superset/core/translation';
 import { logging } from '@apache-superset/core/utils';
+import { getDirectionForLocale } from '@apache-superset/core/theme';
 import { makeApi, initFeatureFlags } from '@superset-ui/core';
 import { extendedDayjs as dayjs } from '@superset-ui/core/utils/dates';
 import setupClient from './setup/setupClient';
@@ -27,7 +28,7 @@ import setupDashboardComponents from './setup/setupDashboardComponents';
 import { User } from './types/bootstrapTypes';
 import getBootstrapData, { applicationRoot } from './utils/getBootstrapData';
 import { makeUrl } from './utils/navigationUtils';
-import { toDayjsLocale } from './hooks/useLocale';
+import { loadAntdLocale, toDayjsLocale } from './hooks/useLocale';
 
 // Import dayjs plugin types for global TypeScript support
 import 'dayjs/plugin/utc';
@@ -54,6 +55,25 @@ export default function initPreamble(): Promise<void> {
     // Grab initial bootstrap data
     const bootstrapData = getBootstrapData();
     const lang = bootstrapData.common.locale || 'en';
+
+    // The server renders <html lang dir> for the first paint. Fill the
+    // attributes in for documents it did not render (tests, hosts with their
+    // own page) so that every entry point agrees on the direction.
+    if (typeof document !== 'undefined') {
+      const root = document.documentElement;
+      if (!root.getAttribute('dir')) {
+        root.setAttribute(
+          'dir',
+          bootstrapData.common.direction ?? getDirectionForLocale(lang),
+        );
+      }
+      if (!root.getAttribute('lang')) {
+        root.setAttribute('lang', String(lang).replace(/_/g, '-'));
+      }
+    }
+    // Ant Design's own strings (pagination, date pickers, empty states); the
+    // provider picks the result up without waiting for it.
+    loadAntdLocale(lang).catch(() => undefined);
 
     setupFormatters(
       bootstrapData.common.d3_format,
