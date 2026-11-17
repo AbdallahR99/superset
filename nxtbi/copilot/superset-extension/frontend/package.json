@@ -1,0 +1,12 @@
+{
+  "name": "@nxtbi/copilot-superset-extension",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node ../../../../superset-frontend/node_modules/webpack/bin/webpack.js --config webpack.config.cjs",
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "node ../../../../superset-frontend/node_modules/typescript/bin/tsc -p tsconfig.json"
+  }
+}

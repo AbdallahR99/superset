@@ -43,5 +43,8 @@ superset-frontend/coverage/
 superset-frontend/.temp_cache/
 superset/static/assets/
 superset-websocket/dist/
+nxtbi/out/
+nxtbi/copilot/**/.env
+nxtbi/copilot/standalone/dist/
 venv
 .venv

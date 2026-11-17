@@ -1,0 +1,74 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+:root {
+  font: 1rem/1.5 system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #192e2b;
+  background: #f1f5f3;
+  --nxtbi-copilot-surface: #fff;
+  --nxtbi-copilot-accent: #17675d;
+}
+
+body {
+  margin: 0;
+  min-inline-size: 280px;
+}
+
+.workspace {
+  max-inline-size: 58rem;
+  margin-inline: auto;
+  padding: clamp(1rem, 5vw, 3rem);
+}
+
+.workspace__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-block-end: 1.5rem;
+}
+
+.workspace__header h1 {
+  margin: 0;
+  font-size: clamp(1.65rem, 4vw, 2.6rem);
+  letter-spacing: -0.025em;
+}
+
+.workspace__header p {
+  margin-block: 0.25rem 0;
+  color: #475e58;
+}
+
+.workspace__locale {
+  border: 1px solid #8ba39d;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #155b52;
+  padding: 0.45rem 0.75rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.workspace__assistant {
+  border: 1px solid #c0d0ca;
+  border-radius: 0.9rem;
+  overflow: hidden;
+  block-size: min(72svh, 48rem);
+  min-block-size: 24rem;
+}

@@ -129,6 +129,15 @@ for _name in filter(None, (f.strip() for f in os.environ.get("NXTBI_EXPERIMENTAL
 if FEATURE_FLAGS.get("FAB_API_KEY_ENABLED"):
     FAB_API_KEY_ENABLED = True
 
+if os.environ.get("NXTBI_COPILOT_ENABLED") == "true":
+    FEATURE_FLAGS.update(
+        {"NXTBI_AI_COPILOT": True, "DASHBOARD_V2": True, "ENABLE_EXTENSIONS": True}
+    )
+    NXTBI_COPILOT_AGENT_URL = _env("NXTBI_COPILOT_AGENT_URL")
+    NXTBI_COPILOT_MCP_URL = _env("NXTBI_COPILOT_MCP_URL")
+    NXTBI_COPILOT_SHARED_SECRET = _env("NXTBI_COPILOT_SHARED_SECRET")
+    LOCAL_EXTENSIONS = [_env("NXTBI_COPILOT_LOCAL_EXTENSION")]
+
 # =====================================================================================
 # 3. Keycloak OIDC login, group -> role mapping, RP-initiated logout
 # =====================================================================================

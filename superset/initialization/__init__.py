@@ -302,6 +302,10 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         appbuilder.add_api(WidgetControlsRestApi)
         appbuilder.add_api(SavedWidgetRestApi)
         appbuilder.add_api(DashboardV2RestApi)
+        if self.config["FEATURE_FLAGS"].get("NXTBI_AI_COPILOT"):
+            from superset.copilot.api import register_copilot
+
+            register_copilot(self.superset_app)
         # Dashboard V2, saved widgets and the widget control schemas are one
         # feature: all of their routes answer 404 unless DASHBOARD_V2 is on.
         from superset.dashboard_v2.feature import register_dashboard_v2_gate
