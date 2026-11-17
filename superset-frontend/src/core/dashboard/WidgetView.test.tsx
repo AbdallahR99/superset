@@ -17,13 +17,16 @@
  * under the License.
  */
 import { dashboard as dashboardApi } from '@apache-superset/core';
+import { DASHBOARD_WIDGETS_LOCATION } from '@apache-superset/core/widgets';
 import {
+  act,
   fireEvent,
   render,
   screen,
   userEvent,
   waitFor,
 } from 'spec/helpers/testing-library';
+import { views } from 'src/core/views';
 import DashboardProvider from './DashboardProvider';
 import { registerBuiltInWidgets } from './registerBuiltInWidgets';
 import WidgetView from './WidgetView';
@@ -84,6 +87,32 @@ const withBlock = () => {
   render(<WidgetView nodeId={id} />);
   return { rootId, id };
 };
+
+test('renders a saved widget when its extension finishes registering', () => {
+  const type = 'extensions.test.late-widget';
+  const id = provider.addWidget(provider.getRoot().id, 0, { type });
+  const { unmount } = render(<WidgetView nodeId={id} />);
+
+  expect(screen.getByText(`Unsupported widget type: ${type}`)).toBeVisible();
+
+  let registration: ReturnType<typeof views.registerView> | undefined;
+  try {
+    act(() => {
+      registration = views.registerView(
+        { id: type, name: 'Late widget' },
+        DASHBOARD_WIDGETS_LOCATION,
+        () => <div>Loaded extension widget</div>,
+      );
+    });
+    expect(screen.getByText('Loaded extension widget')).toBeVisible();
+    expect(screen.getByTestId(`widget-title-${id}`)).toHaveTextContent(
+      'Late widget',
+    );
+  } finally {
+    unmount();
+    registration?.dispose();
+  }
+});
 
 test('a widget says which one it is', () => {
   const { id } = withBlock();

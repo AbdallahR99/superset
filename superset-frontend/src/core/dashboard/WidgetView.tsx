@@ -22,6 +22,7 @@ import {
   useMemo,
   useState,
   type HTMLAttributes,
+  type ReactElement,
 } from 'react';
 import { t } from '@apache-superset/core/translation';
 import { css, styled, useTheme } from '@apache-superset/core/theme';
@@ -29,9 +30,10 @@ import { ActionButton, Flex, Typography } from '@superset-ui/core/components';
 import { Icons } from '@superset-ui/core/components/Icons';
 import type { MenuItem } from '@superset-ui/core/components/Menu';
 import { ErrorBoundary, KebabMenuButton } from 'src/components';
+import { resolveView, useViews } from 'src/core/views';
 import { useDashboardStore, useDashboardRevision } from './store';
 import { isContainerType } from './DashboardProvider';
-import { isWidgetViewRegistered, resolveWidgetView } from './resolveWidgetView';
+import { DASHBOARD_WIDGETS_LOCATION } from './resolveWidgetView';
 import { widgetLabel } from './widgetLabel';
 import { widgetHeaderControl } from './widgetHeaderControl';
 import RootGrid from './RootGrid';
@@ -294,6 +296,8 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
   function WidgetView({ nodeId, children, ...rest }, ref) {
     const store = useDashboardStore();
     useDashboardRevision(store);
+    // A remote extension can register after a saved node has already mounted.
+    const widgetViews = useViews(DASHBOARD_WIDGETS_LOCATION);
     const theme = useTheme();
     const editable = useDashboardViewMode() === 'edit';
     const [embedOpen, setEmbedOpen] = useState(false);
@@ -313,18 +317,20 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     // ever raises an error.
     const chrome = nodeId !== store.getRoot().id;
     const isRoot = !chrome;
+    const hasRegisteredView = widgetViews?.some(view => view.id === node.type);
     // The root's renderer is not looked up in the widget registry —
     // see this component's own doc comment — since the root was never
     // registered there in the first place.
-    const resolved = isRoot ? (
-      editable ? (
+    let resolved: ReactElement | undefined;
+    if (isRoot) {
+      resolved = editable ? (
         <RootGrid nodeId={nodeId} />
       ) : (
         <StaticGrid nodeId={nodeId} />
-      )
-    ) : (
-      resolveWidgetView(node.type, nodeId)
-    );
+      );
+    } else if (hasRegisteredView) {
+      resolved = resolveView(node.type, { nodeId });
+    }
     // The same token `BlockHeader` is drawn at: the content box below is this
     // element's height minus the band, so the two have to be one number.
     const headerHeight = theme.controlHeightSM;
@@ -551,8 +557,7 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
                         // page: any registered widget except the containers,
                         // which only arrange the nodes inside them.
                         disabled:
-                          !isWidgetViewRegistered(node.type) ||
-                          isContainerType(node.type),
+                          !hasRegisteredView || isContainerType(node.type),
                         onClick: () => setEmbedOpen(true),
                       },
                       { type: 'divider' },
