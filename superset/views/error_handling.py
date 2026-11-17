@@ -19,7 +19,9 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
+import re
 import typing
+from html import escape
 from importlib.resources import files
 from typing import Any, Callable, cast
 
@@ -30,7 +32,7 @@ from flask import (
     Response,
     send_file,
 )
-from flask_babel import gettext as _
+from flask_babel import get_locale, gettext as _
 from flask_babel.speaklater import LazyString
 from flask_jwt_extended.exceptions import NoAuthorizationError
 from flask_wtf.csrf import CSRFError
@@ -46,6 +48,7 @@ from superset.exceptions import (
     SupersetSecurityException,
 )
 from superset.superset_typing import FlaskResponse
+from superset.translations.utils import get_text_direction
 from superset.utils import core as utils, json
 from superset.utils.error_sanitization import (
     sanitize_error_message,
@@ -61,6 +64,50 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 JSON_MIMETYPE = "application/json; charset=utf-8"
+
+_HTML_OPEN_TAG = re.compile(r"<html\b[^>]*>", re.IGNORECASE)
+
+
+def localize_static_page(html: str, language: str, direction: str) -> str:
+    """
+    Set the ``lang`` and ``dir`` attributes of a static page's ``<html>`` tag.
+
+    The branded error pages are build output written for English, so the tag
+    they ship with carries ``lang="en"`` and no direction.
+    """
+    tag = f'<html lang="{escape(language)}" dir="{escape(direction)}">'
+    return _HTML_OPEN_TAG.sub(tag, html, count=1)
+
+
+def send_static_error_page(path: Any, status: int) -> FlaskResponse:
+    """
+    Serve a branded static error page in the direction of the request's locale.
+
+    The file is sent untouched for English. For any other locale the document
+    language and direction are written into the ``<html>`` tag, so the page is
+    laid out like the application the user came from. Raises
+    ``FileNotFoundError`` when the page has not been built.
+    """
+    response = send_file(path, max_age=0)
+    language = str(get_locale() or "en").replace("_", "-")
+    direction = get_text_direction(language)
+    if language == "en" and direction == "ltr":
+        return response, status
+    try:
+        html = path.read_text(encoding="utf-8")
+    except OSError:
+        return response, status
+    response.close()
+    return (
+        Response(
+            localize_static_page(html, language, direction),
+            mimetype="text/html",
+            # The body depends on the session locale, which no validator of
+            # the file itself (ETag, Last-Modified) can express.
+            headers={"Cache-Control": "no-store"},
+        ),
+        status,
+    )
 
 
 def get_error_level_from_status(
@@ -268,7 +315,7 @@ def set_app_error_handlers(app: Flask) -> None:  # noqa: C901
             path = files("superset") / f"static/assets/{ex.code}.html"
             # Try to serve HTML file; fall back to JSON if not built
             try:
-                return send_file(path, max_age=0), ex.code
+                return send_static_error_page(path, ex.code)
             except FileNotFoundError:
                 pass
 

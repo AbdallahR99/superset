@@ -21,6 +21,7 @@ import os
 from typing import Any, Literal, Optional
 
 from babel import Locale
+from babel.core import UnknownLocaleError
 from flask import current_app
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ def get_text_direction(locale: Optional[str]) -> TextDirection:
         return "ltr"
     try:
         parsed = Locale.parse(str(locale).replace("-", "_"), sep="_")
-    except (ValueError, LookupError, TypeError):
+    except (ValueError, LookupError, TypeError, UnknownLocaleError):
         return "ltr"
     return "rtl" if parsed.text_direction == "rtl" else "ltr"
 
