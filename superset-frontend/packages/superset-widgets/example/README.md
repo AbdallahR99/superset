@@ -114,6 +114,9 @@ cp .env.example .env
 - `EMBED_WIDGET_IDS`: uuids of saved widgets (`GET /api/v1/widget/`, or "Embed
   widget" on a widget in the Dashboard v2 builder). Empty hides nothing: the
   section explains what to set.
+- `EMBED_MISSING_WIDGET_ID`: a uuid no saved widget has. Set it to show the
+  gallery's `renderError` demo, which asks for that widget and draws the 404.
+  Empty hides the demo, so a default run makes no request that fails.
 - Guest mode: `EMBED_AUTH=guest`, `SUPERSET_USERNAME`, `SUPERSET_PASSWORD`
   (the service account; no defaults, and never sent to the browser).
 

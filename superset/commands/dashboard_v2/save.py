@@ -71,6 +71,7 @@ from superset.dashboard_v2.storage import (
 )
 from superset.exceptions import SupersetSecurityException
 from superset.models.dashboard import Dashboard
+from superset.models.helpers import skip_visibility_filter
 from superset.utils import json
 from superset.utils.core import get_user_id
 from superset.utils.decorators import transaction
@@ -298,20 +299,25 @@ class CreateDashboardV2Command(BaseCommand):
         ``None`` when the uuid is free.
 
         :raises DashboardV2InvalidError: If the uuid belongs to a dashboard
-            this caller did not create, cannot read, or that is not a v2
-            dashboard
+            this caller did not create, cannot read, that is not a v2
+            dashboard, or that is in the trash
         """
-        dashboard = (
-            db.session.query(Dashboard)
-            .filter(Dashboard.uuid == self._uuid)
-            .one_or_none()
-        )
+        # The uuid is unique across every row, the soft-deleted ones included,
+        # so the lookup has to see them too: a uuid held by a dashboard in the
+        # trash is taken, and is refused here instead of by the constraint.
+        with skip_visibility_filter(db.session, Dashboard):
+            dashboard = (
+                db.session.query(Dashboard)
+                .filter(Dashboard.uuid == self._uuid)
+                .one_or_none()
+            )
         if dashboard is None:
             return None
         stored = load_stored_document(dashboard.json_metadata)
         user_id = get_user_id()
         if (
             stored is None
+            or dashboard.deleted_at is not None
             or user_id is None
             or dashboard.created_by_fk != user_id
             or not can_read_document(dashboard, stored)

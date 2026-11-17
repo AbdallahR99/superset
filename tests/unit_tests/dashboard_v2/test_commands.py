@@ -42,6 +42,7 @@ from superset.commands.dashboard_v2.save import (
     normalize_and_validate,
     UpdateDashboardV2Command,
 )
+from superset.daos.dashboard import DashboardDAO
 from superset.dashboard_v2 import storage
 from superset.dashboard_v2.document import with_revision, write_stored_document
 from superset.utils import json
@@ -402,6 +403,31 @@ def test_a_uuid_of_a_classic_dashboard_is_refused(
 
         with pytest.raises(DashboardV2InvalidError, match="uuid already exists"):
             _create(uuid=key)
+
+
+def test_a_uuid_of_a_dashboard_in_the_trash_is_refused(
+    mocker: MockerFixture, editor: None, v2_session: Session
+) -> None:
+    """A soft-deleted dashboard still holds its uuid. Even its own creator
+    gets a validation error rather than the unique constraint's failure."""
+    from superset.models.dashboard import Dashboard
+
+    key = uuid.uuid4()
+    with _user(7):
+        pk = _create(uuid=key)
+        dashboard = v2_session.get(Dashboard, pk)
+        assert dashboard is not None
+        dashboard.soft_delete()
+        v2_session.flush()
+        v2_session.expire_all()
+        # The row is invisible to an ordinary lookup.
+        assert v2_session.query(Dashboard).filter(Dashboard.uuid == key).count() == 0
+        create = mocker.spy(DashboardDAO, "create")
+
+        with pytest.raises(DashboardV2InvalidError, match="uuid already exists"):
+            _create(uuid=key)
+
+    create.assert_not_called()
 
 
 def test_create_losing_a_race_on_its_uuid_returns_the_winners_dashboard(

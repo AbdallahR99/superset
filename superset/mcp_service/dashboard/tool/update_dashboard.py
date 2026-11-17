@@ -212,7 +212,13 @@ def _apply_field_updates(dashboard: Any, request: UpdateDashboardRequest) -> lis
 
     metadata_overrides: dict[str, Any] = _collect_metadata_overrides(request)
     if metadata_overrides:
-        dashboard.json_metadata = _merge_json_metadata(dashboard, metadata_overrides)
+        from superset.daos.dashboard import DashboardDAO
+
+        # A v2 dashboard's document is carried over from the row as stored at
+        # the time of the write, not from the copy this session loaded.
+        dashboard.json_metadata = DashboardDAO.metadata_keeping_v2_document(
+            dashboard, json.loads(_merge_json_metadata(dashboard, metadata_overrides))
+        )
         changed.append("json_metadata")
 
     if request.css is not None:

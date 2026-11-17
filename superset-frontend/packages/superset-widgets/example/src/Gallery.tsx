@@ -43,7 +43,6 @@ const {
   metricColumn,
   secondMetric,
 } = config;
-const MISSING_WIDGET_ID = '00000000-0000-0000-0000-000000000000';
 
 const byDimension = {
   xAxis: {
@@ -210,6 +209,10 @@ export function Gallery({
   direction: 'ltr' | 'rtl';
 }) {
   const savedId = config.savedWidgetIds[0];
+  // Asking Superset for a widget that does not exist is a failed request,
+  // which the browser logs. The page only makes it when told which id to ask
+  // for, so a default run loads without one.
+  const missingId = config.missingWidgetId;
 
   return (
     <section className="gallery">
@@ -572,16 +575,22 @@ export function Gallery({
               ) : (
                 <p className="hint">Set EMBED_WIDGET_IDS to show fallback.</p>
               )}
-              <Demo label="<Widget renderError>">
-                <Widget
-                  id={MISSING_WIDGET_ID}
-                  renderError={error => (
-                    <div className="gallery-error" role="alert">
-                      Custom error view: {error.message}
-                    </div>
-                  )}
-                />
-              </Demo>
+              {missingId ? (
+                <Demo label="<Widget renderError>">
+                  <Widget
+                    id={missingId}
+                    renderError={error => (
+                      <div className="gallery-error" role="alert">
+                        Custom error view: {error.message}
+                      </div>
+                    )}
+                  />
+                </Demo>
+              ) : (
+                <p className="hint">
+                  Set EMBED_MISSING_WIDGET_ID to show renderError.
+                </p>
+              )}
             </div>
           </Card>
 

@@ -50,22 +50,24 @@ def _list_saved_widgets_impl(
     # pylint: disable=import-outside-toplevel
     from superset.commands.widget.saved import ListSavedWidgetsCommand
 
+    # The tool's pages are 1-based, the command's 0-based.
+    command = ListSavedWidgetsCommand(
+        page=request.page - 1, page_size=request.page_size
+    )
     try:
-        widgets = ListSavedWidgetsCommand().run()
+        widgets = command.run()
     except Exception as ex:  # pylint: disable=broad-except
         return widget_tool_error(ex)
 
     include_metadata = user_can_view_data_model_metadata()
-    start = (request.page - 1) * request.page_size
-    page = widgets[start : start + request.page_size]
     items = [
         serialize_saved_widget(widget, include_data_model_metadata=include_metadata)
-        for widget in page
+        for widget in widgets
     ]
     return SavedWidgetList(
         widgets=items,
         count=len(items),
-        total_count=len(widgets),
+        total_count=command.count,
         page=request.page,
         page_size=request.page_size,
     )

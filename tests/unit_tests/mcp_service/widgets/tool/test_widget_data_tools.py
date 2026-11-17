@@ -295,17 +295,41 @@ def test_get_saved_widget_requires_feature_flag(widgets_enabled: MagicMock) -> N
     assert result.error_type == "FeatureDisabled"
 
 
-def test_list_saved_widgets_pages_the_command_result() -> None:
-    widgets = [saved_widget(uuid=f"uuid-{index}") for index in range(5)]
+def test_list_saved_widgets_asks_the_command_for_one_page() -> None:
+    """The command pages (0-based) and counts; the tool passes its 1-based
+    page through and reports the command's total, not the page length."""
     with patch(LIST_COMMAND) as command:
-        command.return_value.run.return_value = widgets
+        command.return_value.run.return_value = [
+            saved_widget(uuid="uuid-2"),
+            saved_widget(uuid="uuid-3"),
+        ]
+        command.return_value.count = 5
         result = _list_saved_widgets_impl(ListSavedWidgetsRequest(page=2, page_size=2))
 
-    command.assert_called_once_with()
+    command.assert_called_once_with(page=1, page_size=2)
     assert isinstance(result, SavedWidgetList)
     assert [widget.uuid for widget in result.widgets] == ["uuid-2", "uuid-3"]
     assert (result.count, result.total_count) == (2, 5)
     assert (result.page, result.page_size) == (2, 2)
+
+
+def test_list_saved_widgets_defaults_to_the_first_page() -> None:
+    with patch(LIST_COMMAND) as command:
+        command.return_value.run.return_value = []
+        command.return_value.count = 0
+        result = _list_saved_widgets_impl(ListSavedWidgetsRequest())
+
+    command.assert_called_once_with(page=0, page_size=25)
+    assert isinstance(result, SavedWidgetList)
+    assert (result.count, result.total_count, result.page) == (0, 0, 1)
+
+
+def test_list_saved_widgets_reports_a_page_the_command_refuses() -> None:
+    with patch(LIST_COMMAND) as command:
+        command.return_value.run.side_effect = WidgetInvalidError("page too large")
+        result = _list_saved_widgets_impl(ListSavedWidgetsRequest(page=10**9))
+
+    assert isinstance(result, WidgetToolError)
 
 
 def test_list_saved_widgets_withholds_props_without_metadata_access(
@@ -314,6 +338,7 @@ def test_list_saved_widgets_withholds_props_without_metadata_access(
     can_view_metadata.return_value = False
     with patch(LIST_COMMAND) as command:
         command.return_value.run.return_value = [saved_widget()]
+        command.return_value.count = 1
         result = _list_saved_widgets_impl(ListSavedWidgetsRequest())
 
     assert isinstance(result, SavedWidgetList)
@@ -388,6 +413,7 @@ async def test_tools_are_callable_through_mcp() -> None:
 
         with patch(LIST_COMMAND) as command:
             command.return_value.run.return_value = [saved_widget()]
+            command.return_value.count = 1
             listed = await client.call_tool("list_saved_widgets", {})
         listing = json.loads(listed.content[0].text)
         assert listing["total_count"] == 1

@@ -946,13 +946,13 @@ test('a create followed by a refused update still reports the dashboard it creat
   addMarkdown();
 
   const first = session.save();
-  addMarkdown();
+  const added = addMarkdown();
   const second = session.save();
   saves[0].resolve(saved(7, 1));
   await flush();
   const error = refusal(422, {
     message: 'Widget props failed validation.',
-    errors: { node_x: [{ loc: ['content'], message: 'Required' }] },
+    errors: { [added]: [{ loc: ['content'], message: 'Required' }] },
   });
   saves[1].reject(error);
 
@@ -966,7 +966,7 @@ test('a create followed by a refused update still reports the dashboard it creat
   expect(session.getState()).toMatchObject({
     dashboardId: 7,
     baseRevision: 1,
-    nodeErrors: { node_x: ['content: Required'] },
+    nodeErrors: { [added]: ['content: Required'] },
   });
 });
 
@@ -1014,6 +1014,67 @@ test('what a refusal said about widgets is kept until the next save starts', asy
   expect(session.getState().nodeErrors).toEqual({});
   saves[1].resolve(saved(5, 4));
   await second;
+  expect(session.getState().nodeErrors).toEqual({});
+});
+
+test("a widget's refusal goes when its properties are edited or it is removed, and stays through anything else", async () => {
+  const { session, saves, fetches } = setup();
+  session.open('5');
+  fetches[0].resolve(saved(5, 3, documentOf('a', 'b', 'c')));
+  await flush();
+  provider.updateProps('a', { content: 'edited' });
+  const listener = jest.fn();
+  session.subscribe(listener);
+
+  const running = session.save();
+  saves[0].reject(
+    refusal(422, {
+      message: 'invalid',
+      errors: {
+        a: [{ loc: ['content'], message: 'Too long' }],
+        b: [{ loc: ['content'], message: 'Too long' }],
+        c: [{ loc: ['content'], message: 'Too long' }],
+      },
+    }),
+  );
+  await running;
+  expect(Object.keys(session.getState().nodeErrors)).toEqual(['a', 'b', 'c']);
+
+  // Moving a widget, or editing another one, says nothing about this one.
+  provider.updateLayout('a', { col: 2 });
+  provider.addWidget('root', 0, { type: 'markdown' });
+  expect(Object.keys(session.getState().nodeErrors)).toEqual(['a', 'b', 'c']);
+
+  listener.mockClear();
+  provider.updateProps('a', { content: 'fixed' });
+  expect(Object.keys(session.getState().nodeErrors)).toEqual(['b', 'c']);
+  // Said to whoever draws the errors, once.
+  expect(listener).toHaveBeenCalledTimes(1);
+
+  provider.removeWidget('b');
+  expect(Object.keys(session.getState().nodeErrors)).toEqual(['c']);
+
+  provider.updateProps('c', { content: 'fixed' });
+  expect(session.getState().nodeErrors).toEqual({});
+  // Nothing is left to watch for: a later edit is not the session's news.
+  listener.mockClear();
+  provider.updateProps('c', { content: 'again' });
+  expect(listener).not.toHaveBeenCalled();
+});
+
+test('a refusal about a widget edited while the save was away is not shown on it', async () => {
+  const { session, saves } = await editedSession(3);
+
+  const running = session.save();
+  provider.updateProps('a', { content: 'already fixed' });
+  saves[0].reject(
+    refusal(422, {
+      message: 'invalid',
+      errors: { a: [{ loc: ['content'], message: 'Too long' }] },
+    }),
+  );
+  await running;
+
   expect(session.getState().nodeErrors).toEqual({});
 });
 

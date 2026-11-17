@@ -49,7 +49,7 @@ interface BindMarker {
      * one-element ARRAY by default, since that's what every *other* chart
      * shape (bar/line/pie, one point per row) needs. Anywhere ECharts wants
      * a plain number/string instead — a gauge's `series[].data[].value`, a
-     * `graphic[].style.text` label — set `single: true` to get that one
+     * `title.subtext` — set `single: true` to get that one
      * value unwrapped, rather than `[value]`.
      */
     single?: boolean;

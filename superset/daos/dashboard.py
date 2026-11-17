@@ -1157,12 +1157,12 @@ class DashboardDAO(BaseDAO[Dashboard]):
         if old_to_new_slice_ids:
             DashboardDAO._remap_filter_scopes(md, old_to_new_slice_ids)
 
-        dashboard.json_metadata = DashboardDAO._metadata_keeping_v2_document(
+        dashboard.json_metadata = DashboardDAO.metadata_keeping_v2_document(
             dashboard, md
         )
 
     @staticmethod
-    def _metadata_keeping_v2_document(dashboard: Dashboard, md: dict[str, Any]) -> str:
+    def metadata_keeping_v2_document(dashboard: Dashboard, md: dict[str, Any]) -> str:
         """
         Serialize ``md`` for *dashboard* without changing its v2 document.
 
@@ -1171,8 +1171,19 @@ class DashboardDAO(BaseDAO[Dashboard]):
         metadata is therefore written with a compare-and-swap that takes the
         document from the row as it is at that moment, so this update can
         neither alter the document nor roll back a concurrent save of it.
+
+        Every classic writer of ``json_metadata`` stores through here: the
+        dashboard update, the native filter, chart customization and color
+        configuration updates, and the MCP dashboard tools.
+
+        :raises DashboardUpdateFailedError: If the write keeps losing against
+            concurrent writers
         """
-        if V2_DOCUMENT_KEY not in md or dashboard.id is None:
+        if (
+            not isinstance(md, dict)
+            or V2_DOCUMENT_KEY not in md
+            or dashboard.id is None
+        ):
             return json.dumps(md)
         stored = write_metadata_keeping_document(dashboard.id, md)
         if stored is None:
@@ -1557,7 +1568,9 @@ class DashboardDAO(BaseDAO[Dashboard]):
                 updated_configuration, native_filter_configuration
             )
             metadata["native_filter_configuration"] = updated_configuration
-            dashboard.json_metadata = json.dumps(metadata)
+            dashboard.json_metadata = cls.metadata_keeping_v2_document(
+                dashboard, metadata
+            )
 
             # The client rebuilds its in-scope state from this response, so hand
             # back derived scopes rather than the stored caches, which are stale
@@ -1628,7 +1641,9 @@ class DashboardDAO(BaseDAO[Dashboard]):
                 ]
 
             metadata["chart_customization_config"] = updated_configuration
-            dashboard.json_metadata = json.dumps(metadata)
+            dashboard.json_metadata = cls.metadata_keeping_v2_document(
+                dashboard, metadata
+            )
 
         return updated_configuration
 
@@ -1648,7 +1663,7 @@ class DashboardDAO(BaseDAO[Dashboard]):
             if key in attributes:
                 metadata[key] = attributes[key]
 
-        dashboard.json_metadata = json.dumps(metadata)
+        dashboard.json_metadata = cls.metadata_keeping_v2_document(dashboard, metadata)
 
     @staticmethod
     def add_favorite(dashboard: Dashboard) -> None:

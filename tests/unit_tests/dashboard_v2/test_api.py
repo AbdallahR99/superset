@@ -78,9 +78,12 @@ def _create(client: Any, *children: str) -> int:
 # Feature flag
 # --------------------------------------------------------------------------
 
+# Fixed, so the parametrized test ids are the same in every xdist worker.
+ROUTE_UUID = "0b9d6f0e-3c1a-4d57-9a5e-2f8c1b7d4e60"
+
 GATED_ROUTES = [
     ("GET", f"{BASE}1"),
-    ("GET", f"{BASE}embedded/{uuid.uuid4()}"),
+    ("GET", f"{BASE}embedded/{ROUTE_UUID}"),
     ("POST", BASE),
     ("PUT", f"{BASE}1"),
     ("GET", "/api/v1/widgets/types"),
@@ -88,9 +91,9 @@ GATED_ROUTES = [
     ("POST", "/api/v1/widgets/type/markdown/validate"),
     ("GET", "/api/v1/widget/"),
     ("POST", "/api/v1/widget/"),
-    ("GET", f"/api/v1/widget/{uuid.uuid4()}"),
-    ("PUT", f"/api/v1/widget/{uuid.uuid4()}"),
-    ("DELETE", f"/api/v1/widget/{uuid.uuid4()}"),
+    ("GET", f"/api/v1/widget/{ROUTE_UUID}"),
+    ("PUT", f"/api/v1/widget/{ROUTE_UUID}"),
+    ("DELETE", f"/api/v1/widget/{ROUTE_UUID}"),
     ("POST", "/api/v1/widget/data"),
     ("POST", "/api/v1/widget/values"),
     ("GET", "/dashboard/v2/new/"),
@@ -756,6 +759,35 @@ def test_create_with_a_uuid_taken_by_someone_else_is_422(
     assert "uuid" in response.get_json()["message"]
     assert "result" not in response.get_json()
     assert v2_session.query(Dashboard).count() == 1
+
+
+def test_create_with_the_uuid_of_a_dashboard_in_the_trash_is_422(
+    client: Any,
+    mocker: MockerFixture,
+    dashboard_v2_enabled: None,
+    editor: None,
+    v2_session: Session,
+) -> None:
+    """The uuid is still taken by the soft-deleted row: a clear 422, not the
+    failure of the unique constraint."""
+    from superset.models.dashboard import Dashboard
+
+    key = str(uuid.uuid4())
+    body = {"dashboard_title": "Sales", "document": make_document(), "uuid": key}
+    first = client.post(BASE, json=body)
+    assert first.status_code == 201, first.get_json()
+    dashboard = v2_session.get(Dashboard, first.get_json()["id"])
+    assert dashboard is not None
+    dashboard.created_by_fk = 7
+    dashboard.soft_delete()
+    v2_session.commit()
+    mocker.patch("superset.commands.dashboard_v2.save.get_user_id", return_value=7)
+
+    response = client.post(BASE, json=body)
+
+    assert response.status_code == 422, response.get_json()
+    assert "uuid" in response.get_json()["message"]
+    assert "result" not in response.get_json()
 
 
 def test_create_with_a_malformed_uuid_is_400(

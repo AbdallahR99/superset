@@ -57,8 +57,10 @@ function isWebpackFederationContainer(
  * Loads extension modules via webpack module federation.
  *
  * Extensions register their contributions (commands, views, menus, editors)
- * as module-level side effects when their module is imported. The loader
- * only handles fetching and importing the remote modules.
+ * as module-level side effects when their module is imported, or in an
+ * exported `activate(core)` that the loader calls once the module has been
+ * imported. Beyond that the loader only fetches and imports the remote
+ * modules.
  */
 class ExtensionsLoader {
   private static instance: ExtensionsLoader;
@@ -244,7 +246,21 @@ class ExtensionsLoader {
     await container.init(customScope);
 
     const factory = await container.get('./index');
-    factory();
+    // Evaluating the entry module is what registers the contributions of an
+    // extension written to register as a side effect of being imported.
+    const entry: unknown = factory();
+    // An extension may instead (or also) export `activate(core)` and register
+    // on the core it is handed, which is the form the embedded widget host
+    // prefers because it reads nothing from a global. It is called here with
+    // the same per-extension core the module federation scope resolves, so
+    // such an extension behaves the same in Superset as in a host page.
+    const activate =
+      typeof entry === 'object' && entry !== null
+        ? (entry as { activate?: unknown }).activate
+        : undefined;
+    if (typeof activate === 'function') {
+      await activate(scopedCore);
+    }
   }
 
   /**

@@ -65,6 +65,48 @@ export function errorKindForStatus(status: number): WidgetErrorKind {
   }
 }
 
+/**
+ * What the body of a refusal from Superset's widget API says, as one line.
+ *
+ * A refusal carries a `message` and, when it is about particular fields,
+ * `errors: [{loc, message}]`. For a request that failed its schema the
+ * `message` already is the first problem; for widget props it is only the
+ * verdict ("Widget props failed validation.") and the reasons are in
+ * `errors`, so both are read: an author who is told that validation failed
+ * and not why cannot fix anything. Returns `undefined` for a body that says
+ * nothing readable.
+ */
+export function describeErrorBody(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const { message, errors } = body as { message?: unknown; errors?: unknown };
+  const lines = (Array.isArray(errors) ? errors : [])
+    .map(problem => {
+      if (typeof problem === 'string') return problem;
+      if (typeof problem !== 'object' || problem === null) return '';
+      const { loc, message: text } = problem as {
+        loc?: unknown;
+        message?: unknown;
+      };
+      if (typeof text !== 'string' || text === '') return '';
+      const where = Array.isArray(loc) ? loc.join('.') : '';
+      return where !== '' ? `${where}: ${text}` : text;
+    })
+    .filter(line => line !== '');
+  let summary = '';
+  if (typeof message === 'string') {
+    summary = message;
+  } else if (message && typeof message === 'object') {
+    // Marshmallow's own shape: `{field: [reason, ...]}`.
+    summary = JSON.stringify(message);
+  }
+  // The summary of a schema error repeats its first problem.
+  if (summary === '' || lines.includes(summary)) {
+    return lines.length > 0 ? lines.join('; ') : undefined;
+  }
+  if (lines.length === 0) return summary;
+  return `${summary.replace(/[.:\s]+$/, '')}: ${lines.join('; ')}`;
+}
+
 export const toError = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error));
 

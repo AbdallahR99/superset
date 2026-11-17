@@ -69,6 +69,12 @@ export const config = {
     | 'session',
   savedWidgetIds: list(viteEnv.EMBED_WIDGET_IDS),
   /**
+   * A uuid no saved widget has, for the gallery's `renderError` demo. Left
+   * empty, the demo is not rendered and the page makes no request that is
+   * bound to fail.
+   */
+  missingWidgetId: text(viteEnv.EMBED_MISSING_WIDGET_ID, ''),
+  /**
    * A widget type contributed by a Superset extension, e.g.
    * `extensions.<publisher>.<name>.<type>`. Set it and the page renders one:
    * the provider fetches that extension from Superset and loads its code at

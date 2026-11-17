@@ -311,6 +311,82 @@ test('validation errors and error lists are readable', async () => {
   );
 });
 
+test('props the server refuses are reported with the reason, not only the verdict', async () => {
+  const client = createHttpWidgetClient({
+    supersetDomain: DOMAIN,
+    getGuestToken: async () => 'token-1',
+  });
+
+  // The control model's refusal of an ECharts option: the message is only
+  // the verdict, and what to fix is in `errors`.
+  fetchMock.mockResolvedValue(
+    jsonResponse(422, {
+      message: 'Widget props failed validation.',
+      errors: [
+        {
+          loc: ['echartsOptions'],
+          message:
+            'Value error, echartsOptions.tooltip.formatter contains HTML markup',
+        },
+        {
+          loc: ['dataBinding', 'rowLimit'],
+          message: 'Input should be greater than 0',
+        },
+      ],
+    }),
+  );
+  const refused = await client.fetchData(inlineRequest).catch(error => error);
+  expect(refused).toBeInstanceOf(WidgetApiError);
+  expect(refused).toMatchObject({ kind: 'invalid', status: 422 });
+  expect(refused.message).toBe(
+    '422: Widget props failed validation: ' +
+      'echartsOptions: Value error, echartsOptions.tooltip.formatter contains HTML markup; ' +
+      'dataBinding.rowLimit: Input should be greater than 0',
+  );
+
+  // A request that failed its schema: the message already is the first
+  // problem, and is not said twice.
+  fetchMock.mockResolvedValue(
+    jsonResponse(400, {
+      message: 'filters.0.operator: Must be one of: IN, NOT IN.',
+      errors: [
+        {
+          loc: ['filters', '0', 'operator'],
+          message: 'Must be one of: IN, NOT IN.',
+        },
+        { loc: ['widget'], message: 'Missing data for required field.' },
+      ],
+    }),
+  );
+  await expect(client.fetchData(inlineRequest)).rejects.toThrow(
+    '400: filters.0.operator: Must be one of: IN, NOT IN.; widget: Missing data for required field.',
+  );
+});
+
+test('a widget whose dataset was deleted says so, for data and for values', async () => {
+  const client = createHttpWidgetClient({
+    supersetDomain: DOMAIN,
+    getGuestToken: async () => 'token-1',
+  });
+  fetchMock.mockResolvedValue(
+    jsonResponse(404, {
+      message: 'The dataset this widget reads no longer exists.',
+    }),
+  );
+  const expected =
+    'Superset could not find what this widget refers to (404): The dataset this widget reads no longer exists.';
+
+  const data = await client.fetchData(inlineRequest).catch(error => error);
+  expect(data).toMatchObject({ kind: 'not_found', status: 404 });
+  expect(data.message).toBe(expected);
+
+  const values = await client
+    .fetchValues({ instanceId: 'a', widget: inlineRequest.widget })
+    .catch(error => error);
+  expect(values).toMatchObject({ kind: 'not_found', status: 404 });
+  expect(values.message).toBe(expected);
+});
+
 test('a network failure is its own kind of error, and a cancelled request stays a cancellation', async () => {
   const client = createHttpWidgetClient({
     supersetDomain: DOMAIN,

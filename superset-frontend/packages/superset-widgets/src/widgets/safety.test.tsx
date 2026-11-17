@@ -36,7 +36,7 @@ const SCRIPT_URL = `${'java'}${'script'}:alert(1)`;
 const markupIn = (text: string): string[] =>
   text.match(/<\/?[a-z][^>]*>/gi) ?? [];
 
-test('a tooltip template keeps its formatting and loses anything that could run', () => {
+test('a tooltip template is drawn as text, formatting tags included', () => {
   const option = {
     tooltip: {
       trigger: 'axis',
@@ -59,11 +59,13 @@ test('a tooltip template keeps its formatting and loses anything that could run'
   const safe = sanitizeEchartsOption(option);
   const serialized = JSON.stringify(safe);
 
-  expect(safe.tooltip.formatter).toContain('<b>{b}</b>: {c}');
+  // The server refuses a template with any markup in it, `<b>` and `<br/>`
+  // included, so none is let through here either.
+  expect(safe.tooltip.formatter).toContain('&lt;b&gt;{b}&lt;/b&gt;: {c}');
   expect(safe.tooltip.trigger).toBe('axis');
   expect(safe.series[0].label.formatter).toBe('<{c}>');
-  // Whatever markup is left is text: no tag other than the inert ones opens.
-  expect(markupIn(serialized)).toEqual(['<b>', '</b>', '</i>']);
+  // Whatever markup was written is text: no tag opens.
+  expect(markupIn(serialized)).toEqual([]);
   expect(safe.series[0].tooltip.formatter).toBe(
     '&lt;a href=&quot;javascript:alert(3)&quot;&gt;{a}&lt;/a&gt;',
   );
@@ -89,7 +91,15 @@ test('a toolbox keeps only tools that draw nothing into the page', () => {
           optionToContent: 'alert(1)',
         },
         myTool: { show: true, title: hostile, icon: hostile, onclick: 'x' },
-        magicType: { type: ['line', 'bar'], option: { line: {} } },
+        magicType: {
+          show: true,
+          type: ['line', 'bar', 'stack'],
+          // Merged by ECharts into the series it rebuilds, unseen by this.
+          option: { line: { tooltip: { formatter: hostile } } },
+          title: { line: hostile },
+          icon: { line: 'image://https://evil.example/x.png' },
+          seriesIndex: { line: [0] },
+        },
         saveAsImage: {
           show: true,
           type: 'png',
@@ -114,12 +124,20 @@ test('a toolbox keeps only tools that draw nothing into the page', () => {
     itemSize: 40,
     left: 'center',
     feature: {
+      magicType: { show: true, type: ['line', 'bar', 'stack'] },
       saveAsImage: { show: true, type: 'png', pixelRatio: 2 },
       restore: { show: true },
       dataZoom: { show: true, yAxisIndex: 'none' },
     },
   });
   expect(JSON.stringify(safe)).not.toMatch(/onerror|dataView|myTool|evil/);
+
+  // A type the feature does not have takes the whole list with it.
+  expect(
+    sanitizeEchartsOption({
+      toolbox: { feature: { magicType: { type: ['line', 'pie'] } } },
+    }).toolbox,
+  ).toEqual({ feature: { magicType: {} } });
 });
 
 test('the security review payload yields no markup', () => {
@@ -161,6 +179,7 @@ test('a tooltip is rebuilt from known settings, wherever it sits', () => {
     content: '<script>alert(1)</script>',
     formatterParams: { a: breakout },
     appendTo: 'body',
+    appendToBody: true,
     padding: [4, 8],
     textStyle: {
       color: '#333',
@@ -209,6 +228,7 @@ test('only top-level keys known to draw on the canvas are passed on', () => {
     xAxis: { type: 'category' },
     color: ['#111'],
     // Each of these nests whole options, or is not a component drawn here.
+    graphic: { elements: [{ type: 'text', style: { text: 'x' } }] },
     baseOption: nested,
     media: [{ option: nested }],
     options: [nested],
@@ -232,36 +252,66 @@ test('only top-level keys known to draw on the canvas are passed on', () => {
   expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
 });
 
-test('graphic elements keep their drawing and lose every handler', () => {
+test('keys the server forbids are dropped at any depth, and handlers with them', () => {
   const fromCode = () => undefined;
   const safe = sanitizeEchartsOption({
     graphic: {
-      elements: [
-        {
-          type: 'text',
-          style: { text: '<b>42</b>' },
-          onclick: 'alert(1)',
-          onmouseover: fromCode,
-          ONCLICK: 'alert(2)',
-          children: [{ type: 'rect', ondragstart: fromCode, draggable: true }],
-        },
-      ],
+      elements: [{ type: 'text', style: { text: '42' }, onclick: fromCode }],
     },
-    // Outside `graphic` a key that merely starts with "on" is a setting.
+    series: [
+      {
+        type: 'bar',
+        // Not only at the top: a key is judged by its name wherever it sits.
+        graphic: { elements: [] },
+        dataView: { show: true },
+        extraCssText: 'background:url(https://evil.example)',
+        className: 'x',
+        appendTo: 'body',
+        appendToBody: true,
+        renderItem: 'alert(1)',
+        onclick: 'alert(1)',
+        onMouseOver: fromCode,
+        ONCLICK: 'alert(2)',
+        data: [
+          { value: 1, ondragstart: fromCode, itemStyle: { color: 'red' } },
+        ],
+      },
+    ],
+    // A key that merely starts with "on" is a setting.
     xAxis: { axisLine: { onZero: false } },
   });
 
-  expect(safe.graphic).toEqual({
-    elements: [
-      {
-        type: 'text',
-        // Canvas text, drawn as written.
-        style: { text: '<b>42</b>' },
-        children: [{ type: 'rect', draggable: true }],
-      },
+  expect(safe).toEqual({
+    series: [
+      { type: 'bar', data: [{ value: 1, itemStyle: { color: 'red' } }] },
+    ],
+    xAxis: { axisLine: { onZero: false } },
+  });
+});
+
+test('a custom series drawn by host code keeps its function, and only a function', () => {
+  const renderItem = () => ({ type: 'rect' });
+
+  const safe = sanitizeEchartsOption({
+    series: [
+      { type: 'custom', renderItem },
+      { type: 'custom', renderItem: 'function(){alert(1)}' },
     ],
   });
-  expect(safe.xAxis).toEqual({ axisLine: { onZero: false } });
+
+  expect(safe.series[0].renderItem).toBe(renderItem);
+  expect(safe.series[1]).toEqual({ type: 'custom' });
+});
+
+test('canvas text is drawn as the data says, markup-looking or not', () => {
+  // What a `$bind` marker resolved to: values from a query, not a definition.
+  const safe = sanitizeEchartsOption({
+    xAxis: { type: 'category', data: ['<none>', 'a & b', '<b>bold</b>'] },
+    series: [{ type: 'bar', name: '<total>', data: [1, 2, 3] }],
+  });
+
+  expect(safe.xAxis.data).toEqual(['<none>', 'a & b', '<b>bold</b>']);
+  expect(safe.series[0].name).toBe('<total>');
 });
 
 test('links on tree nodes follow the same rule as title links', () => {
@@ -288,13 +338,13 @@ test('links on tree nodes follow the same rule as title links', () => {
   expect(safe.axisPointer).toEqual({ link: [{ xAxisIndex: 'all' }] });
 });
 
-test('a tooltip template is escaped except for attribute-less formatting', () => {
+test('a tooltip template is escaped whole, with no tag let through', () => {
   expect(escapeTooltipTemplate('{b}: {c} & more')).toBe('{b}: {c} &amp; more');
   expect(escapeTooltipTemplate('<b>{b}</b><br/>{c}<BR>')).toBe(
-    '<b>{b}</b><br/>{c}<BR>',
+    '&lt;b&gt;{b}&lt;/b&gt;&lt;br/&gt;{c}&lt;BR&gt;',
   );
   expect(escapeTooltipTemplate('<b onclick="x">{b}</b>')).toBe(
-    '&lt;b onclick=&quot;x&quot;&gt;{b}</b>',
+    '&lt;b onclick=&quot;x&quot;&gt;{b}&lt;/b&gt;',
   );
   expect(escapeTooltipTemplate('<br/onload=x>')).toBe('&lt;br/onload=x&gt;');
   expect(escapeTooltipTemplate("<svg/onload='x'>")).toBe(

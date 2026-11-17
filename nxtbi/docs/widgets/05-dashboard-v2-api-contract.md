@@ -4,7 +4,7 @@ Backend source: `superset/dashboard_v2/{api,document,node_types,storage,access,s
 
 ## 1. Feature flag
 
-Everything below exists only while the feature flag `DASHBOARD_V2` is on (default `False`). While it is off, every route of these four views answers **404** before authentication, for signed-in and anonymous callers alike:
+Everything below exists only while the feature flag `DASHBOARD_V2` is on (default `False`). While it is off, every route of these four views answers **404** before CSRF protection and before authentication, for signed-in and anonymous callers alike. An anonymous `POST`/`PUT`/`DELETE` without a CSRF token is therefore a 404 as well, not the 400 of the CSRF check:
 
 | View | Routes |
 |---|---|
@@ -14,6 +14,8 @@ Everything below exists only while the feature flag `DASHBOARD_V2` is on (defaul
 | `DashboardBuilderV2View` | `/dashboard/v2/new/`, `/dashboard/v2/<pk>/` |
 
 The gate is `register_dashboard_v2_gate` (`superset/dashboard_v2/feature.py`), installed in `superset/initialization/__init__.py`. The flag is resolved per request.
+
+The gate is the first of the app's `before_request` hooks: it is inserted ahead of the ones registered earlier (CSRF protection, session validation, Flask-AppBuilder's `g.user`). Because it runs before Flask-AppBuilder's hook, it assigns `g.user` the same lazy `current_user` proxy itself when it is not set yet, so a flag function that looks at the caller (`GET_FEATURE_FLAGS_FUNC` / `IS_FEATURE_ENABLED_FUNC`) keeps working. Routes outside the four views are not affected.
 
 ## 2. Resource
 
@@ -72,7 +74,7 @@ There is no V2 delete route: a V2 dashboard is deleted through `DELETE /api/v1/d
 - `uuid` is a client-generated UUID that becomes the dashboard's uuid. Generate one per unsaved document and send the same value on every retry of that create.
 - First request: `201`, as without a uuid.
 - A repeat by **the same caller** whose dashboard already exists under that uuid: nothing is written; the answer is `200 {id, result}` with the dashboard **as stored** (its current revision and document, which may be newer than the body that was re-sent). Adopt `id` and `revision` from it exactly as from a 201.
-- The uuid belongs to a dashboard the caller did not create, or to one that is not a V2 dashboard: `422 {message}`. Generate a new uuid.
+- The uuid belongs to a dashboard the caller did not create, to one that is not a V2 dashboard, or to one in the trash (soft-deleted, the caller's own included): `422 {message}`. Generate a new uuid.
 - Two creates racing on one uuid: one answers 201, the other 200.
 
 ### 3.2 Who may read the document
@@ -88,7 +90,14 @@ There is no V2 delete route: a V2 dashboard is deleted through `DELETE /api/v1/d
 
 A refused read is `403 {message}`, the same as any other access failure.
 
-The classic `GET /api/v1/dashboard/<id>` does not return the `v2_document` key inside `json_metadata`; the document is served by this API only.
+The classic `GET /api/v1/dashboard/<id>` does not return the `v2_document` key inside `json_metadata`; the document is served by this API only. The other places a document can leave the server:
+
+| Path | Rule |
+|---|---|
+| Dashboard export (`GET /api/v1/dashboard/export/`, asset export) | the rule of the table above, applied per dashboard; a caller who fails it gets the dashboard without `metadata.v2_document` (section 6.1) |
+| Version history (`/api/v1/dashboard/<uuid>/versions/...`, flag `VERSION_HISTORY`) | editors only (`is_editor`, `superset/versioning/api_helpers.py`), who may read the document anyway; `json_metadata` is a versioned column and is diffed leaf by leaf, `v2_document` included |
+| MCP dashboard tools (`get_dashboard_info`, `list_dashboards`) | the serializers never return `json_metadata`; only its size and the extracted native filters |
+| Copy | editors only; the copy carries the document |
 
 ### PUT body
 
@@ -179,8 +188,12 @@ The Dashboard V2 API is the only writer of the document during normal use.
 | Path | What happens to `v2_document` |
 |---|---|
 | Classic `PUT /api/v1/dashboard/<id>` and `POST /api/v1/dashboard/` (properties modal, `json_metadata`) | An incoming `v2_document` key is **ignored**. The stored document and its revision are carried forward unchanged, re-read from the database at write time. No error is raised, so the modal can keep sending back the `json_metadata` it loaded. |
+| `PUT /api/v1/dashboard/<id>/filters`, `/chart_customizations`, `/colors` | Same compare-and-swap as the classic update (`DashboardDAO.metadata_keeping_v2_document`): the writer changes its own key and the document is taken from the row at write time, so a V2 save made after the writer loaded the dashboard is kept. A writer that keeps losing the swap fails instead of overwriting. |
+| MCP `update_dashboard`, `generate_dashboard` (`json_metadata_overrides`) | A `v2_document` key in the overrides is refused by the request schema. `update_dashboard` and `remove_chart_from_dashboard` store through the same compare-and-swap. |
 | Copy / "Save as" (`POST /api/v1/dashboard/<id>/copy/`) | The **source's stored** document is copied to the new dashboard at revision 1; a `v2_document` in the request's `json_metadata` is ignored. |
-| Export | `metadata.v2_document` is part of the exported dashboard YAML. |
+| Export | `metadata.v2_document` is part of the exported dashboard YAML only for a caller who may read the document (section 3.2); for anyone else the key is left out and the rest of the dashboard is exported as usual. The CLI export runs as an admin and always includes it. |
+| Restore from the trash (`POST /api/v1/dashboard/<uuid>/restore`) | Rewrites `json_metadata` only to drop filters with missing semantic views; the document is carried through unchanged. The row is invisible to every other writer until the restore commits. |
+| Version restore (dashboard `restore_version` route, flag `VERSION_HISTORY`) | Editors only. Reverts `json_metadata` as a whole, so the document **and its revision** go back to the snapshot's; this path does not validate the document again or move the revision forward. |
 | Import | `metadata.v2_document` goes through the full validation of this section (types, props, limits). An invalid document fails the import. A `revision` inside the file is ignored: a new dashboard gets revision 1, an overwritten V2 dashboard gets its stored revision + 1 (open builders then get a 409 on their next save). |
 
 ## 7. Frontend checklist

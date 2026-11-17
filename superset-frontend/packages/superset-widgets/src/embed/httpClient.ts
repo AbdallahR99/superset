@@ -16,7 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { WidgetApiError, errorKindForStatus, isAbortError } from '../errors';
+import {
+  WidgetApiError,
+  describeErrorBody,
+  errorKindForStatus,
+  isAbortError,
+} from '../errors';
 import type { ResolvedFilter } from '../filterVocabulary';
 import type {
   DataRow,
@@ -56,18 +61,8 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 async function responseMessage(response: Response): Promise<string> {
   try {
-    const body = (await response.json()) as {
-      message?: unknown;
-      errors?: { message?: string }[];
-    } | null;
-    if (typeof body?.message === 'string') return body.message;
-    if (body?.message && typeof body.message === 'object') {
-      // Marshmallow validation errors: `{field: [reason, ...]}`.
-      return JSON.stringify(body.message);
-    }
-    if (Array.isArray(body?.errors)) {
-      return body.errors.map(error => error.message).join('; ');
-    }
+    const detail = describeErrorBody(await response.json());
+    if (detail !== undefined) return detail;
   } catch {
     // Not JSON; fall back to the status text.
   }

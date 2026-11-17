@@ -20,10 +20,15 @@ import { Chart, SupersetProvider } from '@apache-superset/widgets';
 import { config } from './config';
 
 // No backend: requests carry your Superset login session.
-export default function TopRowsByDimension() {
+export default function TopRowsByDimension({
+  direction,
+}: {
+  // Optional: left out, the provider follows the page's own direction.
+  direction?: 'ltr' | 'rtl';
+}) {
   const { supersetUrl, datasetId, metric, filterColumn } = config;
   return (
-    <SupersetProvider supersetDomain={supersetUrl}>
+    <SupersetProvider supersetDomain={supersetUrl} direction={direction}>
       <Chart
         chartType="bar"
         dataBinding={{

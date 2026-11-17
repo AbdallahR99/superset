@@ -52,6 +52,10 @@ function deriveColumnDefs(columns: string[]): ColDef[] {
  * Text settings (`headerName`, `headerTooltip`) are drawn by AG Grid as text
  * content. Settings that name something (`type`, `cellDataType`, `sort`,
  * `pinned`) accept only the built-in names below.
+ *
+ * The settings are the ones the server accepts when a definition is stored
+ * (`AG_GRID_COLUMN_SETTINGS` in `superset/widgets/safety.py`), which refuses
+ * any other by name; `safety.parity.test.ts` reads both lists and compares.
  */
 type ColumnRule =
   | 'string'
@@ -60,7 +64,7 @@ type ColumnRule =
   | 'identifier'
   | readonly string[];
 
-const COLUMN_SETTINGS: Readonly<Record<string, ColumnRule>> = {
+export const COLUMN_SETTINGS: Readonly<Record<string, ColumnRule>> = {
   field: 'identifier',
   colId: 'identifier',
   headerName: 'string',

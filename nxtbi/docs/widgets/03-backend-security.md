@@ -2,7 +2,9 @@
 
 Legend: **PR** = `E:/Work_Lab/nxtbi-superset-pr44471` (detached 71be990689). **FORK** = `E:/Work_Lab/nxtbi-superset` at ref `master` (f3f3d10d5c, read with `git show master:<path>`). Merge-base = 6856d0fc67. Everything is read from code unless marked **UNVERIFIED**. "PR claims" = PR body / docstrings; "code does" = what was read.
 
-Verdict in five lines:
+> **Status of this document.** Sections 1 to 4 are the review of upstream PR #44471 **as it was submitted**; they describe the defects that motivated the port and are kept as a record. They do not describe the code on `feature/nxtbi-widgets`. The security model that branch implements is in **section 5**, which supersedes 1.5, 1.7, 3 and the "minimal fix" column of 4(a) wherever they differ. In particular: the `datasets` claim no longer grants anything, a `widget` resource carries a server-recorded `dataset_id`, and there is a `dataset` resource type.
+
+Verdict in five lines (of the PR as submitted):
 - The backend is small (about 4.6k lines of source, 93 backend files) and mostly additive; `git merge-tree --write-tree master upstream/pr-44471` gives only 4 backend textual conflicts (`superset/config.py`, `superset/security/manager.py`, `superset/mcp_service/mcp_config.py`, `superset-core/.../semantic_layers/config.py`).
 - The PR already uses the Subjects model for v2 dashboards (`populate_subjects`, `editors`, `raise_for_editorship`); saved widgets use plain `created_by_fk` ownership.
 - Data execution reuses `ChartDataCommand`/`QueryContext`, so dataset permission, RLS, cache keys and row caps are the standard chart-data ones. No client SQL for guests; authenticated users can send ad-hoc SQL metrics/filters inline (same power as `/api/v1/chart/data`).
@@ -246,3 +248,80 @@ CI state reported on the PR: unit tests, pre-commit and all three DB backends fa
 | Flag / CSRF | flag off -> 404 on every new route; `/widget/data` works without CSRF token, `POST /widget/` does not |
 | MCP | RBAC: user without `can read on Chart` denied; guest principal denied by `MCP_GUEST_ALLOWED_TOOLS`; `test_excluded_tools_covers_every_mutating_tool` green |
 | Extensions | `EMBEDDED_EXTENSION_ASSETS_PUBLIC` off -> 401 unauthenticated; on -> only bundle files public |
+
+## 5. The model as implemented (`feature/nxtbi-widgets`)
+
+Read from `superset/security/guest_token.py`, `superset/security/manager.py`, `superset/security/api.py`, `superset/widgets/{data,safety,controls}.py`, `superset/commands/widget/{data,utils}.py` and `superset/dashboard_v2/{access,feature}.py` in this worktree. Symbol names are given instead of line numbers.
+
+### 5.1 Feature flag
+
+Everything is behind `DASHBOARD_V2` (default off). `register_dashboard_v2_gate` answers 404 for the Dashboard V2 API, the widget control API, the saved-widget API and the builder view, before CSRF protection and authentication. The MCP widget tools refuse on the same flag. Details: `05-dashboard-v2-api-contract.md` section 1. (Closes D6.)
+
+### 5.2 Guest token: resources and the `datasets` claim
+
+`GuestTokenResourceType` has three members. Each `resources` entry is authorized at mint time by `validate_guest_token_resources`; a type it does not know is a validation error, so nothing unchecked is ever signed.
+
+| Resource | What it grants a guest | Checked when the token is minted |
+|---|---|---|
+| `{"type": "dashboard", "id": <embedded uuid or id>}` | the embedded dashboard, as before | the dashboard is embedded; the **minter** passes `raise_for_access(dashboard=...)` and can read every member datasource the token will expose (`_raise_for_guest_token_datasource_access`) |
+| `{"type": "widget", "id": <saved widget uuid>}` | the definition of that saved widget, and data from **the dataset the widget bound at mint time** | the widget exists and is of a registered type; a type that queries data must bind a dataset; the minter passes `can_access_datasource` on it (`_guest_token_widget_dataset`, `_guest_token_minter_dataset`). The server then writes `dataset_id` into the resource. |
+| `{"type": "dataset", "id": <dataset id>}` | **inline**, SQL-free widget definitions against that one dataset | the id is a positive integer in plain decimal digits; the dataset exists; the minter passes `can_access_datasource` (`_guest_token_inline_dataset`) |
+
+Rules that follow from the code:
+
+- **`dataset` is the inline grant, and the only one.** `guest_widget_grants_dataset` serves an inline definition only when the token has a `dataset` resource for the definition's dataset (`guest_token_grants_inline_dataset`). A `dashboard` resource, a `widget` resource and the `datasets` claim never grant one, so a dashboard-scoped token cannot run an inline definition. (Closes D2.)
+- **`datasets` only narrows.** The claim is consulted in exactly one way, `_raise_for_guest_dataset_allowlist`: when present, a datasource that is not a SQL dataset or whose id is not listed is refused even if a resource would grant it; a malformed list refuses everything. It is never read as a grant. A token mixing a `widget` resource with a `datasets` list that omits the widget's dataset therefore gets no data for that widget.
+- **A `widget` resource carries a server-recorded `dataset_id`.** `GuestTokenResource.dataset_id` is set by the server and a value sent by the caller is always replaced. It is `None` for a type that queries nothing (markdown, a filter bar). At request time `guest_token_binds_widget_dataset` requires the token to name the widget **and** the recorded id to equal the dataset the widget binds on that request. A saved widget that was re-pointed at another dataset after the token was minted, and a token without a recorded dataset, get no data. (Closes D1 on the mint side.)
+- **Data access is keyed on a server-built context.** `widget_context_grants_data_access` grants a guest a datasource only for a `QueryContext` whose `widget_context` is a real `WidgetContext` (never populated from a request), whose dataset is the datasource being queried, and for a SQL dataset (`type == "table"`). Forged form data or a duck-typed object grants nothing. `/widget/values` uses the same rule through `raise_for_widget_datasource_access`.
+- A token for widget X cannot read widget Y (`guest_token_names_widget`), a dashboard (`has_guest_access` looks at `dashboard` resources only) or `/api/v1/chart/data`.
+- Signing is unchanged: one `GUEST_TOKEN_JWT_SECRET` / audience for every guest token; scoping lives in the `resources` and `datasets` claims. `enforce_guest_token_identity` and revocation apply to widget and dataset tokens as to dashboard tokens.
+
+### 5.3 Row level security at mint, and `GUEST_TOKEN_VALIDATOR_HOOK`
+
+A guest is not the widget's author. The rows a guest reads are bounded by the `rls` rules in its token plus the RLS rules that apply to the guest role (`GUEST_ROLE_NAME`), never by the author's role rules.
+
+`create_guest_access_token` therefore calls `_raise_for_guest_token_widget_rls`: for every dataset granted by a `widget` resource (its recorded `dataset_id`) or a `dataset` resource, if the dataset carries RLS rules (`row_level_security_filters`), the token must hold an `rls` rule that covers it: a rule without `dataset` (applies to all) or one naming that dataset id. Otherwise minting fails with a validation error. `dashboard` resources are not subject to this rule.
+
+A deployment that decides this itself sets `GUEST_TOKEN_VALIDATOR_HOOK` (a callable taking the token request body, `superset/security/api.py`). When a callable hook is configured the built-in requirement steps aside and the hook is the authority; it runs for every guest-token request after `validate_guest_token_resources`, and a falsy result rejects the request. A configured value that is not callable is an error.
+
+Guest RLS on a semantic view cannot be enforced and is refused (`raise_for_unsupported_guest_rls`); widgets only bind SQL datasets.
+
+### 5.4 Who may author SQL
+
+`find_sql_in_props` defines "SQL-free": metrics are saved-metric names or SIMPLE aggregates of a named column, dimensions are column names, authored filters are SIMPLE `WHERE` comparisons on a named column with an operator from `SIMPLE_FILTER_OPERATORS`, and nothing in the binding holds a SQL-bearing key (`sqlExpression`, `sql`, `where`, `having`, `extras`, `expression`) or a Jinja marker (`{{`, `{%`, `{#`).
+
+| Caller | SQL expressions in a definition |
+|---|---|
+| Admin | allowed |
+| Signed-in user who can read the bound dataset (`can_access_datasource`) | allowed. This is the rule Explore applies to an ad-hoc SQL metric or filter of a classic chart: the expression runs through the dataset's normal ad-hoc pipeline (sanitizing, `ALLOW_ADHOC_SUBQUERY`, template processing), so the builder is exactly as permissive as `/api/v1/chart/data` for the same role. A Gamma user with dataset access may author SQL. |
+| Signed-in user without access to the dataset, or a definition that binds no dataset (non-admin) | refused (`WidgetSqlNotAllowedError`) |
+| Guest | **never**, whatever the guest role grants (`user_may_author_widget_sql`) |
+
+Where it is enforced: saving a widget (`raise_for_widget_authoring`: read access to the bound dataset, then the SQL rule; closes D1 on the author side), and an inline data request from a signed-in user (`resolve_widget`, only when the definition carries SQL).
+
+Guest inline definitions are default-deny (`resolve_widget`): no derivable dataset or no `dataset` resource for it is a 403; then `validate_guest_inline_props` requires saved metrics or SIMPLE aggregates in `GUEST_AGGREGATES` on existing columns, groupable dimensions, SIMPLE filters on existing columns, `rowLimit` between 1 and `GUEST_INLINE_ROW_LIMIT` (10000), an existing `column`, and finally `find_sql_in_props` returning nothing. (Closes D5.)
+
+SQL stored in a **saved** widget is its author's, checked when it was saved; it is served to a guest unchanged, the way a chart's SQL metric is on an embedded dashboard.
+
+### 5.5 Reading definitions
+
+- Saved widget (`raise_for_widget_read`): a guest needs a token naming the widget; otherwise admin, the creator, or read access to the dataset it binds. A widget that binds no dataset is readable by its creator and admins only. Change and delete: creator or admin, never a guest. (Closes D3.)
+- Dashboard V2 document (`can_read_document`): admin, editor, viewer, or an embedded guest whose token names the dashboard; anyone else needs access to every dataset the document binds, and a document binding none is for editors and viewers only. The same rule decides whether a dashboard export carries `metadata.v2_document`. See `05-dashboard-v2-api-contract.md` sections 3.2 and 6.1.
+
+### 5.6 Free-form JSON: ECharts options and AG Grid column definitions
+
+An ECharts `option` and AG Grid `columnDefs` are written by one principal and drawn in another's browser, so a definition is accepted only when it is declarative. The rules live in `superset/widgets/safety.py` and run inside the control models (`superset/widgets/controls.py`: the `echarts_options` and `column_defs` field validators), which means on every write path: the validate route, saved widgets, Dashboard V2 documents and imports. They reject; they do not rewrite.
+
+| Input | Accepted | Rejected |
+|---|---|---|
+| any string | up to 20000 characters | HTML markup (`<` followed by a letter, `!`, `/` or `?`); `javascript:`, `vbscript:`, `data:`, `livescript:` URLs (after dropping control characters and spaces) |
+| `echartsOptions` (`echarts_option_problem`) | top-level keys from `ECHARTS_OPTION_KEYS` (canvas-only components); below them any JSON of scalars; `toolbox.feature` limited to `dataZoom`, `magicType`, `restore`, `saveAsImage`; a `formatter` / `*Formatter` that is a text template (or an object of templates); `link` / `sublink` that are http(s), mailto or relative | any other top-level component; keys that reach the DOM or run code wherever they sit (`ECHARTS_FORBIDDEN_KEYS`, for example `graphic`, `dataView`, `extraCssText`, `className`, `appendTo`) and DOM event handlers (`onclick`, ...); a formatter holding function source; nesting deeper than 32 levels or more than 20000 values; non-JSON leaves |
+| `columnDefs` (`column_defs_problem`) | at most 500 flat objects whose keys all come from `AG_GRID_COLUMN_SETTINGS` with the listed type (text up to 500 characters, numbers 0 to 100000, booleans; `sort` in `asc`/`desc`, `pinned` in `left`/`right`) | every other setting by name: renderers, value getters and formatters, class rules, anything AG Grid would compile or mount |
+
+The frontend renderer keeps its own allowlist; the server rule is what guarantees that a stored definition is clean for any renderer.
+
+### 5.7 What is still open
+
+- D7: the V2 header's embed action and a dashboard-scoped guest data path for the widgets of an embedded V2 dashboard are not covered here; check the frontend inventory before relying on V2 embedding.
+- D9, D10 and the fork deployment items of section 3 (7) (guest role, `CORS_OPTIONS`, hook) are deployment and follow-up work, not verified in this section.
+- Version restore reverts a V2 dashboard's document together with its revision and does not validate it again (`05-dashboard-v2-api-contract.md` section 6.1).

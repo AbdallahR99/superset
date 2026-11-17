@@ -35,6 +35,7 @@
  * can't quietly disagree.
  */
 import { SupersetClient } from '@superset-ui/core';
+import { describeErrorBody } from '@apache-superset/widgets/errors';
 import { provider } from 'src/core/dashboard/store';
 
 export type ControlValidationError = {
@@ -55,14 +56,7 @@ export type CommitPropsResult =
 export async function describeError(e: unknown): Promise<string> {
   if (typeof Response !== 'undefined' && e instanceof Response) {
     try {
-      const body = await e.clone().json();
-      const detail =
-        body?.message ??
-        (Array.isArray(body?.errors)
-          ? body.errors
-              .map((err: { message?: string }) => err.message)
-              .join('; ')
-          : undefined);
+      const detail = describeErrorBody(await e.clone().json());
       return detail
         ? `${e.status} ${e.statusText}: ${detail}`
         : `${e.status} ${e.statusText}`;

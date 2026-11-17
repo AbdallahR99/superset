@@ -204,3 +204,28 @@ test('an invalid widget is refused with the server’s own words', async () => {
     await screen.findByTestId('embed-widget-save-error'),
   ).toHaveTextContent('rowLimit must be a positive integer.');
 });
+
+test('props the control model refuses are named, with the reason for each', async () => {
+  fetchMock.post(WIDGET_API, {
+    status: 422,
+    body: {
+      message: 'Widget props failed validation.',
+      errors: [
+        {
+          loc: ['echartsOptions'],
+          message:
+            'Value error, echartsOptions.toolbox.feature.dataView is not an allowed toolbox feature',
+        },
+      ],
+    },
+  });
+  mount();
+
+  fireEvent.click(saveButton());
+
+  expect(
+    await screen.findByTestId('embed-widget-save-error'),
+  ).toHaveTextContent(
+    'Widget props failed validation: echartsOptions: Value error, echartsOptions.toolbox.feature.dataView is not an allowed toolbox feature',
+  );
+});

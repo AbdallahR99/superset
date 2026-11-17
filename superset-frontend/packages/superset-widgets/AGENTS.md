@@ -87,9 +87,12 @@ Prefer the provider's declarative props when the host already holds the state:
   `forbidden`, `not_found`, `conflict`, `invalid`, `network`, `config`.
 - Do not pass HTML through widget props, and do not expect stored definitions
   to carry behaviour: table `columnDefs` and `echartsOptions` are reduced to an
-  allowlist (no `cellRenderer`/`valueFormatter`, no toolbox `dataView` or
-  custom tools, tooltip templates HTML-escaped, unknown top-level ECharts keys
-  dropped) and markdown is sanitised.
+  allowlist (no `cellRenderer`/`valueFormatter`, no `graphic`, no toolbox
+  `dataView` or custom tools, tooltip templates HTML-escaped whole, unknown
+  top-level ECharts keys dropped) and markdown is sanitised. Superset refuses
+  the same things with a 422 that names the setting, and also any string
+  containing markup: write tooltip formatters as plain templates
+  (`'{b}: {c}'`), never with `<br/>` or `<b>`.
 - When writing an extension widget, export `activate(core)` and use that
   `core`; do not rely on `window.superset`. Pass `{ nodeId }` to
   `fetchQueryData` when calling it from an event handler or after an `await`.

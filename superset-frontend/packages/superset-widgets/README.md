@@ -217,25 +217,37 @@ A widget definition is written by one person and rendered in another's page.
 - `echartsOptions` goes through an allowlist as well (`sanitizeEchartsOption`),
   after `$bind` markers are resolved:
   - only top-level keys known to draw on the canvas are passed on (`series`,
-    axes, `grid`, `legend`, `dataset`, `dataZoom`, `visualMap`, `graphic`,
-    colours and animation settings, …); `baseOption`, `media`, `options`,
+    axes, `grid`, `legend`, `dataset`, `dataZoom`, `visualMap`, colours and
+    animation settings, …); `graphic`, `baseOption`, `media`, `options`,
     `timeline` and unknown keys are dropped;
+  - `graphic`, `dataView`, `renderItem`, `extraCssText`, `className`,
+    `appendTo`, `appendToBody` and DOM event handlers (`onclick`, …) are
+    dropped at any depth;
   - a `tooltip`, wherever it sits (option, series, data item, axis, legend), is
-    rebuilt from known settings. A string `formatter` is HTML-escaped; only the
-    attribute-less tags `<b> <i> <u> <em> <strong> <small> <sub> <sup> <br>`
-    survive. `extraCssText`, `className`, `content`, `appendTo` and colours
-    that are not plain CSS values are dropped;
-  - the `toolbox` keeps `saveAsImage`, `restore` and `dataZoom` without titles,
-    icons or tooltips. `dataView`, `magicType` and custom `my*` tools are
-    dropped;
-  - `link` / `sublink` must be `http(s):`, `mailto:` or relative;
-  - `graphic` elements lose every `on…` handler and anything callable.
+    rebuilt from known settings. A string `formatter` is HTML-escaped whole:
+    no tag survives, `<b>` and `<br/>` included. `content` and colours that
+    are not plain CSS values are dropped;
+  - the `toolbox` keeps `saveAsImage`, `restore`, `dataZoom` and `magicType`
+    without titles, icons or tooltips, and `magicType` without its per-type
+    `option` fragments. `dataView` and custom `my*` tools are dropped;
+  - `link` / `sublink` must be `http(s):`, `mailto:` or relative.
 
-  A function is kept where a setting takes one (a tooltip `formatter` passed
-  by host code): JSON, and so a stored widget, cannot carry one.
+  A function is kept where a setting takes one (a tooltip `formatter` or a
+  custom series' `renderItem` passed by host code): JSON, and so a stored
+  widget, cannot carry one.
 
-These run in the browser, on every render. They do not replace validation on
-the server, which is what keeps a stored definition clean for other renderers.
+These run in the browser, on every render, and drop what they do not accept
+without saying so. The rules of record are the server's: it validates the props
+of a saved widget, of a Dashboard V2 document and of every inline widget it is
+asked to query, and refuses (422, with the path of the offending setting in
+`errors`) instead of dropping. The lists above are the server's lists, so
+nothing drawn here is something the server would have refused to store; the
+server additionally refuses any authored string that holds markup (`<b>` in a
+label, say), which the renderer does not second-guess because by then `$bind`
+has put query results, which may well contain a `<`, where the markers were.
+Write tooltips as plain templates (`{b}: {c}`), and expect a refusal rather
+than a silently different chart when a definition uses something from the
+lists of dropped settings.
 
 ## Extension widgets
 

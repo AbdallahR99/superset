@@ -171,20 +171,27 @@ test('a field edit round-trips through the backend /validate endpoint before it 
   await waitFor(() => expect(provider.getNode(id)?.props?.prefix).toBe('$'));
 });
 
-test('an edit still being validated when the panel is closed is not committed afterwards', async () => {
-  const id = provider.addWidget(provider.getRoot().id, 0, {
-    type: 'metric-tile',
-    props: { dataBinding: { datasetId: 1, metrics: ['count'] }, prefix: '' },
-  });
-  const { unmount } = render(<SchemaControlPanel nodeId={id} />);
+/**
+ * A panel on a metric tile with one edit typed into it, whose validation
+ * answers only when the returned `answer` is called.
+ */
+const editAwaitingValidation = async (errors: unknown[] = []) => {
+  const stored = {
+    root: { type: 'grid', children: ['node_1'] },
+    node_1: {
+      type: 'metric-tile',
+      props: { dataBinding: { datasetId: 1, metrics: ['count'] }, prefix: '' },
+    },
+  };
+  provider.loadDocument(stored);
+  const view = render(<SchemaControlPanel nodeId="node_1" />);
   const input = await screen.findByRole('textbox');
-  // From here on a validation answers only when the test says so.
   let answer: () => void = () => {};
   postSpy.mockImplementation(({ endpoint }: { endpoint: string }) => {
     if (endpoint.endsWith('/validate')) {
       return new Promise(resolve => {
         answer = () =>
-          resolve({ json: { result: { errors: [], values: null } } } as never);
+          resolve({ json: { result: { errors, values: null } } } as never);
       }) as never;
     }
     return Promise.resolve({ json: { result: SCHEMA } } as never);
@@ -198,16 +205,59 @@ test('an edit still being validated when the panel is closed is not committed af
       }),
     ),
   );
-  const versionBefore = provider.getDocumentVersion();
-  unmount();
-  answer();
-  // Let the commit's continuation run.
-  await new Promise(resolve => {
+  return { ...view, stored, answer: () => answer() };
+};
+
+/** Lets the continuation of a commit that was just answered run. */
+const settle = () =>
+  new Promise(resolve => {
     setTimeout(resolve, 0);
   });
 
-  expect(provider.getNode(id)?.props?.prefix).toBe('');
+test('an edit still being validated when the panel is closed is committed once it is accepted', async () => {
+  const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const { unmount, answer } = await editAwaitingValidation();
+
+  unmount();
+  answer();
+  await settle();
+
+  // Closing the panel does not take the edit back.
+  expect(provider.getNode('node_1')?.props?.prefix).toBe('$');
+  // Nothing was reported to a panel that is no longer there.
+  expect(errors).not.toHaveBeenCalled();
+  errors.mockRestore();
+});
+
+test('an edit rejected after the panel was closed writes nothing and reports to nobody', async () => {
+  const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const { unmount, answer } = await editAwaitingValidation([
+    { loc: ['prefix'], message: 'Too long' },
+  ]);
+  const versionBefore = provider.getDocumentVersion();
+
+  unmount();
+  answer();
+  await settle();
+
+  expect(provider.getNode('node_1')?.props?.prefix).toBe('');
   expect(provider.getDocumentVersion()).toBe(versionBefore);
+  expect(errors).not.toHaveBeenCalled();
+  errors.mockRestore();
+});
+
+test('an edit validated after its document was replaced is not committed, panel open or closed', async () => {
+  const { unmount, stored, answer } = await editAwaitingValidation();
+
+  unmount();
+  // The author discards their edits and reloads: same ids, another tree.
+  provider.loadDocument(stored);
+  const versionAfterReload = provider.getDocumentVersion();
+  answer();
+  await settle();
+
+  expect(provider.getNode('node_1')?.props?.prefix).toBe('');
+  expect(provider.getDocumentVersion()).toBe(versionAfterReload);
 });
 
 test('a field edit rejected by backend validation is not committed, and its error is shown', async () => {

@@ -166,16 +166,18 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
   // later one — e.g. two edits typed close together — and overwriting the
   // more recent result with a stale one.
   const validateSeqRef = useRef(0);
-  // A panel that is gone has nobody to report a validation to and no form
-  // whose value a late commit would be. Moving the sequence on is what makes
-  // a round-trip still in flight find itself superseded (see
-  // `onBeforeCommit` below) instead of writing after the panel was closed.
-  useEffect(
-    () => () => {
-      validateSeqRef.current += 1;
-    },
-    [],
-  );
+  // A panel that is gone has nobody to report a validation to, so a
+  // round-trip that answers after it closed sets no state here. The edit
+  // itself is still the author's: closing the panel does not take it back,
+  // and it is committed like any other unless the document it was made on
+  // has been replaced (the generation check in `commitWidgetProps`).
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
   // A validation error belongs to the widget it was raised for; selecting a
   // different one shouldn't leave a stale message on screen.
   useEffect(() => setValidationErrors([]), [nodeId]);
@@ -432,11 +434,12 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
                 // form and drops input focus for an edit it made itself.
                 onBeforeCommit: () => {
                   if (validateSeqRef.current !== seq) return false;
-                  selfEditRef.current = true;
+                  if (!unmountedRef.current) selfEditRef.current = true;
                   return true;
                 },
               })
                 .then(result => {
+                  if (unmountedRef.current) return;
                   if (validateSeqRef.current !== seq) return;
                   setValidationErrors(result.ok ? [] : result.errors);
                   // A rejected pick is deliberately left in place — both in
@@ -454,6 +457,7 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
                 .catch(async e => {
                   if (validateSeqRef.current !== seq) return;
                   const message = await describeError(e);
+                  if (unmountedRef.current) return;
                   setValidationErrors([{ loc: [], message }]);
                 });
             }}

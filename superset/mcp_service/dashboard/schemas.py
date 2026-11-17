@@ -1069,6 +1069,25 @@ class RemoveChartFromDashboardResponse(DashboardMutationErrorFields):
     )
 
 
+def _without_v2_document_override(
+    overrides: Dict[str, Any] | None,
+) -> Dict[str, Any] | None:
+    """
+    Refuse ``json_metadata_overrides`` that name the Dashboard v2 document.
+
+    The document is written by the Dashboard v2 API alone, which validates
+    it and guards it with a revision; a metadata override would store one
+    unvalidated.
+    """
+    if overrides is not None and "v2_document" in overrides:
+        raise PydanticCustomError(
+            "v2_document_override",
+            "json_metadata_overrides cannot set v2_document; a Dashboard v2 "
+            "document is saved through the Dashboard v2 API.",
+        )
+    return overrides
+
+
 class GenerateDashboardRequest(BaseModel):
     """Request schema for generating a dashboard."""
 
@@ -1205,6 +1224,12 @@ class GenerateDashboardRequest(BaseModel):
     def normalize_blank_dashboard_title(cls, v: str | None) -> str | None:
         """Use the auto-title fallback for blanks; sanitize nonblank titles above."""
         return v if v and v.strip() else None
+
+    @field_validator("json_metadata_overrides")
+    @classmethod
+    def refuse_v2_document(cls, v: Dict[str, Any] | None) -> Dict[str, Any] | None:
+        """The Dashboard v2 document is not a metadata override."""
+        return _without_v2_document_override(v)
 
 
 class UpdateDashboardRequest(OmittedMeansUnchanged):
@@ -1372,6 +1397,12 @@ class UpdateDashboardRequest(OmittedMeansUnchanged):
         if not v.strip():
             raise PydanticCustomError("empty_text", "dashboard_title cannot be empty")
         return v
+
+    @field_validator("json_metadata_overrides")
+    @classmethod
+    def refuse_v2_document(cls, v: Dict[str, Any] | None) -> Dict[str, Any] | None:
+        """The Dashboard v2 document is not a metadata override."""
+        return _without_v2_document_override(v)
 
     @field_validator("slug", mode="before")
     @classmethod

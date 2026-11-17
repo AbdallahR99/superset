@@ -34,6 +34,7 @@ interface ImportMetaEnv {
   readonly SUPERSET_URL?: string;
   readonly EMBED_AUTH?: string;
   readonly EMBED_WIDGET_IDS?: string;
+  readonly EMBED_MISSING_WIDGET_ID?: string;
   readonly EMBED_EXTENSION_WIDGET?: string;
   readonly EMBED_RTL_LOCALE?: string;
   readonly EMBED_METRIC?: string;

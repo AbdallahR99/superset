@@ -515,6 +515,50 @@ test('a JSON edit rejected by backend validation leaves node.props unchanged and
   expect(provider.getNode(id)?.props?.prefix).toBe('kept');
 });
 
+test('an ECharts option the server would refuse on save is refused on Apply, with where and why', async () => {
+  const stored = { series: [{ type: 'bar' }] };
+  const id = select('echarts', {
+    dataBinding: { datasetId: 1, metrics: ['count'] },
+    echartsOptions: stored,
+  });
+  await openJson();
+  // The validate route runs the control model a save runs, so its words for
+  // an option that renders HTML are the ones a save would have answered.
+  mockPost(METRIC_TILE_SCHEMA, [
+    {
+      loc: ['echartsOptions'],
+      message:
+        'Value error, echartsOptions.tooltip.formatter contains HTML markup',
+    },
+  ]);
+
+  fireEvent.change(screen.getByTestId('inspector-props'), {
+    target: {
+      value: JSON.stringify({
+        dataBinding: { datasetId: 1, metrics: ['count'] },
+        echartsOptions: {
+          ...stored,
+          tooltip: { formatter: '<b>{b}</b><br/>{c}' },
+        },
+      }),
+    },
+  });
+  await userEvent.click(screen.getByTestId('inspector-props-apply'));
+
+  expect(
+    await screen.findByTestId('inspector-props-validation-error'),
+  ).toHaveTextContent(
+    'echartsOptions: Value error, echartsOptions.tooltip.formatter contains HTML markup',
+  );
+  expect(postSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      endpoint: '/api/v1/widgets/type/echarts/validate',
+    }),
+  );
+  // Nothing the server refuses reached the widget.
+  expect(provider.getNode(id)?.props?.echartsOptions).toEqual(stored);
+});
+
 test('switching between Form and JSON tabs does not reset already-accepted values', async () => {
   const id = select('metric-tile', {
     dataBinding: { datasetId: 1, metrics: ['count'] },

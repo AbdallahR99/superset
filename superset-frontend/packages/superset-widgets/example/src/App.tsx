@@ -142,7 +142,8 @@ function Page() {
               <code>{withoutLicense(minimalEmbedSource)}</code>
             </pre>
             <div className="card">
-              <MinimalEmbed />
+              {/* Its own provider, told the direction the toggle chose. */}
+              <MinimalEmbed direction={direction} />
             </div>
           </div>
         </section>

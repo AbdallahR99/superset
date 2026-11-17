@@ -92,8 +92,10 @@ export interface DashboardSessionState {
   repairs: number;
   /**
    * What the last refused save said about particular widgets, by node id.
-   * Drawn on those widgets (see `WidgetView`); emptied when a save starts
-   * and when the session turns to another dashboard.
+   * Drawn on those widgets (see `WidgetView`). A widget's lines go when its
+   * properties are edited or it is removed, since they were about properties
+   * it no longer has; all of them go when a save starts and when the session
+   * turns to another dashboard.
    */
   nodeErrors: Readonly<Record<string, readonly string[]>>;
 }
@@ -226,6 +228,16 @@ export class DashboardSession {
       }
     | undefined;
 
+  /**
+   * The properties each widget named by `state.nodeErrors` had in the
+   * document the server refused. A widget whose properties are no longer
+   * that object has been edited since.
+   */
+  private refusedProps = new Map<string, DocumentNode['props']>();
+
+  /** Set while the store is watched for edits to a widget with errors. */
+  private stopWatchingRefused: (() => void) | undefined;
+
   constructor(
     private readonly store: DashboardProvider,
     private readonly api: SessionApi = {
@@ -247,6 +259,62 @@ export class DashboardSession {
     this.state = { ...this.state, ...patch };
     this.listeners.forEach(listener => listener());
   }
+
+  /**
+   * Records what a refused save said about particular widgets of `sent`,
+   * the document that was refused, and keeps it only for as long as it is
+   * about what is on screen.
+   */
+  private setNodeErrors(
+    nodeErrors: Record<string, string[]>,
+    sent: Record<string, DocumentNode>,
+  ): void {
+    this.refusedProps = new Map(
+      Object.keys(nodeErrors).map((id): [string, DocumentNode['props']] => [
+        id,
+        sent[id]?.props,
+      ]),
+    );
+    this.setState({ saving: false, nodeErrors });
+    // A widget edited or removed while the save was away is already past
+    // what the server looked at.
+    this.dropOutdatedNodeErrors();
+    if (
+      this.stopWatchingRefused === undefined &&
+      Object.keys(this.state.nodeErrors).length > 0
+    ) {
+      this.stopWatchingRefused = this.store.subscribe(
+        this.dropOutdatedNodeErrors,
+      );
+    }
+  }
+
+  /**
+   * Drops the errors of every widget that was removed or whose properties
+   * were edited since the save that raised them. Moving or resizing a widget
+   * leaves its properties, and so its errors, as they are.
+   */
+  private dropOutdatedNodeErrors = (): void => {
+    const { nodeErrors } = this.state;
+    const ids = Object.keys(nodeErrors);
+    const current = ids.filter(id => {
+      const node = this.store.getNode(id);
+      return node !== undefined && node.props === this.refusedProps.get(id);
+    });
+    if (current.length === 0) {
+      this.stopWatchingRefused?.();
+      this.stopWatchingRefused = undefined;
+      this.refusedProps = new Map();
+    }
+    if (current.length !== ids.length) {
+      this.setState({
+        nodeErrors:
+          current.length === 0
+            ? NO_NODE_ERRORS
+            : Object.fromEntries(current.map(id => [id, nodeErrors[id]])),
+      });
+    }
+  };
 
   /** Whether the tree holds edits the server does not. */
   public isDirty = (): boolean =>
@@ -574,7 +642,7 @@ export class DashboardSession {
           // eslint-disable-next-line no-await-in-loop
           const nodeErrors = await readNodeErrors(failure);
           if (epoch !== this.epoch) return { status: 'superseded' };
-          this.setState({ saving: false, nodeErrors });
+          this.setNodeErrors(nodeErrors, nodes);
           return { status: 'error', error: failure, ...creation() };
         }
       }
@@ -695,6 +763,9 @@ export class DashboardSession {
     this.createUuid = undefined;
     this.loadDiscarded = false;
     this.listeners.clear();
+    this.stopWatchingRefused?.();
+    this.stopWatchingRefused = undefined;
+    this.refusedProps = new Map();
     this.state = BLANK_STATE;
     this.savedVersion = this.store.getDocumentVersion();
   }

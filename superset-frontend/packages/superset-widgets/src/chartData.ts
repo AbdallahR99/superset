@@ -19,7 +19,12 @@
 import { buildQueryContext, SupersetClient } from '@superset-ui/core';
 import type { QueryFormData } from '@superset-ui/core';
 import type { dashboard as dashboardApi } from '@apache-superset/core';
-import { WidgetApiError, errorKindForStatus, isAbortError } from './errors';
+import {
+  WidgetApiError,
+  describeErrorBody,
+  errorKindForStatus,
+  isAbortError,
+} from './errors';
 
 type DataBindingSpec = dashboardApi.DataBindingSpec;
 type DataRow = dashboardApi.DataRow;
@@ -38,15 +43,7 @@ interface ChartDataResponseResult {
 export async function describeFetchError(e: unknown): Promise<string> {
   if (typeof Response !== 'undefined' && e instanceof Response) {
     try {
-      const body = (await e.clone().json()) as {
-        message?: string;
-        errors?: { message?: string }[];
-      } | null;
-      const detail =
-        body?.message ??
-        (Array.isArray(body?.errors)
-          ? body.errors.map(err => err.message).join('; ')
-          : undefined);
+      const detail = describeErrorBody(await e.clone().json());
       return detail
         ? `${e.status} ${e.statusText}: ${detail}`
         : `${e.status} ${e.statusText}`;

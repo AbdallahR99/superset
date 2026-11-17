@@ -451,6 +451,74 @@ test('a save refused for one widget selects that widget and keeps the edits', as
   ).not.toBeInTheDocument();
 });
 
+test('an ECharts option or column definition refused on save is said on its widget, and goes once that widget is edited or removed', async () => {
+  renderAt(NEW);
+  await screen.findByTestId('palette-markdown');
+  let chart = '';
+  let table = '';
+  act(() => {
+    chart = provider.addWidget('root', 0, {
+      type: 'echarts',
+      props: { echartsOptions: { graphic: { elements: [] } } },
+    });
+    table = provider.addWidget('root', 1, {
+      type: 'ag-grid-table',
+      props: { columnDefs: [{ field: 'a', cellRenderer: 'x' }] },
+    });
+  });
+  fetchMock.post('glob:*/api/v1/dashboard_v2/', {
+    status: 422,
+    body: {
+      message: 'Widget props failed validation.',
+      errors: {
+        [chart]: [
+          {
+            loc: ['echartsOptions'],
+            message:
+              'Value error, echartsOptions.graphic is not an allowed ECharts option component',
+          },
+        ],
+        [table]: [
+          {
+            loc: ['columnDefs'],
+            message:
+              'Value error, columnDefs[0].cellRenderer is not an allowed column setting',
+          },
+        ],
+      },
+    },
+  });
+
+  await userEvent.click(screen.getByTestId('header-save'));
+
+  expect(
+    await screen.findByTestId(`widget-save-error-${chart}`),
+  ).toHaveTextContent(
+    'Not saved: echartsOptions: Value error, echartsOptions.graphic is not an allowed ECharts option component',
+  );
+  expect(screen.getByTestId(`widget-save-error-${table}`)).toHaveTextContent(
+    'Not saved: columnDefs: Value error, columnDefs[0].cellRenderer is not an allowed column setting',
+  );
+  // The first refused widget is selected, which is where it is fixed.
+  await waitFor(() => expect(provider.getSelection()).toBe(chart));
+
+  // Fixing one widget takes its own note away and leaves the other's.
+  act(() => {
+    provider.updateProps(chart, { echartsOptions: {} });
+  });
+  await waitFor(() =>
+    expect(
+      screen.queryByTestId(`widget-save-error-${chart}`),
+    ).not.toBeInTheDocument(),
+  );
+  expect(screen.getByTestId(`widget-save-error-${table}`)).toBeInTheDocument();
+
+  act(() => {
+    provider.removeWidget(table);
+  });
+  expect(dashboardSession.getState().nodeErrors).toEqual({});
+});
+
 test('a first save that went through is moved to its route even when the save that follows it is refused', async () => {
   let answerCreate: (value: unknown) => void = () => {};
   fetchMock.post(
