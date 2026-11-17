@@ -249,6 +249,20 @@ SUPERSET_DASHBOARD_PERIODICAL_REFRESH_WARNING_MESSAGE = None
 SUPERSET_DASHBOARD_MANUAL_REFRESH_STAGGER_MS: int = 0
 
 SUPERSET_DASHBOARD_POSITION_DATA_LIMIT = 65535
+
+# Limits on a Dashboard V2 document (feature flag DASHBOARD_V2), enforced on
+# every save and import. The first two are also sent to the frontend in the
+# common bootstrap payload so the builder applies the same bounds.
+#
+# Maximum number of nodes in one document, the root included.
+DASHBOARD_V2_MAX_NODES = 500
+# Maximum distance of any node from the root (the root is at depth 0).
+DASHBOARD_V2_MAX_DEPTH = 16
+# Maximum size in bytes of a save request's body (answered with 413) and of
+# the stored document (answered with 422).
+DASHBOARD_V2_MAX_DOCUMENT_BYTES = 1024 * 1024
+# Maximum nesting of the JSON value held by one node's layout, props or style.
+DASHBOARD_V2_MAX_VALUE_DEPTH = 32
 # A manager that overrides raise_for_access receives the complete query context,
 # so it turns off the semantic-view chart-data check that otherwise denies before
 # provider metadata is loaded.

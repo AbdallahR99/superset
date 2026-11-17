@@ -37,6 +37,15 @@ class DashboardV2PostSchema(Schema):
     document = fields.Dict(
         required=True, metadata={"description": _document_description}
     )
+    uuid = fields.UUID(
+        metadata={
+            "description": (
+                "Client-generated uuid for the new dashboard. Repeating a "
+                "create with the same uuid returns the dashboard the caller "
+                "already created instead of creating another one."
+            )
+        },
+    )
 
 
 class DashboardV2PutSchema(Schema):

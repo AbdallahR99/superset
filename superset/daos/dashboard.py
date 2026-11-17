@@ -40,6 +40,14 @@ from superset.commands.dashboard.exceptions import (
     DashboardUpdateFailedError,
 )
 from superset.daos.base import BaseDAO, ColumnOperator, ColumnOperatorEnum
+from superset.dashboard_v2.document import (
+    INITIAL_REVISION,
+    load_stored_document,
+    V2_DOCUMENT_KEY,
+    with_revision,
+    write_stored_document,
+)
+from superset.dashboard_v2.storage import write_metadata_keeping_document
 from superset.dashboards.filter_scope import derive_metadata_scopes
 from superset.dashboards.filters import DashboardAccessFilter
 from superset.dashboards.layout import repair_position
@@ -963,6 +971,11 @@ class DashboardDAO(BaseDAO[Dashboard]):
         """
         new_filter_scopes = {}
         md = dashboard.params_dict
+        # The Dashboard v2 API is the only writer of the v2 document: one that
+        # arrives here (the properties modal sends back the metadata it
+        # loaded) is ignored, and the stored one is carried forward when the
+        # metadata is written at the end of this method.
+        data = {k: v for k, v in data.items() if k != V2_DOCUMENT_KEY}
 
         # Merge every incoming metadata key that isn't given dedicated
         # handling below straight through (e.g. show_chart_timestamps,
@@ -1144,7 +1157,27 @@ class DashboardDAO(BaseDAO[Dashboard]):
         if old_to_new_slice_ids:
             DashboardDAO._remap_filter_scopes(md, old_to_new_slice_ids)
 
-        dashboard.json_metadata = json.dumps(md)
+        dashboard.json_metadata = DashboardDAO._metadata_keeping_v2_document(
+            dashboard, md
+        )
+
+    @staticmethod
+    def _metadata_keeping_v2_document(dashboard: Dashboard, md: dict[str, Any]) -> str:
+        """
+        Serialize ``md`` for *dashboard* without changing its v2 document.
+
+        For a v2 dashboard the document in ``md`` is whatever the session
+        loaded, which a Dashboard v2 save may have replaced since. The
+        metadata is therefore written with a compare-and-swap that takes the
+        document from the row as it is at that moment, so this update can
+        neither alter the document nor roll back a concurrent save of it.
+        """
+        if V2_DOCUMENT_KEY not in md or dashboard.id is None:
+            return json.dumps(md)
+        stored = write_metadata_keeping_document(dashboard.id, md)
+        if stored is None:
+            raise DashboardUpdateFailedError()
+        return stored
 
     @staticmethod
     def favorited_ids(dashboards: list[Dashboard]) -> list[FavStar]:
@@ -1427,6 +1460,13 @@ class DashboardDAO(BaseDAO[Dashboard]):
         dash.json_metadata = json.dumps(
             _copy_chart_metadata(dash.params_dict, chart_id_map)
         )
+        # A v2 dashboard is copied with its document: the source's stored one
+        # (never one from the request), starting over at the initial revision.
+        source_document = load_stored_document(original_dash.json_metadata)
+        if source_document is not None:
+            dash.json_metadata = write_stored_document(
+                dash.json_metadata, with_revision(source_document, INITIAL_REVISION)
+            )
         db.session.add(dash)
         # Flush so the returned dashboard always has a real, persisted
         # identity (dash.id populated) regardless of what the caller does

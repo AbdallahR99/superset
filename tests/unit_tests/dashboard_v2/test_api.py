@@ -402,10 +402,10 @@ def _many(count: int) -> dict[str, Any]:
             {
                 "nodes": {
                     "root": {"type": "grid", "children": ["a"]},
-                    "a": {"type": "tabs", "children": []},
+                    "a": {"type": "extensions.acme.gauges.gauge"},
                 }
             },
-            "unknown type 'tabs'",
+            "unknown type 'extensions.acme.gauges.gauge'",
         ),
         (_many(600), "the limit is 500"),
         (
@@ -698,3 +698,94 @@ def test_embedded_route_only_resolves_embedded_uuids(
     mocker.patch.object(security_manager, "is_guest_user", return_value=True)
     guest = client.get(f"{BASE}embedded/{embedded.uuid}").get_json()["result"]
     assert guest["embedded"] == {"uuid": str(embedded.uuid)}
+
+
+# --------------------------------------------------------------------------
+# Idempotent create and database-level conflicts
+# --------------------------------------------------------------------------
+
+
+def test_repeated_create_with_the_same_uuid_answers_200_with_the_stored_dashboard(
+    client: Any,
+    mocker: MockerFixture,
+    dashboard_v2_enabled: None,
+    editor: None,
+    v2_session: Session,
+) -> None:
+    from superset.models.dashboard import Dashboard
+
+    key = str(uuid.uuid4())
+    body = {"dashboard_title": "Sales", "document": make_document(), "uuid": key}
+    first = client.post(BASE, json=body)
+    assert first.status_code == 201, first.get_json()
+    pk = first.get_json()["id"]
+    assert first.get_json()["result"]["uuid"] == key
+    # The request user of this test client is anonymous; make the caller the
+    # recorded creator.
+    table = Dashboard.__table__
+    v2_session.execute(table.update().where(table.c.id == pk).values(created_by_fk=7))
+    v2_session.commit()
+    mocker.patch("superset.commands.dashboard_v2.save.get_user_id", return_value=7)
+
+    second = client.post(BASE, json=body)
+
+    assert second.status_code == 200, second.get_json()
+    assert second.get_json()["id"] == pk
+    assert second.get_json()["result"]["revision"] == 1
+    assert second.headers["ETag"] == '"1"'
+    assert v2_session.query(Dashboard).count() == 1
+
+
+def test_create_with_a_uuid_taken_by_someone_else_is_422(
+    client: Any,
+    mocker: MockerFixture,
+    dashboard_v2_enabled: None,
+    editor: None,
+    v2_session: Session,
+) -> None:
+    from superset.models.dashboard import Dashboard
+
+    key = str(uuid.uuid4())
+    body = {"dashboard_title": "Sales", "document": make_document(), "uuid": key}
+    assert client.post(BASE, json=body).status_code == 201
+    mocker.patch("superset.commands.dashboard_v2.save.get_user_id", return_value=8)
+
+    response = client.post(BASE, json=body)
+
+    assert response.status_code == 422
+    assert "uuid" in response.get_json()["message"]
+    assert "result" not in response.get_json()
+    assert v2_session.query(Dashboard).count() == 1
+
+
+def test_create_with_a_malformed_uuid_is_400(
+    client: Any, dashboard_v2_enabled: None, editor: None, v2_session: Session
+) -> None:
+    response = client.post(
+        BASE,
+        json={"dashboard_title": "x", "document": make_document(), "uuid": "nope"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_conflict_without_a_readable_revision_omits_it(
+    client: Any,
+    mocker: MockerFixture,
+    dashboard_v2_enabled: None,
+    editor: None,
+    v2_session: Session,
+) -> None:
+    from superset.commands.dashboard_v2.exceptions import DashboardV2ConflictError
+
+    pk = _create(client)
+    mocker.patch(
+        "superset.commands.dashboard_v2.save.UpdateDashboardV2Command.run",
+        side_effect=DashboardV2ConflictError(None),
+    )
+
+    response = _put(client, pk, make_document("x"), base_revision=1)
+
+    assert response.status_code == 409
+    assert "current_revision" not in response.get_json()
+    assert "ETag" not in response.headers

@@ -376,20 +376,17 @@ def test_validate_stored_document() -> None:
         )
 
 
-def test_dashboard_json_metadata_rejects_a_malformed_v2_document() -> None:
-    """A legacy dashboard update cannot smuggle in a cyclic document."""
-    from marshmallow import ValidationError
-
+def test_dashboard_json_metadata_accepts_and_ignores_a_v2_document() -> None:
+    """A classic dashboard update may echo back any ``v2_document``: the key
+    is not judged here because ``set_dash_metadata`` never stores it (see
+    ``tests/unit_tests/dashboards/v2_document_test.py``)."""
     from superset.dashboards.schemas import validate_json_metadata
 
     stored, _ = normalize_document(_document())
     validate_json_metadata(json.dumps({"v2_document": with_revision(stored, 2)}))
-    with pytest.raises(ValidationError, match="own ancestor"):
-        validate_json_metadata(
-            json.dumps(
-                {"v2_document": _grid(root={"type": "grid", "children": ["root"]})}
-            )
-        )
+    validate_json_metadata(
+        json.dumps({"v2_document": _grid(root={"type": "grid", "children": ["root"]})})
+    )
 
 
 @pytest.mark.parametrize(

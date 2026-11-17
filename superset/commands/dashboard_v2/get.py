@@ -27,6 +27,7 @@ from superset.commands.dashboard_v2.exceptions import (
     DashboardV2NotFoundError,
 )
 from superset.daos.dashboard import EmbeddedDashboardDAO
+from superset.dashboard_v2.access import can_read_document
 from superset.dashboard_v2.document import (
     document_revision,
     load_stored_document,
@@ -59,7 +60,9 @@ def load_v2_dashboard(
 
     Looks the row up directly and gates it with ``raise_for_access`` — the
     same object-level check for guests and logged-in users alike; the list
-    base filter is not an access check for a single dashboard.
+    base filter is not an access check for a single dashboard — and then with
+    the document read rule of :mod:`superset.dashboard_v2.access`, since a v2
+    dashboard has no member charts for ``raise_for_access`` to judge by.
 
     :raises DashboardV2NotFoundError: If nothing matches or it is not a v2
         dashboard
@@ -75,6 +78,8 @@ def load_v2_dashboard(
     stored = load_stored_document(dashboard.json_metadata)
     if stored is None:
         raise DashboardV2NotFoundError(ref)
+    if not can_read_document(dashboard, stored):
+        raise DashboardV2ForbiddenError()
     return dashboard, stored
 
 

@@ -76,11 +76,17 @@ class DashboardV2RevisionRequiredError(CommandException):
 
 
 class DashboardV2ConflictError(CommandException):
-    """The document changed since the revision the update was based on."""
+    """
+    The document changed since the revision the update was based on, or the
+    database aborted the save in favour of a concurrent transaction.
+
+    ``current_revision`` is the stored revision, or ``None`` when it could not
+    be determined.
+    """
 
     status = 409
 
-    def __init__(self, current_revision: int) -> None:
+    def __init__(self, current_revision: int | None) -> None:
         super().__init__(
             _(
                 "The dashboard was changed by someone else. Reload it before "

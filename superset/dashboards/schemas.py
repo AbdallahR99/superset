@@ -21,10 +21,7 @@ from marshmallow import fields, post_dump, post_load, pre_load, Schema
 from marshmallow.validate import Length, OneOf, ValidationError
 
 from superset import security_manager
-from superset.dashboard_v2.document import (
-    DocumentValidationError,
-    validate_stored_document,
-)
+from superset.dashboard_v2.document import V2_DOCUMENT_KEY
 from superset.subjects.schemas import SubjectReferenceField, SubjectResponseSchema
 from superset.tags.models import TagType
 from superset.utils import json
@@ -202,17 +199,23 @@ class SharedLabelsColorsField(fields.Field):
         raise ValidationError("Not a valid list")
 
 
-def validate_v2_document(value: Union[dict[str, Any], None]) -> None:
-    """Reject a malformed Dashboard v2 document inside ``json_metadata``.
+def without_v2_document(json_metadata: Any) -> Any:
+    """``json_metadata`` without the Dashboard v2 document.
 
-    The Dashboard v2 API is the write path that also checks widget types,
-    widget props and the document revision; this validator only guarantees
-    that whatever reaches ``json_metadata`` another way is a bounded tree.
+    The document is served by the Dashboard v2 API, which applies its own
+    object-level read rule; the classic dashboard API never returns it.
+    Anything that is not a JSON object holding the key is returned unchanged.
     """
+    if not isinstance(json_metadata, str) or V2_DOCUMENT_KEY not in json_metadata:
+        return json_metadata
     try:
-        validate_stored_document(value)
-    except DocumentValidationError as ex:
-        raise ValidationError(str(ex)) from ex
+        metadata = json.loads(json_metadata)
+    except json.JSONDecodeError:
+        return json_metadata
+    if not isinstance(metadata, dict) or V2_DOCUMENT_KEY not in metadata:
+        return json_metadata
+    del metadata[V2_DOCUMENT_KEY]
+    return json.dumps(metadata)
 
 
 class DashboardJSONMetadataSchema(Schema):
@@ -224,10 +227,11 @@ class DashboardJSONMetadataSchema(Schema):
     # for charts - can be overridden by chart_configuration for each chart
     global_chart_configuration = fields.Dict()
     chart_customization_config = fields.List(fields.Dict(), allow_none=True)
-    # Dashboard v2 document (see superset.dashboard_v2.document). Validated
-    # structurally on this path too, so a dashboard update or import cannot
-    # store a cyclic, oversized or otherwise malformed document.
-    v2_document = fields.Dict(allow_none=True, validate=validate_v2_document)
+    # Dashboard v2 document (see superset.dashboard_v2.document). Accepted so
+    # that metadata loaded from a v2 dashboard can be sent back, and ignored:
+    # the Dashboard v2 API is the only writer of the document, and
+    # ``DashboardDAO.set_dash_metadata`` carries the stored one forward.
+    v2_document = fields.Raw(allow_none=True)
     timed_refresh_immune_slices = fields.List(fields.Integer())
     # deprecated wrt dashboard-native filters
     filter_scopes = fields.Dict()
@@ -337,6 +341,11 @@ class DashboardGetResponseSchema(Schema):
         # Rename it to tags for frontend compatibility
         if "custom_tags" in serialized:
             serialized["tags"] = serialized.pop("custom_tags")
+
+        if "json_metadata" in serialized:
+            serialized["json_metadata"] = without_v2_document(
+                serialized["json_metadata"]
+            )
 
         if security_manager.is_guest_user():
             del serialized["changed_by_name"]

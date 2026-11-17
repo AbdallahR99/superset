@@ -420,9 +420,10 @@ def without_revision(stored: dict[str, Any]) -> dict[str, Any]:
 
 def validate_stored_document(value: Any) -> None:
     """
-    Structural validation for a ``v2_document`` arriving inside a dashboard's
-    ``json_metadata`` (dashboard update, import) instead of through the
-    Dashboard v2 API. Widget types are not checked on this path.
+    Structural validation of a document in its stored form, revision
+    included, for callers that hold one from somewhere other than the
+    Dashboard v2 API. Widget types and props are not checked; saves and
+    imports use ``normalize_and_validate`` of the save command instead.
 
     :raises DocumentValidationError: If the document is malformed
     """

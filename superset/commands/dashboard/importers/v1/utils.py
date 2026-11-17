@@ -36,6 +36,42 @@ logger = logging.getLogger(__name__)
 JSON_KEYS = {"position": "position_json", "metadata": "json_metadata"}
 
 
+def _prepare_v2_document(config: dict[str, Any], existing: Dashboard | None) -> None:
+    """
+    Validate an imported Dashboard v2 document and give it a fresh revision.
+
+    An imported document goes through the same validation as a save through
+    the Dashboard v2 API. Its own revision is ignored: a new dashboard starts
+    at the initial revision, an overwritten v2 dashboard moves one past its
+    stored revision so that open editors are told about the change.
+
+    :raises ImportFailedError: If the document is invalid
+    """
+    # pylint: disable=import-outside-toplevel
+    from superset.commands.dashboard_v2.exceptions import DashboardV2InvalidError
+    from superset.commands.dashboard_v2.save import prepare_imported_document
+    from superset.dashboard_v2.document import V2_DOCUMENT_KEY
+
+    metadata = config.get("metadata")
+    if not isinstance(metadata, dict) or V2_DOCUMENT_KEY not in metadata:
+        return
+    metadata = dict(metadata)
+    if metadata[V2_DOCUMENT_KEY] is None:
+        del metadata[V2_DOCUMENT_KEY]
+    else:
+        try:
+            metadata[V2_DOCUMENT_KEY] = prepare_imported_document(
+                metadata[V2_DOCUMENT_KEY],
+                existing.json_metadata if existing is not None else None,
+            )
+        except DashboardV2InvalidError as ex:
+            detail = f" {json.dumps(ex.errors)}" if ex.errors else ""
+            raise ImportFailedError(
+                f"The Dashboard v2 document is invalid: {ex.message}{detail}"
+            ) from ex
+    config["metadata"] = metadata
+
+
 def find_chart_uuids(position: dict[str, Any]) -> set[str]:
     return set(build_uuid_to_id_map(position))
 
@@ -479,6 +515,8 @@ def import_dashboard(  # noqa: C901
     # removed in https://github.com/apache/superset/pull/23228
     if "metadata" in config and "show_native_filters" in config["metadata"]:
         del config["metadata"]["show_native_filters"]
+
+    _prepare_v2_document(config, existing)
 
     # Note: theme_id handling moved to higher level import logic
 

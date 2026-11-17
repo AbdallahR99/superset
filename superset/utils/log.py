@@ -138,8 +138,17 @@ def collect_request_payload(include_request_data: bool = True) -> dict[str, Any]
         payload.update(request.args.to_dict())
 
         if request.is_json:
-            json_payload = request.get_json(cache=True, silent=True) or {}
-            payload.update(json_payload)
+            try:
+                json_payload = request.get_json(cache=True, silent=True) or {}
+            except RecursionError:
+                # ``silent`` only covers malformed JSON; a body nested deeply
+                # enough to exhaust the parser's stack must not turn the
+                # logged request into a server error.
+                json_payload = {}
+            # Only an object has keys to log; an array or scalar body is a
+            # client error for the endpoint to report, not one to raise here.
+            if isinstance(json_payload, dict):
+                payload.update(json_payload)
 
     # save URL match pattern in addition to the request path
     url_rule = str(request.url_rule)

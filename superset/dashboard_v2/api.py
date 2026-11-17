@@ -19,8 +19,10 @@ REST API of the persisted Dashboard v2 document.
 
 The whole resource sits behind the ``DASHBOARD_V2`` feature flag (see
 :mod:`superset.dashboard_v2.feature`). Reads are gated by
-``Dashboard.raise_for_access``, writes by ``raise_for_editorship``, and every
-update carries the revision it was based on.
+``Dashboard.raise_for_access`` plus the document read rule of
+:mod:`superset.dashboard_v2.access`, writes by ``raise_for_editorship``, and
+every update carries the revision it was based on. A save answers with the
+representation its own transaction stored.
 """
 
 from __future__ import annotations
@@ -150,11 +152,14 @@ def command_error_response(api: BaseSupersetApi, ex: CommandException) -> Respon
     payload: dict[str, Any] = {"message": str(ex.message)}
     if isinstance(ex, DashboardV2InvalidError) and ex.errors:
         payload["errors"] = ex.errors
-    if isinstance(ex, DashboardV2ConflictError):
-        payload["current_revision"] = ex.current_revision
+    current_revision = (
+        ex.current_revision if isinstance(ex, DashboardV2ConflictError) else None
+    )
+    if current_revision is not None:
+        payload["current_revision"] = current_revision
     response = api.response(ex.status, **payload)
-    if isinstance(ex, DashboardV2ConflictError):
-        response.headers["ETag"] = revision_etag(ex.current_revision)
+    if current_revision is not None:
+        response.headers["ETag"] = revision_etag(current_revision)
     return response
 
 
@@ -204,7 +209,9 @@ class DashboardV2RestApi(BaseSupersetApi):
         post:
           summary: Create a Dashboard v2
           description: >-
-            Stores the document at revision 1 with the caller as editor.
+            Stores the document at revision 1 with the caller as editor. With
+            a client-generated uuid the create is idempotent, and a repeat by
+            the same caller answers 200 with the stored dashboard.
           requestBody:
             required: true
             content:
@@ -212,6 +219,19 @@ class DashboardV2RestApi(BaseSupersetApi):
                 schema:
                   $ref: '#/components/schemas/DashboardV2PostSchema'
           responses:
+            200:
+              description: >-
+                The dashboard already created by this caller under the same
+                uuid; nothing was written
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      result:
+                        $ref: '#/components/schemas/DashboardV2ResponseSchema'
             201:
               description: Dashboard v2 created
               headers:
@@ -243,12 +263,13 @@ class DashboardV2RestApi(BaseSupersetApi):
             body = DashboardV2PostSchema().load(g.dashboard_v2_body)
         except ValidationError as error:
             return self.response_400(message=error.messages)
+        command = CreateDashboardV2Command(body)
         try:
-            dashboard = CreateDashboardV2Command(body).run()
-            result = GetDashboardV2Command(str(dashboard.id)).run()
+            result = command.run()
         except CommandException as ex:
             return command_error_response(self, ex)
-        return dashboard_response(self, 201, result, with_id=True)
+        status = 201 if command.created else 200
+        return dashboard_response(self, status, result, with_id=True)
 
     @expose("/<int:pk>", methods=("PUT",))
     @protect()
@@ -337,8 +358,7 @@ class DashboardV2RestApi(BaseSupersetApi):
         except CommandException as ex:
             return command_error_response(self, ex)
         try:
-            UpdateDashboardV2Command(pk, body, base_revision).run()
-            result = GetDashboardV2Command(str(pk)).run()
+            result = UpdateDashboardV2Command(pk, body, base_revision).run()
         except CommandException as ex:
             return command_error_response(self, ex)
         return dashboard_response(self, 200, result, with_id=True)
