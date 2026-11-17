@@ -20,19 +20,23 @@ import { useState } from 'react';
 import {
   Chart,
   FilterSelect,
+  Markdown,
   MetricTile,
   SupersetProvider,
+  Table,
   Widget,
 } from '@apache-superset/widgets';
 // `?raw` loads this file's text for the source panel, not the module itself.
 // eslint-disable-next-line import/no-self-import
 import appSource from './App.tsx?raw';
-import { config, fetchGuestToken } from './config';
+import { authFor, config } from './config';
 import MinimalEmbed from './MinimalEmbed';
 import minimalEmbedSource from './minimalEmbedSource';
+import { ErrorLog, useErrorLog } from './ErrorLog';
 import { EventLog } from './EventLog';
 import { Gallery } from './Gallery';
-import { HostFilterBar } from './HostFilterBar';
+import { HostFilterBar, hostFilter } from './HostFilterBar';
+import { Isolation } from './Isolation';
 import {
   Frame,
   StructureProvider,
@@ -50,20 +54,40 @@ const binding = (metrics: string[], dimensions: string[], rowLimit = 1000) => ({
   rowLimit,
 });
 
+const COPY = {
+  ltr: {
+    title: 'Acme Operations',
+    tagline: 'Superset widgets rendered in this app’s own React tree.',
+    note: 'Text in a widget follows the provider’s **direction**. Charts keep their axes left to right in every locale.',
+  },
+  rtl: {
+    title: 'عمليات أكمي',
+    tagline: 'عناصر Superset معروضة داخل شجرة React الخاصة بهذا التطبيق.',
+    note: 'النص داخل العنصر يتبع **اتجاه** المزوّد. المخططات تحتفظ بمحاورها من اليسار إلى اليمين في كل اللغات.',
+  },
+};
+
 function Page() {
   const [dark, setDark] = useState(false);
+  const [rtl, setRtl] = useState(false);
   const [showStructure, setShowStructure] = useStructureVisible();
+  // The host owns this state; the provider only reads it (`filters` below).
+  const [selected, setSelected] = useState<string[]>([]);
+  const [errors, onError] = useErrorLog();
 
+  const direction = rtl ? 'rtl' : 'ltr';
+  const themeMode = dark ? 'dark' : 'default';
+  const copy = COPY[direction];
   const appClass = ['app', dark && 'app-dark', showStructure && 'app-structure']
     .filter(Boolean)
     .join(' ');
 
   return (
-    <div className={appClass}>
+    <div className={appClass} dir={direction} lang={rtl ? 'ar' : 'en'}>
       <header className="app-header">
         <div>
-          <h1>Acme Operations</h1>
-          <p>Superset widgets rendered in this app&apos;s own React tree.</p>
+          <h1>{copy.title}</h1>
+          <p>{copy.tagline}</p>
           {config.authMode === 'session' && (
             <p className="hint">
               Uses your Superset login, no backend. Not signed in?{' '}
@@ -90,6 +114,14 @@ function Page() {
           <label className="toggle">
             <input
               type="checkbox"
+              checked={rtl}
+              onChange={event => setRtl(event.target.checked)}
+            />
+            العربية (RTL)
+          </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
               checked={dark}
               onChange={event => setDark(event.target.checked)}
             />
@@ -98,28 +130,39 @@ function Page() {
         </div>
       </header>
 
-      <section className="minimal-embed">
-        <h2>Embed one widget</h2>
-        <p className="hint">
-          The whole integration: a provider and a widget. This is the file
-          below, rendered live next to its source.
-        </p>
-        <div className="minimal-embed-body">
-          <pre className="code-block">
-            <code>{withoutLicense(minimalEmbedSource)}</code>
-          </pre>
-          <div className="card">
-            <MinimalEmbed />
+      {config.authMode === 'session' && (
+        <section className="minimal-embed">
+          <h2>Embed one widget</h2>
+          <p className="hint">
+            The whole integration: a provider and a widget. This is the file
+            below, rendered live next to its source.
+          </p>
+          <div className="minimal-embed-body">
+            <pre className="code-block" dir="ltr">
+              <code>{withoutLicense(minimalEmbedSource)}</code>
+            </pre>
+            <div className="card">
+              <MinimalEmbed />
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <SupersetProvider
         supersetDomain={config.supersetUrl}
-        fetchGuestToken={
-          config.authMode === 'guest' ? fetchGuestToken : undefined
-        }
-        themeMode={dark ? 'dark' : 'default'}
+        // Guest mode: a token from this app's own backend, for audience "a".
+        {...authFor('a')}
+        // The host's filter state, declaratively: widgets on the dataset
+        // follow it, and `null` lifts it.
+        filters={{
+          region: hostFilter(config.datasetId, config.filterColumn, selected),
+        }}
+        // Every failure a widget shows is also reported here; none is thrown.
+        onError={onError}
+        // `locale` alone would do: only its direction is used.
+        locale={rtl ? config.rtlLocale : undefined}
+        direction={direction}
+        themeMode={themeMode}
       >
         <Frame
           label="<SupersetProvider>"
@@ -127,16 +170,21 @@ function Page() {
             config.authMode === 'guest'
               ? 'guest token from /api/guest-token'
               : 'your Superset login'
-          }`}
+          } · ${direction}`}
           kind="superset"
           className="provider"
         >
           <Frame
             label="<HostFilterBar>"
-            detail="useSupersetFilter('host-state')"
+            detail="state in the host, passed as <SupersetProvider filters>"
             kind="host"
           >
-            <HostFilterBar />
+            <HostFilterBar
+              label={config.filterColumn}
+              values={config.filterValues}
+              selected={selected}
+              onChange={setSelected}
+            />
           </Frame>
           <div className="app-body">
             <main>
@@ -144,7 +192,8 @@ function Page() {
                 <h2>Inline widgets</h2>
                 <p className="hint">
                   Defined here, validated and executed by Superset. They
-                  cross-filter each other.
+                  cross-filter each other, and the host filter above narrows
+                  them.
                 </p>
                 <div className="grid">
                   <Frame
@@ -239,6 +288,35 @@ function Page() {
                       }}
                     />
                   </Frame>
+                  <Frame
+                    label="<Table>"
+                    code
+                    detail={`${config.label} · mirrored when the direction is rtl`}
+                    kind="superset"
+                    className="card"
+                  >
+                    <Table
+                      dataBinding={binding(
+                        [config.metric],
+                        [config.label, config.category],
+                        50,
+                      )}
+                      columnDefs={[
+                        { field: config.label, flex: 1 },
+                        { field: config.category, width: 120 },
+                        { field: config.metric, type: 'numericColumn' },
+                      ]}
+                    />
+                  </Frame>
+                  <Frame
+                    label="<Markdown>"
+                    code
+                    detail="text follows the provider's direction"
+                    kind="superset"
+                    className="card small"
+                  >
+                    <Markdown content={copy.note} />
+                  </Frame>
                 </div>
               </Frame>
 
@@ -276,6 +354,10 @@ function Page() {
 
               <Frame label="Saved widgets" kind="host" as="section">
                 <h2>Saved widgets</h2>
+                <p className="hint">
+                  Stored in Superset and rendered by id. The page holds no
+                  definition: the query is whatever Superset has saved.
+                </p>
                 {config.savedWidgetIds.length > 0 ? (
                   <div className="grid">
                     {config.savedWidgetIds.map(id => (
@@ -293,7 +375,9 @@ function Page() {
                   </div>
                 ) : (
                   <p className="hint">
-                    Set EMBED_WIDGET_IDS to saved widget uuids.
+                    None configured. Set <code>EMBED_WIDGET_IDS</code> in{' '}
+                    <code>.env</code> to saved widget uuids (
+                    <code>GET /api/v1/widget/</code>).
                   </p>
                 )}
               </Frame>
@@ -306,13 +390,20 @@ function Page() {
               >
                 <EventLog />
               </Frame>
+              <Frame
+                label="<ErrorLog>"
+                detail="<SupersetProvider onError>"
+                kind="host"
+              >
+                <ErrorLog entries={errors} />
+              </Frame>
               {showStructure && (
                 <>
                   <section className="card structure-panel">
                     <h2>React tree</h2>
                     <StructureTree />
                   </section>
-                  <details className="card structure-panel source">
+                  <details className="card structure-panel source" dir="ltr">
                     <summary>App.tsx</summary>
                     <pre>{appSource}</pre>
                   </details>
@@ -321,18 +412,15 @@ function Page() {
             </aside>
           </div>
         </Frame>
-
-        <Frame
-          label="<Widget id>"
-          code
-          kind="superset"
-          className="card demo-slot"
-        >
-          <Widget id="4d9d1484-ac65-4812-81b1-1920138de4da" />
-        </Frame>
       </SupersetProvider>
 
-      <Gallery themeMode={dark ? 'dark' : 'default'} />
+      <Isolation
+        themeMode={themeMode}
+        direction={direction}
+        onError={onError}
+      />
+
+      <Gallery themeMode={themeMode} direction={direction} />
     </div>
   );
 }

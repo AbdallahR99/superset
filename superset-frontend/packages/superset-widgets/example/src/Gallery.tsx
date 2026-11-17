@@ -31,7 +31,7 @@ import {
   type FilterValueChangedPayload,
   type ThemeModeName,
 } from '@apache-superset/widgets';
-import { config, fetchGuestToken } from './config';
+import { authFor, config } from './config';
 import { Frame } from './structure';
 
 const DATASET = config.datasetId;
@@ -129,7 +129,7 @@ function TargetedHostFilter() {
           })
         }
       >
-        Filter left chart to NY, CA
+        Filter left chart to {config.filterValues.slice(0, 2).join(', ')}
       </button>
       <button type="button" className="chip" onClick={() => setFilter(null)}>
         Clear
@@ -138,16 +138,22 @@ function TargetedHostFilter() {
   );
 }
 
-function SharedBusProviders({ themeMode }: { themeMode: ThemeModeName }) {
+function SharedBusProviders({
+  themeMode,
+  direction,
+}: {
+  themeMode: ThemeModeName;
+  direction: 'ltr' | 'rtl';
+}) {
   const bus = useMemo(() => createWidgetBus(), []);
-  const auth =
-    config.authMode === 'guest' ? { fetchGuestToken } : ({} as const);
+  const auth = authFor('a');
   return (
     <div className="gallery-row">
       <SupersetProvider
         supersetDomain={config.supersetUrl}
         bus={bus}
         themeMode={themeMode}
+        direction={direction}
         {...auth}
       >
         <Demo label="<FilterSelect> (provider A)" className="gallery-plain">
@@ -158,6 +164,7 @@ function SharedBusProviders({ themeMode }: { themeMode: ThemeModeName }) {
         supersetDomain={config.supersetUrl}
         bus={bus}
         themeMode={themeMode}
+        direction={direction}
         themeConfig={{ token: { colorPrimary: '#7b3fe4' } }}
         {...auth}
       >
@@ -195,7 +202,13 @@ function SharedBusProviders({ themeMode }: { themeMode: ThemeModeName }) {
  * One small example per component and prop in the API reference. Runs under
  * its own provider, so its filters never touch the widgets above.
  */
-export function Gallery({ themeMode }: { themeMode: ThemeModeName }) {
+export function Gallery({
+  themeMode,
+  direction,
+}: {
+  themeMode: ThemeModeName;
+  direction: 'ltr' | 'rtl';
+}) {
   const savedId = config.savedWidgetIds[0];
 
   return (
@@ -205,14 +218,16 @@ export function Gallery({ themeMode }: { themeMode: ThemeModeName }) {
         One example per component and prop. Every widget has a{' '}
         <code>&lt;/&gt; Code</code> button. Not shown: <code>client</code> (a
         custom data client), <code>guestTokenHeaderName</code> and{' '}
-        <code>guestTokenFetchTimeoutMs</code> (guest-token mode only).
+        <code>guestTokenFetchTimeoutMs</code> (guest-token mode only). The
+        provider&apos;s <code>filters</code>, <code>onError</code>,{' '}
+        <code>direction</code> and <code>guestTokenKey</code> are shown at the
+        top of the page.
       </p>
       <SupersetProvider
         supersetDomain={config.supersetUrl}
-        fetchGuestToken={
-          config.authMode === 'guest' ? fetchGuestToken : undefined
-        }
+        {...authFor('a')}
         themeMode={themeMode}
+        direction={direction}
       >
         <div className="gallery-grid">
           <Card
@@ -580,7 +595,7 @@ export function Gallery({ themeMode }: { themeMode: ThemeModeName }) {
               </>
             }
           >
-            <SharedBusProviders themeMode={themeMode} />
+            <SharedBusProviders themeMode={themeMode} direction={direction} />
           </Card>
         </div>
       </SupersetProvider>

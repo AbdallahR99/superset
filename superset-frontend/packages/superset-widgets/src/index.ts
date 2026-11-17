@@ -62,7 +62,12 @@ export type {
   ExtensionWidgetState,
 } from './embed/extensionLoader';
 export { createExtensionHost } from './embed/extensionHost';
-export type { ExtensionHost, ExtensionInfo } from './embed/extensionHost';
+export type {
+  ExtensionBundle,
+  ExtensionCore,
+  ExtensionHost,
+  ExtensionInfo,
+} from './embed/extensionHost';
 export type {
   ApiFetch,
   ApiFetchOptions,

@@ -36,6 +36,13 @@ function callSafely(callback: () => void): void {
 }
 
 /**
+ * How many buses the page has created. It only makes the ids two buses hand
+ * out differ, so that a widget id names one widget on the page, not one per
+ * provider; nothing a bus holds is reachable through it.
+ */
+let busesCreated = 0;
+
+/**
  * A bus of its own: every value, source and listener lives in this closure, so
  * two buses on one page share nothing. A provider creates one per instance.
  */
@@ -46,6 +53,8 @@ export function createWidgetBus(): WidgetBus {
   const subscribers = new Set<() => void>();
   let revision = 0;
   let allocated = 0;
+  busesCreated += 1;
+  const ordinal = busesCreated;
 
   const tick = () => {
     revision += 1;
@@ -80,7 +89,7 @@ export function createWidgetBus(): WidgetBus {
     },
     createSourceId() {
       allocated += 1;
-      return `widget-${allocated}`;
+      return `widget-${ordinal}-${allocated}`;
     },
     on(eventType, listener) {
       let registered = listeners.get(eventType);

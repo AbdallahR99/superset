@@ -36,24 +36,16 @@ import type { WidgetComponent } from '../types';
 import { createApiFetch, type ApiFetchOptions } from './httpClient';
 import {
   createExtensionHost,
+  evaluateExtension,
+  getPageCore,
+  isExtensionWidgetType,
+  parseExtensionWidgetType,
+  type ExtensionBundle,
   type ExtensionHost,
   type ExtensionInfo,
 } from './extensionHost';
 
-const EXTENSION_WIDGET_TYPE = /^extensions\.([^.]+)\.([^.]+)\..+$/;
-
-/** The extension that owns `type`, or undefined if it is not an extension's. */
-export function parseExtensionWidgetType(
-  type: string,
-): { publisher: string; name: string; id: string } | undefined {
-  const match = EXTENSION_WIDGET_TYPE.exec(type);
-  if (!match) return undefined;
-  const [, publisher, name] = match;
-  return { publisher, name, id: `${publisher}.${name}` };
-}
-
-export const isExtensionWidgetType = (type: string): boolean =>
-  EXTENSION_WIDGET_TYPE.test(type);
+export { isExtensionWidgetType, parseExtensionWidgetType };
 
 /** Resolves the component for an extension's widget type, loading it if needed. */
 export type ExtensionWidgetLoader = (type: string) => Promise<WidgetComponent>;
@@ -62,6 +54,8 @@ export interface ExtensionWidgetLoaderOptions extends ApiFetchOptions {
   /**
    * Modules added to the container's share scope, beyond the `react`,
    * `react-dom`, `antd` and `@apache-superset/core` every extension declares.
+   * A bundle is started once per page, so for a bundle two providers both
+   * load, the `shared` of whichever loads it first is the one it sees.
    */
   shared?: Record<string, unknown>;
   /**
@@ -119,13 +113,11 @@ function loadScript(src: string): Promise<void> {
 }
 
 /**
- * The one thing the page itself forces loaders to take turns on. A Module
- * Federation container announces itself by assigning a global named after the
- * extension, and an extension built against the `superset` global reads that
- * while its entry module is evaluated. Both globals only mean something
- * between a script finishing and its container being started, so each load
- * holds this queue for exactly that stretch. It orders loads and holds
- * nothing else: no container, no core and no credential outlives a turn.
+ * Loads take turns on the page's globals. A Module Federation container
+ * announces itself by assigning a global named after the extension, which
+ * only means something between its script finishing and the container being
+ * picked up; two bundles that use the same name must not overlap there. The
+ * queue orders loads and holds nothing.
  */
 let containerTurn: Promise<void> = Promise.resolve();
 
@@ -138,6 +130,77 @@ function takeContainerTurn<T>(run: () => Promise<T>): Promise<T> {
   return result;
 }
 
+/** Bundles the page has evaluated or is evaluating, by script URL. */
+const bundles = new Map<string, Promise<ExtensionBundle>>();
+
+/**
+ * Fetches and evaluates the bundle at `src`, once per page.
+ *
+ * Evaluating a remote entry a second time cannot be relied on to give a
+ * second, independent copy of the extension: the runtime of a Module
+ * Federation bundle keeps its chunk registry in a page global and may hand a
+ * later evaluation the modules of the first. So there is one evaluation, and
+ * what differs per provider is the core each provider's host starts the
+ * bundle with (see `ExtensionHost.activate`).
+ *
+ * The bundle's `@apache-superset/core` — in its share scope, and at
+ * `window.superset` for a build that declares the package as an external —
+ * is the page core: a stable facade that routes each call to the provider it
+ * is for. It is left at `window.superset` afterwards, so a build that reads
+ * the global later than its entry module still finds it. A page that had a
+ * `superset` global of its own (Superset itself) gets that one back instead.
+ */
+function loadBundle(
+  src: string,
+  extension: ExtensionInfo,
+  shared: Record<string, unknown> | undefined,
+): Promise<ExtensionBundle> {
+  const cached = bundles.get(src);
+  if (cached) return cached;
+
+  const containerName = extension.moduleFederationName || extension.id;
+  const globals = window as unknown as Record<string, unknown>;
+  const pending = (async () => {
+    // Only a page that actually loads an extension pays for antd's full
+    // surface; the widgets themselves import the components they use.
+    const antd = await import('antd');
+    return takeContainerTurn(async () => {
+      await loadScript(src);
+      const container = globals[containerName];
+      if (!isFederationContainer(container)) {
+        throw new Error(
+          `Extension ${extension.id} did not register the container "${containerName}".`,
+        );
+      }
+      const core = getPageCore();
+      const hadOther = 'superset' in globals && globals.superset !== core;
+      const other = globals.superset;
+      globals.superset = core;
+      try {
+        await container.init({
+          react: shareEntry(React, versionOf(React)),
+          'react-dom': shareEntry(ReactDOM, versionOf(ReactDOM)),
+          antd: shareEntry(antd, versionOf(antd)),
+          '@apache-superset/core': shareEntry(core, '0.1.0'),
+          ...shared,
+        });
+        const factory = await container.get('./index');
+        // What the module registers as a side effect of this call is
+        // recorded, for every provider's host to replay.
+        return evaluateExtension(extension, factory);
+      } finally {
+        if (hadOther) globals.superset = other;
+      }
+    });
+  })();
+  bundles.set(src, pending);
+  pending.catch(() => {
+    // A failed load is not kept: the next widget may try again.
+    if (bundles.get(src) === pending) bundles.delete(src);
+  });
+  return pending;
+}
+
 /**
  * Loads extension widget types from `supersetDomain`.
  *
@@ -147,11 +210,13 @@ function takeContainerTurn<T>(run: () => Promise<T>): Promise<T> {
  * `EMBEDDED_EXTENSION_ASSETS_PUBLIC` for guest tokens, which a `<script>` tag
  * cannot carry).
  *
- * A loader belongs to one provider. Everything it loads is evaluated for it
- * alone and registers with its own {@link ExtensionHost}, so the same
- * extension under two providers is two independent copies: neither can read
- * the other's widgets, events, filters or data. Share one loader between
- * providers only if they also share a `bus` and a `client`.
+ * A loader belongs to one provider, and so does its {@link ExtensionHost}:
+ * what an extension registers, renders, hears and queries under one provider
+ * is out of reach of another. The extension's *code* is not per provider: a
+ * bundle is fetched and evaluated once per page (see {@link loadBundle}) and
+ * then started once for each provider that uses it, with that provider's
+ * core. Share one loader between providers only if they also share a `bus`
+ * and a `client`.
  */
 export function createExtensionWidgetLoader(
   options: ExtensionWidgetLoaderOptions,
@@ -167,6 +232,9 @@ export function createExtensionWidgetLoader(
 
   async function loadExtension(publisher: string, name: string): Promise<void> {
     const id = `${publisher}.${name}`;
+    // Asked by every provider for itself, with its own credentials: whether
+    // this provider may use the extension is Superset's answer to it, not
+    // something inferred from another provider having loaded the bundle.
     const extension = await api<ExtensionInfo>(
       `/api/v1/extensions/${encodeURIComponent(publisher)}/${encodeURIComponent(name)}`,
     );
@@ -174,50 +242,12 @@ export function createExtensionWidgetLoader(
     if (!remoteEntry) {
       throw new Error(`Extension ${id} has no frontend to load.`);
     }
-    // Only a page that actually loads an extension pays for antd's full
-    // surface; the widgets themselves import the components they use.
-    const antd = await import('antd');
-    const containerName = extension.moduleFederationName || id;
-    const core = host.createCore(extension);
-    const globals = window as unknown as Record<string, unknown>;
-
-    await takeContainerTurn(async () => {
-      // Evaluated afresh for this loader: the script assigns a new container,
-      // with a module cache of its own, to the extension's global. A page
-      // with two providers therefore runs two copies of the extension, each
-      // started below with its own provider's core.
-      await loadScript(url(remoteEntry));
-      const container = globals[containerName];
-      if (!isFederationContainer(container)) {
-        throw new Error(
-          `Extension ${id} did not register the container "${containerName}".`,
-        );
-      }
-      // Superset's own loader puts the platform API on `window.superset`, and
-      // an extension built with `externals: {'@apache-superset/core':
-      // 'superset'}` reads it from there, when its entry module is evaluated,
-      // rather than from the share scope below. It is set for this
-      // extension's start only and then put back, so no later extension (and
-      // no other provider) is handed this one's context.
-      const hadPrevious = 'superset' in globals;
-      const previous = globals.superset;
-      globals.superset = core;
-      try {
-        await container.init({
-          react: shareEntry(React, versionOf(React)),
-          'react-dom': shareEntry(ReactDOM, versionOf(ReactDOM)),
-          antd: shareEntry(antd, versionOf(antd)),
-          '@apache-superset/core': shareEntry(core, '0.1.0'),
-          ...options.shared,
-        });
-        const factory = await container.get('./index');
-        // The extension registers its widgets as a side effect of this call.
-        factory();
-      } finally {
-        if (hadPrevious) globals.superset = previous;
-        else delete globals.superset;
-      }
-    });
+    const bundle = await loadBundle(
+      url(remoteEntry),
+      extension,
+      options.shared,
+    );
+    host.activate(extension, bundle);
   }
 
   return async function loadExtensionWidget(type) {

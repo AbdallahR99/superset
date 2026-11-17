@@ -85,37 +85,53 @@ Prefer the provider's declarative props when the host already holds the state:
   nothing unless given the same `bus` or `client`.
 - `onError` receives `WidgetApiError`s with `kind`: `unauthorized`,
   `forbidden`, `not_found`, `conflict`, `invalid`, `network`, `config`.
-- Do not pass functions or HTML through widget props: table `columnDefs` keep
-  declarative settings only and markdown is sanitised.
+- Do not pass HTML through widget props, and do not expect stored definitions
+  to carry behaviour: table `columnDefs` and `echartsOptions` are reduced to an
+  allowlist (no `cellRenderer`/`valueFormatter`, no toolbox `dataView` or
+  custom tools, tooltip templates HTML-escaped, unknown top-level ECharts keys
+  dropped) and markdown is sanitised.
+- When writing an extension widget, export `activate(core)` and use that
+  `core`; do not rely on `window.superset`. Pass `{ nodeId }` to
+  `fetchQueryData` when calling it from an event handler or after an `await`.
 
 ## Token broker (server-side, required)
 
 - Mint with a Superset service account: `POST /api/v1/security/guest_token/`.
   Never from the browser; never put Superset credentials in `VITE_*` or
-  `NEXT_PUBLIC_*` variables.
+  `NEXT_PUBLIC_*` variables. The account needs `can grant guest token` and
+  its own read access to every dataset it grants.
 - Authenticate the app's own user first.
-- Grant exactly what the page renders: `resources: [{ type: 'widget', id }]` for
-  saved widgets, `datasets: [id]` for inline ones.
-- Add `rls` rules scoped to the user. If the data is genuinely public, say so.
+- Grant exactly what the page renders, as `resources`:
+  `{ type: 'widget', id: '<uuid>' }` per saved widget,
+  `{ type: 'dataset', id: '<dataset id>' }` per dataset inline widgets query.
+  The `datasets` claim grants nothing; leave it out.
+- Add `rls` rules scoped to the user. A dataset with RLS rules in Superset
+  requires one that covers it. If the data is genuinely public, say so.
 
 ```ts
 body: JSON.stringify({
   user: { username: user.id },
-  resources: [{ type: 'widget', id: SAVED_WIDGET_ID }],
-  datasets: [17],
-  rls: [{ clause: `tenant_id = ${Number(user.tenantId)}` }],
+  resources: [
+    { type: 'widget', id: SAVED_WIDGET_ID },
+    { type: 'dataset', id: '17' },
+  ],
+  rls: [{ dataset: 17, clause: `tenant_id = ${Number(user.tenantId)}` }],
 });
 ```
 
 ## Superset config the host needs
 
-`EMBEDDED_SUPERSET` on, `GUEST_ROLE_NAME` set, `ENABLE_CORS` with the host
-origin, headers `Content-Type` and `X-GuestToken` on `/api/*`.
+`DASHBOARD_V2` and `EMBEDDED_SUPERSET` on, `GUEST_ROLE_NAME` set to a role
+with only `can read on Chart`, `ENABLE_CORS` with the host origin, headers
+`Content-Type` and `X-GuestToken` on `/api/*`.
 
 ## Failures
 
-- **403 on `/api/v1/widget/data`**: for a saved widget, the token doesn't name
-  it; for an inline widget, the token has no `datasets` claim with that dataset.
+- **404 on `/api/v1/widget/*`**: `DASHBOARD_V2` is off.
+- **403 on `/api/v1/widget/data`**: for a saved widget, the token has no
+  `widget` resource for it (or the widget now binds another dataset than when
+  the token was minted); for an inline widget, the token has no `dataset`
+  resource for that dataset.
 - **400**: invalid props for the widget type, an unknown column in a filter, or
   a SQL metric/filter from a guest.
 - **CORS error**: origin or `X-GuestToken` header missing from `CORS_OPTIONS`.

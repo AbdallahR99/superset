@@ -322,8 +322,13 @@ export interface FetchQueryDataOptions {
   /**
    * The node asking. A widget passes its own id so the host can tell which
    * filters on the page apply to it (a widget is never narrowed by its own
-   * selection) and which page services to run the query with. Without it the
-   * host can only answer when there is no doubt about who is asking.
+   * selection) and which page services to run the query with.
+   *
+   * Optional where the host can tell by itself: a call made while a widget
+   * renders, or from an effect of that widget or of a component it renders,
+   * is attributed to that widget. A call made later than that — from an
+   * event handler, a timer, or after an `await` — has no such context, so a
+   * widget that fetches from there passes its id.
    */
   nodeId?: string;
   /** Aborted when the caller no longer wants the result. */

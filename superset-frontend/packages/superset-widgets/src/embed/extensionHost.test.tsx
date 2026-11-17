@@ -16,7 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { StrictMode, useEffect, useState, type ReactNode } from 'react';
+import {
+  StrictMode,
+  Suspense,
+  useEffect,
+  useState,
+  type ReactNode,
+} from 'react';
 import { dashboard as dashboardApi } from '@apache-superset/core';
 import {
   act,
@@ -33,7 +39,13 @@ import type {
   WidgetDataClient,
   WidgetEvent,
 } from '../types';
-import { createExtensionHost, type ExtensionHost } from './extensionHost';
+import {
+  UNCOMMITTED_NODE_TTL_MS,
+  createExtensionHost,
+  evaluateExtension,
+  getPageCore,
+  type ExtensionHost,
+} from './extensionHost';
 import {
   ExtensionWidgetLoaderContext,
   type ExtensionWidgetLoader,
@@ -246,8 +258,15 @@ test('each of several extension widgets queries as itself, not as whichever rend
   expect(requests).toHaveLength(2);
 });
 
-test('without a node id the host never guesses who is asking', async () => {
+const requestsOf = (page: Page) =>
+  page.fetchData.mock.calls.map(([request]) => [
+    request.instanceId,
+    request.filters,
+  ]);
+
+test('without a node id a query is attributed to the widget that is asking', async () => {
   const page = createPage(1, false);
+  // The first widget cross-filters; only the other one must be narrowed by it.
   page.bus.emit('w1', dashboardApi.VALUE_CHANGED_EVENT, FILTER_CA);
 
   render(
@@ -259,12 +278,272 @@ test('without a node id the host never guesses who is asking', async () => {
 
   await screen.findByText('One:1');
   await screen.findByText('Two:1');
-  // Both queries are attributed to no widget: the same filters for both,
-  // rather than one of them silently treated as the other.
-  page.fetchData.mock.calls.forEach(([request]) => {
-    expect(request.instanceId).toBe('');
-    expect(request.filters).toEqual([FILTER_CA.resolved]);
+  expect(requestsOf(page)).toEqual(
+    expect.arrayContaining([
+      ['w1', []],
+      ['w2', [FILTER_CA.resolved]],
+    ]),
+  );
+  expect(requestsOf(page)).toHaveLength(2);
+});
+
+/**
+ * A widget that never says who it is: it fetches from its own effect, again
+ * when its own state changes, from a child's effect, and from a click.
+ */
+function registerProbe(core: Core) {
+  const binding = { datasetId: 7, metrics: ['count'] };
+  const fetch = () => {
+    core.dashboard.fetchQueryData(binding).catch(() => undefined);
+  };
+
+  function Child() {
+    useEffect(fetch, []);
+    return null;
+  }
+
+  function Probe({ nodeId }: { nodeId: string }) {
+    const [round, setRound] = useState(0);
+    useEffect(fetch, [round]);
+    return (
+      <>
+        <button
+          type="button"
+          data-test={`again-${nodeId}`}
+          onClick={() => setRound(current => current + 1)}
+        >
+          again {round}
+        </button>
+        <button type="button" data-test={`late-${nodeId}`} onClick={fetch}>
+          late
+        </button>
+        <Child />
+      </>
+    );
+  }
+
+  core.views.registerView(
+    { id: TYPE, name: 'Probe', description: '' },
+    'dashboard.widgets',
+    Probe,
+  );
+}
+
+test('the asking widget is known in its effects, its children’s, and after its own state changes', async () => {
+  const page = createPage(1);
+  registerProbe(page.core);
+  page.bus.emit('w1', dashboardApi.VALUE_CHANGED_EVENT, FILTER_CA);
+
+  render(
+    <PageProviders page={page}>
+      <Widget type={TYPE} props={{}} instanceId="w1" />
+      <Widget type={TYPE} props={{}} instanceId="w2" />
+    </PageProviders>,
+  );
+
+  // On mount: the view's own effect and its child's, for each widget.
+  await screen.findByTestId('again-w2');
+  await waitFor(() => expect(page.fetchData).toHaveBeenCalledTimes(4));
+  expect(requestsOf(page).filter(([id]) => id === 'w1')).toEqual([
+    ['w1', []],
+    ['w1', []],
+  ]);
+  expect(requestsOf(page).filter(([id]) => id === 'w2')).toEqual([
+    ['w2', [FILTER_CA.resolved]],
+    ['w2', [FILTER_CA.resolved]],
+  ]);
+
+  // A render the view's own state caused, with nothing above it rendering.
+  page.fetchData.mockClear();
+  fireEvent.click(screen.getByTestId('again-w2'));
+  await waitFor(() => expect(page.fetchData).toHaveBeenCalledTimes(1));
+  expect(requestsOf(page)).toEqual([['w2', [FILTER_CA.resolved]]]);
+
+  // A click carries no rendering widget: with two on the page it is
+  // attributed to neither, rather than to whichever rendered last.
+  page.fetchData.mockClear();
+  fireEvent.click(screen.getByTestId('late-w1'));
+  await waitFor(() => expect(page.fetchData).toHaveBeenCalledTimes(1));
+  expect(requestsOf(page)).toEqual([['', [FILTER_CA.resolved]]]);
+});
+
+test('a render React throws away leaves no node behind', () => {
+  jest.useFakeTimers();
+  try {
+    const page = createPage(1);
+    const Extension = page.host.getComponent(TYPE)!;
+    const never = new Promise<never>(() => {});
+    function Suspends(): never {
+      throw never;
+    }
+
+    render(
+      <PageProviders page={page}>
+        <Suspense fallback="waiting">
+          <Extension instanceId="w1" props={{ label: 'Discarded' }} />
+          <Suspends />
+        </Suspense>
+      </PageProviders>,
+    );
+
+    // Rendered, never committed: it is not on screen and none of its effects
+    // ran, so it is not one of the host's widgets.
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+    expect(page.core.dashboard.getRoot().children).toEqual([]);
+    expect(page.fetchData).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(UNCOMMITTED_NODE_TTL_MS * 2);
+    });
+
+    expect(page.core.dashboard.getNode('w1')).toBeUndefined();
+    expect(page.core.dashboard.getRoot().children).toEqual([]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a committed widget keeps its node however long it stays', async () => {
+  jest.useFakeTimers();
+  try {
+    const page = createPage(2);
+    const Extension = page.host.getComponent(TYPE)!;
+    const { unmount } = render(
+      <PageProviders page={page}>
+        <Extension instanceId="w1" props={{ label: 'Kept' }} />
+      </PageProviders>,
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(UNCOMMITTED_NODE_TTL_MS * 3);
+    });
+
+    expect(page.core.dashboard.getNode('w1')?.props).toEqual({ label: 'Kept' });
+    expect(page.core.dashboard.getRoot().children).toEqual(['w1']);
+    unmount();
+    expect(page.core.dashboard.getNode('w1')).toBeUndefined();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+/**
+ * Two providers and one copy of an extension that knows nothing of either:
+ * it registered when it was imported and calls the core it imported.
+ */
+function createLegacyPages(leftRows: number, rightRows: number) {
+  const pageCore = getPageCore();
+  let heard: WidgetEvent[] = [];
+  const bundle = evaluateExtension(EXTENSION, () => {
+    heard = registerChart(pageCore, false);
+    return {};
   });
+  const pages = [leftRows, rightRows].map(rows => {
+    const page = createPage(rows);
+    page.host.dispose();
+    page.host.activate(EXTENSION, bundle);
+    return page;
+  });
+  return { pageCore, heard, left: pages[0], right: pages[1] };
+}
+
+test('an extension that only knows the page core is routed to the provider rendering it', async () => {
+  const { pageCore, heard, left, right } = createLegacyPages(3, 5);
+  left.bus.emit('host:state', dashboardApi.VALUE_CHANGED_EVENT, FILTER_CA);
+
+  const { unmount } = render(
+    <>
+      <PageProviders page={left}>
+        <Widget type={TYPE} props={{ label: 'Left' }} instanceId="l1" />
+      </PageProviders>
+      <PageProviders page={right}>
+        <Widget type={TYPE} props={{ label: 'Right' }} instanceId="r1" />
+      </PageProviders>
+    </>,
+  );
+
+  // Rendering and effects: props, data and filters are each provider's own.
+  expect(await screen.findByText('Left:3')).toBeInTheDocument();
+  expect(await screen.findByText('Right:5')).toBeInTheDocument();
+  expect(requestsOf(left)).toEqual([['l1', [FILTER_CA.resolved]]]);
+  expect(requestsOf(right)).toEqual([['r1', []]]);
+
+  // A click names its node, which one provider has on screen.
+  heard.length = 0;
+  fireEvent.click(screen.getByTestId('ext-r1'));
+  expect(right.bus.getValue('r1', dashboardApi.VALUE_CHANGED_EVENT)).toEqual(
+    FILTER_CA,
+  );
+  expect(
+    left.bus.getValue('r1', dashboardApi.VALUE_CHANGED_EVENT),
+  ).toBeUndefined();
+  // Heard by the listener the right widget registered, and by no other.
+  expect(heard).toHaveLength(1);
+  expect(pageCore.dashboard.getNode('l1')?.props).toEqual({ label: 'Left' });
+
+  // What names no node, outside any render, cannot be routed: it fails
+  // rather than reach one of the two.
+  expect(() => pageCore.dashboard.getRoot()).toThrow(
+    'cannot tell which SupersetProvider it is for',
+  );
+  expect(() => pageCore.dashboard.getNode('nobody')).toThrow(
+    'cannot tell which SupersetProvider it is for',
+  );
+
+  unmount();
+  expect(() => pageCore.dashboard.getRoot()).toThrow(
+    'dashboard.getRoot is only available to a rendered widget.',
+  );
+});
+
+test('with one provider on screen the page core needs no routing hint', async () => {
+  const { pageCore, left } = createLegacyPages(2, 2);
+
+  render(
+    <PageProviders page={left}>
+      <Widget type={TYPE} props={{ label: 'Only' }} instanceId="o1" />
+    </PageProviders>,
+  );
+
+  expect(await screen.findByText('Only:2')).toBeInTheDocument();
+  expect(pageCore.dashboard.getRoot().children).toEqual(['o1']);
+  expect(pageCore.views.getViews('dashboard.widgets')).toHaveLength(1);
+  expect(pageCore.extensions.getContext().extension).toEqual(EXTENSION);
+  expect(pageCore.dashboard.VALUE_CHANGED_EVENT).toBe('valueChanged');
+});
+
+test('what an extension does while it is imported is recorded, not run', () => {
+  const pageCore = getPageCore();
+  const listener = jest.fn();
+  const View = () => null;
+
+  const bundle = evaluateExtension(EXTENSION, () => {
+    pageCore.views.registerView(
+      { id: TYPE, name: 'Chart', description: '' },
+      'dashboard.widgets',
+      View,
+    );
+    pageCore.dashboard.on(dashboardApi.VALUE_CHANGED_EVENT, listener);
+    // Its own context is there for it, as in Superset.
+    expect(pageCore.extensions.getContext().extension).toEqual(EXTENSION);
+    return { activate: jest.fn() };
+  });
+
+  expect(bundle.views.map(({ view }) => view.id)).toEqual([TYPE]);
+  expect(bundle.listeners).toEqual([
+    { eventType: dashboardApi.VALUE_CHANGED_EVENT, listener },
+  ]);
+
+  const host = createExtensionHost();
+  host.activate(EXTENSION, bundle);
+  host.activate(EXTENSION, bundle);
+  expect(host.getComponent(TYPE)).toBeDefined();
+  expect(
+    (bundle.exports as { activate: jest.Mock }).activate,
+  ).toHaveBeenCalledTimes(1);
+  expect(
+    (bundle.exports as { activate: jest.Mock }).activate,
+  ).toHaveBeenCalledWith(host.createCore(EXTENSION));
 });
 
 test('two providers give one extension two worlds that cannot reach each other', async () => {

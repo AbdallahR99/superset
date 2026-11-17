@@ -43,20 +43,32 @@ function deriveColumnDefs(columns: string[]): ColDef[] {
  * each must have. A column definition is data — stored with a saved widget or
  * passed by a host — but AG Grid compiles string "expressions" in fields such
  * as `valueGetter`, `valueFormatter` and `cellClassRules` into functions and
- * runs them. Only declarative settings are let through, so a definition
- * written by one user can never run script in the page of another.
+ * runs them, and hands `cellRenderer` / `headerComponent` / tooltip
+ * components the DOM. Only declarative settings are let through — an
+ * allowlist, so a setting AG Grid adds later is refused until it is listed —
+ * and a definition written by one user can never run script, or place
+ * markup, in the page of another.
+ *
+ * Text settings (`headerName`, `headerTooltip`) are drawn by AG Grid as text
+ * content. Settings that name something (`type`, `cellDataType`, `sort`,
+ * `pinned`) accept only the built-in names below.
  */
-const COLUMN_SETTINGS: Readonly<
-  Record<string, 'string' | 'number' | 'boolean'>
-> = {
-  field: 'string',
-  colId: 'string',
+type ColumnRule =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'identifier'
+  | readonly string[];
+
+const COLUMN_SETTINGS: Readonly<Record<string, ColumnRule>> = {
+  field: 'identifier',
+  colId: 'identifier',
   headerName: 'string',
   headerTooltip: 'string',
-  type: 'string',
-  cellDataType: 'string',
-  sort: 'string',
-  pinned: 'string',
+  type: ['numericColumn', 'rightAligned'],
+  cellDataType: ['text', 'number', 'boolean', 'date', 'dateString', 'object'],
+  sort: ['asc', 'desc'],
+  pinned: ['left', 'right'],
   width: 'number',
   minWidth: 'number',
   maxWidth: 'number',
@@ -75,6 +87,32 @@ const COLUMN_SETTINGS: Readonly<
 };
 
 const MAX_COLUMNS = 500;
+const MAX_TEXT_LENGTH = 500;
+// A dotted `field` is a path AG Grid walks into the row: it must not be able
+// to name anything on a prototype.
+const UNSAFE_PATH = /(^|\.)(__proto__|constructor|prototype)(\.|$)/;
+
+function columnSetting(
+  rule: ColumnRule,
+  value: unknown,
+): string | number | boolean | undefined {
+  if (typeof rule !== 'string') {
+    return typeof value === 'string' && rule.includes(value)
+      ? value
+      : undefined;
+  }
+  if (rule === 'number') {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : undefined;
+  }
+  if (rule === 'boolean') return typeof value === 'boolean' ? value : undefined;
+  if (typeof value !== 'string' || value.length > MAX_TEXT_LENGTH) {
+    return undefined;
+  }
+  if (rule === 'identifier' && UNSAFE_PATH.test(value)) return undefined;
+  return value;
+}
 
 /** The declarative part of authored column definitions; see {@link COLUMN_SETTINGS}. */
 export function sanitizeColumnDefs(columnDefs: unknown): ColDef[] {
@@ -86,10 +124,9 @@ export function sanitizeColumnDefs(columnDefs: unknown): ColDef[] {
     const authored = entry as Record<string, unknown>;
     const column: Record<string, string | number | boolean> = {};
     Object.keys(COLUMN_SETTINGS).forEach(key => {
-      const value = authored[key];
-      if (typeof value === COLUMN_SETTINGS[key]) {
-        column[key] = value as string | number | boolean;
-      }
+      if (!Object.prototype.hasOwnProperty.call(authored, key)) return;
+      const value = columnSetting(COLUMN_SETTINGS[key], authored[key]);
+      if (value !== undefined) column[key] = value;
     });
     // A column that names no field shows nothing; schema-driven forms seed
     // such empty entries.

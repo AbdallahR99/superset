@@ -128,11 +128,12 @@ import {
 ### Providers are independent
 
 A provider owns its event bus, data client, guest token, CSRF token, host
-filters, theme and extension widgets. Nothing is kept at module level, so two
-providers on one page — different deployments, tokens for different users,
+filters, theme and extension widgets. None of that is kept at module level, so
+two providers on one page — different deployments, tokens for different users,
 different filters — do not see each other's requests, events or filters. They
 share only what the host passes to both (`bus`, `client`, a custom extension
-loader). Changing `supersetDomain`, `guestTokenKey` or `client` makes every
+loader), and the code of an extension both render (see
+[Extension widgets](#extension-widgets)). Changing `supersetDomain`, `guestTokenKey` or `client` makes every
 widget under the provider fetch again with the new one; answers still in flight
 for the old one are discarded.
 
@@ -165,7 +166,7 @@ Failed calls to Superset are `WidgetApiError`s with a `status` and a `kind`:
 | `kind`               | When                                                                                          |
 | -------------------- | --------------------------------------------------------------------------------------------- |
 | `unauthorized` (401) | The guest token was refused after one refresh, or the viewer has no Superset session.         |
-| `forbidden` (403)    | The token does not name this saved widget or dataset, or the account lacks access.            |
+| `forbidden` (403)    | The token has no `widget` / `dataset` resource for this, or the account lacks access.         |
 | `not_found` (404)    | The saved widget (or what it refers to) no longer exists.                                     |
 | `conflict` (409)     | Superset reported a conflicting state.                                                        |
 | `invalid` (400, 422) | Props the widget type rejects, an unknown filter column, a SQL metric or filter from a guest. |
@@ -205,13 +206,36 @@ A widget definition is written by one person and rendered in another's page.
 
 - Markdown is always sanitised: scripts, event handlers, frames and
   script-capable links in the source do not reach the DOM.
-- Table `columnDefs` keep declarative settings only (`field`, `headerName`,
-  widths, `pinned`, `hide`, `sort`, …). Anything AG Grid would evaluate or call
-  (`valueGetter`, `valueFormatter`, `cellRenderer`, `cellClassRules`, …) is
-  dropped.
-- In `echartsOptions`, a tooltip's HTML `formatter` template is sanitised and
-  `link`/`sublink` values that could run script are removed. The option is
-  walked with a depth limit and cycle detection.
+- Table `columnDefs` go through an allowlist of declarative settings: `field`,
+  `colId`, `headerName`, `headerTooltip`, widths and `flex`, `hide`,
+  `sortable`, `resizable`, `filter` (boolean), text wrapping, and — with
+  built-in values only — `type`, `cellDataType`, `sort`, `pinned`. Everything
+  else is dropped, including whatever AG Grid would evaluate, call or hand the
+  DOM to (`valueGetter`, `valueFormatter`, `cellRenderer`, `cellClassRules`,
+  `headerComponent`, `tooltipComponent`, column groups, …). `sanitizeColumnDefs`
+  is the function.
+- `echartsOptions` goes through an allowlist as well (`sanitizeEchartsOption`),
+  after `$bind` markers are resolved:
+  - only top-level keys known to draw on the canvas are passed on (`series`,
+    axes, `grid`, `legend`, `dataset`, `dataZoom`, `visualMap`, `graphic`,
+    colours and animation settings, …); `baseOption`, `media`, `options`,
+    `timeline` and unknown keys are dropped;
+  - a `tooltip`, wherever it sits (option, series, data item, axis, legend), is
+    rebuilt from known settings. A string `formatter` is HTML-escaped; only the
+    attribute-less tags `<b> <i> <u> <em> <strong> <small> <sub> <sup> <br>`
+    survive. `extraCssText`, `className`, `content`, `appendTo` and colours
+    that are not plain CSS values are dropped;
+  - the `toolbox` keeps `saveAsImage`, `restore` and `dataZoom` without titles,
+    icons or tooltips. `dataView`, `magicType` and custom `my*` tools are
+    dropped;
+  - `link` / `sublink` must be `http(s):`, `mailto:` or relative;
+  - `graphic` elements lose every `on…` handler and anything callable.
+
+  A function is kept where a setting takes one (a tooltip `formatter` passed
+  by host code): JSON, and so a stored widget, cannot carry one.
+
+These run in the browser, on every render. They do not replace validation on
+the server, which is what keeps a stored definition clean for other renderers.
 
 ## Extension widgets
 
@@ -224,22 +248,68 @@ and loads its frontend the first time one of its widgets renders:
 <Widget id="<uuid of a saved widget of that type>" />
 ```
 
-The extension's module runs in the host page with the host's React, and gets a
-`@apache-superset/core` whose `views` and `dashboard` namespaces are backed by
-the provider that loaded it: `dashboard.getNode(nodeId)` returns the props the
-host passed, `emit`/`on`/`getValue` are that provider's bus (so it
-cross-filters with the built-in widgets), and
-`fetchQueryData(binding, { nodeId, signal })` runs through the widget data API
-under that provider's credentials. Pass `nodeId`: it tells the host which
-widget is asking, so that widget is not narrowed by its own selection. Without
-it the query is attributed to no widget in particular. Contributions to
-anything other than `dashboard.widgets`, and calls the embedded host cannot
-answer (placing nodes, opening editors), are no-ops or throw rather than being
-silently wrong.
+The extension's module runs in the host page with the host's React, and works
+against a `@apache-superset/core` whose `views` and `dashboard` namespaces are
+backed by a provider: `dashboard.getNode(nodeId)` returns the props the host
+passed, `emit`/`on`/`getValue` are that provider's bus (so it cross-filters
+with the built-in widgets), and `fetchQueryData(binding, { nodeId, signal })`
+runs through the widget data API under that provider's credentials.
+Contributions to anything other than `dashboard.widgets`, and calls the
+embedded host cannot answer (placing nodes, opening editors), are no-ops or
+throw rather than being silently wrong.
 
-- Each provider loads and evaluates an extension for itself, into an
-  `ExtensionHost` of its own, so the same extension under two providers is two
-  independent copies.
+**Who is asking.** `fetchQueryData` needs to know which widget the query is
+for, so that widget is not narrowed by its own selection. `nodeId` is optional
+where the host can tell: a call made while a widget renders, or from an effect
+of that widget (or of a component it renders), is attributed to it. A call
+made later — an event handler, a timer, after an `await` — carries no such
+context; pass `{ nodeId }` there, or the query is attributed to the
+provider's only extension widget if there is exactly one and to no widget
+otherwise.
+
+**One copy of the code, one core per provider.** An extension's bundle is
+fetched and evaluated once per page, however many providers render its
+widgets: a second evaluation of a Module Federation remote entry is not
+guaranteed to produce an independent copy. Each provider has an
+`ExtensionHost` of its own (registrations, rendered nodes, listeners, bus,
+client), and an extension reaches it in one of two ways:
+
+- **By argument (recommended).** Export `activate(core)` from the entry
+  module. It is called once per provider with that provider's core; register
+  the widgets on it and use it for every later call. Nothing is read from a
+  global, so two providers are isolated exactly.
+
+  ```ts
+  export function activate(core: typeof import('@apache-superset/core')) {
+    core.views.registerView(
+      { id: 'funnel', name: 'Funnel' },
+      'dashboard.widgets',
+      ({ nodeId }) => <Funnel nodeId={nodeId} dashboard={core.dashboard} />,
+    );
+  }
+  ```
+
+- **By import, or by the `superset` global (compatibility).** An extension
+  that registers as a side effect of being imported and calls what it imported
+  from `@apache-superset/core` — or, when built with
+  `externals: {'@apache-superset/core': 'superset'}`, what it reads from
+  `window.superset` — talks to one stable, page-wide facade. Its
+  registrations are recorded once and replayed into every provider, and each
+  later call is routed to a provider: the one whose widget is rendering or
+  having its effects run; else the only one that has the named node on
+  screen; else the only one with any widget on screen.
+
+  **Limitation.** A call that names no node (or an id two providers both
+  use), made from an event handler, a timer or after an `await`, while two
+  providers have widgets on screen, cannot be routed. It throws
+  (`… cannot tell which SupersetProvider it is for`) instead of reaching the
+  wrong provider. A listener such an extension registers at module level
+  hears the events of every provider that renders it. Ids the package
+  generates are unique on the page; explicit `instanceId`s should be too if
+  such an extension is used under two providers. `window.superset` is left
+  in place after the first load; a page that already had a `superset` global
+  gets its own back.
+
 - `extensionWidgets={false}` turns loading off; a
   `createExtensionWidgetLoader({ supersetDomain, getGuestToken })` of your own
   replaces it. Give a loader to one provider only, unless the providers also
@@ -250,37 +320,119 @@ silently wrong.
 - Extensions built before the CLI's `publicPath: "auto"` default can only be
   embedded same-origin; their chunk URLs are pinned to the page's own origin.
 
-## Tokens
+## Embedding, step by step
 
-Mint guest tokens on your backend (`POST /api/v1/security/guest_token/`) after
-authenticating your own user. Never mint them in the browser.
-
-| You render     | The token needs                                                     |
-| -------------- | ------------------------------------------------------------------- |
-| `<Widget id>`  | `resources: [{ "type": "widget", "id": "<uuid>" }]`                 |
-| inline widgets | `datasets: [<dataset id>, …]` (inline specs are refused without it) |
-
-Add `rls` rules scoped to your user; without them the widget sees every row the
-dataset returns. For guests, inline specs may only use saved metrics or simple
-aggregates on existing columns: SQL metrics and SQL filters are rejected.
-Filters from the host are always ANDed onto the widget's query; they narrow
-what is shown and are not an access control.
-
-## Superset configuration
+### 1. Configure Superset
 
 ```python
-FEATURE_FLAGS = {"EMBEDDED_SUPERSET": True}
-GUEST_ROLE_NAME = "Gamma"   # a role with can_read on Chart
+FEATURE_FLAGS = {
+    "DASHBOARD_V2": True,       # the widget APIs answer 404 without it
+    "EMBEDDED_SUPERSET": True,  # guest tokens
+}
+GUEST_ROLE_NAME = "WidgetGuest"  # see step 2
 ENABLE_CORS = True
 CORS_OPTIONS = {
-    "origins": ["https://app.example.com"],
+    "origins": ["https://app.example.com"],  # the host page's origin, exactly
     "resources": [r"/api/*"],
     "allow_headers": ["Content-Type", "X-GuestToken"],
 }
 ```
 
-For session mode across origins add `"X-CSRFToken"` to `allow_headers` and
-`"supports_credentials": True`.
+- **Session mode across origins** (no guest token; the viewer's Superset
+  login): add `"X-CSRFToken"` to `allow_headers` and
+  `"supports_credentials": True`; `/api/v1/security/csrf_token/` must be
+  reachable from the host origin and the session cookie usable cross-site.
+  Same-site hosts need none of this.
+- **Extension widgets with guest tokens:** `EMBEDDED_EXTENSION_ASSETS_PUBLIC =
+  True` (and `ENABLE_EXTENSIONS`), because extension chunks load as plain
+  `<script>` tags.
+- **Embedding a whole Dashboard v2 document cross-origin** additionally needs
+  `ETag` in `expose_headers`, `If-Match` in `allow_headers`, and `can read on
+  Dashboard` on the guest role. Embedding widgets does not.
+
+### 2. Give the guest role exactly what a widget needs
+
+Every guest token acts with the role named by `GUEST_ROLE_NAME`. For widgets
+that role needs **`can read on Chart`** and nothing else; in particular no
+dataset or database permission — what a guest may read comes from the token.
+Use a dedicated role rather than `Gamma` or `Public`, so nothing granted to
+those for other reasons reaches guests.
+
+Row-level security rules that apply to the guest role are enforced for
+guests. Rules that apply to the widget author's own roles are **not**: a
+guest is not the author.
+
+### 3. Create the service account that mints tokens
+
+Your backend signs in to Superset as an account that:
+
+- has `can grant guest token on SecurityRestApi`;
+- can itself read every dataset it grants. Superset checks each grant against
+  this account's own dataset access when the token is minted, so an account
+  that can mint tokens but not read a dataset cannot hand that dataset to a
+  guest.
+
+### 4. Mint tokens on your backend
+
+`POST /api/v1/security/guest_token/`, after authenticating your own user.
+Never from the browser, and never with Superset credentials in a `VITE_*` /
+`NEXT_PUBLIC_*` variable. Grant exactly what the page renders:
+
+| You render                                    | `resources` entry                             | What it grants                                                                                                                                                                                                 |
+| --------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<Widget id="<uuid>">`                        | `{ "type": "widget", "id": "<uuid>" }`        | That saved widget and the dataset it is bound to when the token is minted. If the widget is later pointed at another dataset, the token stops working for it: mint a new one.                                  |
+| inline widgets (`<Chart>`, `<Widget type>` …) | `{ "type": "dataset", "id": "<dataset id>" }` | SQL-free inline definitions against that one dataset. This is the only thing that grants them: a `widget` or `dashboard` resource does not, and neither does the `datasets` claim, which only narrows a token. |
+
+```ts
+body: JSON.stringify({
+  user: { username: user.id },
+  resources: [
+    { type: 'widget', id: SAVED_WIDGET_UUID },
+    { type: 'dataset', id: String(DATASET_ID) },
+  ],
+  rls: [
+    { dataset: DATASET_ID, clause: `tenant_id = ${Number(user.tenantId)}` },
+  ],
+});
+```
+
+- **`rls`.** Rows a guest sees are bounded by the token's `rls` rules plus the
+  rules that apply to the guest role. Without either, the widget sees every
+  row the dataset returns. For a dataset that carries RLS rules in Superset,
+  a `widget` or `dataset` grant is refused (400) unless a token rule covers
+  that dataset (one naming it, or one with no `dataset`), or the deployment
+  installs `GUEST_TOKEN_VALIDATOR_HOOK` and decides itself.
+- **No SQL from guests.** An inline definition may use saved metric names and
+  simple aggregates (`AVG`, `COUNT`, `COUNT_DISTINCT`, `MAX`, `MIN`, `SUM`) on
+  existing columns. A `sqlExpression` anywhere is a 400. SQL stored in a saved
+  widget is its author's, who needed SQL Lab access or editorship of the
+  dataset to save it.
+- Do not send `datasets` unless you mean to narrow a dashboard token: listing
+  datasets there that leave out a saved widget's dataset denies that widget.
+- Host `filters` are ANDed onto the widget's query. They narrow what is shown;
+  they are not access control.
+
+[`example/server.mjs`](example/server.mjs) is a minimal broker that does
+this.
+
+### 5. Render
+
+Wrap the widgets in one `SupersetProvider` per deployment and token identity
+(see [Usage](#usage)), with `fetchGuestToken` calling your backend and
+`guestTokenKey` set to whoever the token is for.
+
+### When it does not work
+
+| Symptom                                    | Cause                                                                                                                                                                   |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 404 on `/api/v1/widget/*`                  | `DASHBOARD_V2` is off.                                                                                                                                                  |
+| `network` error, CORS message in console   | The host origin, or the `X-GuestToken` header, is missing from `CORS_OPTIONS`.                                                                                          |
+| 401 (`unauthorized`)                       | The token expired or was refused and a fresh one was refused too; or, in session mode, the viewer is not logged in to Superset.                                         |
+| 403 (`forbidden`) on a saved widget        | The token has no `widget` resource for that uuid, the widget was re-pointed at another dataset after the token was minted, or the guest role lacks `can read on Chart`. |
+| 403 (`forbidden`) on an inline widget      | The token has no `dataset` resource for that dataset id.                                                                                                                |
+| 400 (`invalid`)                            | Props the widget type rejects, an unknown column in a filter, or SQL in a guest's inline definition.                                                                    |
+| 400 / 403 when minting                     | The service account cannot read a granted dataset or widget, lacks `can grant guest token`, or the dataset is RLS-protected and no token rule covers it.                |
+| An extension widget never loads as a guest | `EMBEDDED_EXTENSION_ASSETS_PUBLIC` is off.                                                                                                                              |
 
 ## Public API
 

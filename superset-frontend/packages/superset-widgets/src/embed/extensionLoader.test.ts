@@ -17,7 +17,7 @@
  * under the License.
  */
 import { getWidgetComponent } from '../registry';
-import { createExtensionHost } from './extensionHost';
+import { createExtensionHost, getPageCore } from './extensionHost';
 import {
   createExtensionWidgetLoader,
   isExtensionWidgetType,
@@ -47,47 +47,56 @@ type ShareScope = Record<string, Record<string, ShareEntry>>;
 const StubWidget = () => null;
 const globals = window as unknown as Record<string, unknown>;
 
-/** Stands in for the extension's `./index`: what it registers when evaluated. */
-let register: (core: ExtensionCore) => void;
+/**
+ * Stands in for the extension's `./index`: what it does when evaluated, with
+ * the `@apache-superset/core` it imported, and what it exports.
+ */
+let entryModule: (imported: ExtensionCore) => unknown;
 let scriptUrls: string[];
-/** One entry per evaluation of the bundle: the core that copy was started with. */
+/** One entry per evaluation of the bundle. */
 let evaluations: {
-  core?: ExtensionCore;
+  imported?: ExtensionCore;
   init: jest.Mock;
+  started: number;
   globalDuringStart?: unknown;
 }[];
-
-const extension = {
-  id: 'acme.widgets',
-  publisher: 'acme',
-  name: 'widgets',
-  remoteEntry: '/api/v1/extensions/acme/widgets/remoteEntry.abc.js',
-  moduleFederationName: CONTAINER,
+/** The page keeps a bundle by URL, so every test serves its own. */
+let bundleSerial = 0;
+let extension: {
+  id: string;
+  publisher: string;
+  name: string;
+  remoteEntry: string;
+  moduleFederationName: string;
 };
 
-const registerChart = (loaded: ExtensionCore) =>
-  loaded.views.registerView(
+const registerChart = (core: ExtensionCore) =>
+  core.views.registerView(
     { id: TYPE, name: 'Chart' },
     'dashboard.widgets',
     StubWidget,
   );
 
 /**
- * What evaluating the remote entry does: it assigns a brand new container,
- * with nothing started yet, to the extension's global.
+ * What evaluating the remote entry does: it assigns a container, with
+ * nothing started yet, to the extension's global.
  */
 function evaluateBundle() {
-  const evaluation: (typeof evaluations)[number] = { init: jest.fn() };
+  const evaluation: (typeof evaluations)[number] = {
+    init: jest.fn(),
+    started: 0,
+  };
   evaluation.init.mockImplementation(async (scope: ShareScope) => {
     const [entry] = Object.values(scope['@apache-superset/core']);
-    evaluation.core = (await entry.get())();
+    evaluation.imported = (await entry.get())();
   });
   evaluations.push(evaluation);
   globals[CONTAINER] = {
     init: evaluation.init,
     get: async () => () => {
+      evaluation.started += 1;
       evaluation.globalDuringStart = globals.superset;
-      register(evaluation.core as ExtensionCore);
+      return entryModule(evaluation.imported as ExtensionCore);
     },
   };
 }
@@ -98,7 +107,15 @@ const respond = (result: unknown) =>
 beforeEach(() => {
   scriptUrls = [];
   evaluations = [];
-  register = registerChart;
+  bundleSerial += 1;
+  extension = {
+    id: 'acme.widgets',
+    publisher: 'acme',
+    name: 'widgets',
+    remoteEntry: `/api/v1/extensions/acme/widgets/remoteEntry.${bundleSerial}.js`,
+    moduleFederationName: CONTAINER,
+  };
+  entryModule = registerChart;
   delete globals[CONTAINER];
   delete globals.superset;
   global.fetch = jest.fn(async () => respond(extension)) as typeof fetch;
@@ -144,9 +161,9 @@ test('loading a type fetches its extension and returns the widget it registers',
 });
 
 test('a second widget from the same extension reuses the one load', async () => {
-  register = loaded => {
-    registerChart(loaded);
-    loaded.views.registerView(
+  entryModule = imported => {
+    registerChart(imported);
+    imported.views.registerView(
       { id: TABLE_TYPE, name: 'Table' },
       'dashboard.widgets',
       StubWidget,
@@ -177,9 +194,10 @@ test('a failed load is not kept, so the next widget can retry', async () => {
   await expect(load(TYPE)).resolves.toBeDefined();
 });
 
-test('a bundle that registers no container is reported by name', async () => {
-  (document.head.appendChild as jest.Mock).mockImplementation(
+test('a bundle that registers no container is reported by name, and fetched again next time', async () => {
+  (document.head.appendChild as jest.Mock).mockImplementationOnce(
     (node: HTMLScriptElement) => {
+      scriptUrls.push(node.src);
       node.onload?.(new Event('load'));
       return node;
     },
@@ -189,9 +207,11 @@ test('a bundle that registers no container is reported by name', async () => {
   await expect(load(TYPE)).rejects.toThrow(
     'Extension acme.widgets did not register the container "acme_widgets".',
   );
+  await expect(load(TYPE)).resolves.toBeDefined();
+  expect(scriptUrls).toHaveLength(2);
 });
 
-test('two loaders each evaluate the extension for themselves, with their own core and credentials', async () => {
+test('two providers load the bundle once and each start it with a core of their own', async () => {
   const requests: { url: string; token?: string }[] = [];
   global.fetch = jest.fn(async (url: string, init: RequestInit) => {
     requests.push({
@@ -200,6 +220,14 @@ test('two loaders each evaluate the extension for themselves, with their own cor
     });
     return respond(extension);
   }) as unknown as typeof fetch;
+  // The extension takes its core as an argument: nothing read from a global.
+  const activatedWith: ExtensionCore[] = [];
+  entryModule = () => ({
+    activate(core: ExtensionCore) {
+      activatedWith.push(core);
+      registerChart(core);
+    },
+  });
   const leftHost = createExtensionHost();
   const rightHost = createExtensionHost();
   const loadLeft = createExtensionWidgetLoader({
@@ -208,7 +236,7 @@ test('two loaders each evaluate the extension for themselves, with their own cor
     host: leftHost,
   });
   const loadRight = createExtensionWidgetLoader({
-    supersetDomain: OTHER_DOMAIN,
+    supersetDomain: DOMAIN,
     getGuestToken: async () => 'right-token',
     host: rightHost,
   });
@@ -217,41 +245,94 @@ test('two loaders each evaluate the extension for themselves, with their own cor
   // anything lets them.
   const [left, right] = await Promise.all([loadLeft(TYPE), loadRight(TYPE)]);
 
-  // Each fetched its own deployment with its own token, once.
+  // Each asked Superset for the extension with its own token.
   expect(requests).toEqual(
     expect.arrayContaining([
       { url: `${DOMAIN}/api/v1/extensions/acme/widgets`, token: 'left-token' },
-      {
-        url: `${OTHER_DOMAIN}/api/v1/extensions/acme/widgets`,
-        token: 'right-token',
-      },
+      { url: `${DOMAIN}/api/v1/extensions/acme/widgets`, token: 'right-token' },
     ]),
   );
   expect(requests).toHaveLength(2);
+
+  // One script, one container, one evaluation of the entry module.
+  expect(scriptUrls).toEqual([`${DOMAIN}${extension.remoteEntry}`]);
+  expect(evaluations).toHaveLength(1);
+  expect(evaluations[0].init).toHaveBeenCalledTimes(1);
+  expect(evaluations[0].started).toBe(1);
+
+  // Started once per provider, each with that provider's own core, and what
+  // it registered went to that provider's host alone.
+  expect(activatedWith).toHaveLength(2);
+  expect(activatedWith[0]).not.toBe(activatedWith[1]);
+  expect(activatedWith[0].views).not.toBe(activatedWith[1].views);
+  expect(activatedWith).toEqual(
+    expect.arrayContaining([
+      leftHost.createCore(extension),
+      rightHost.createCore(extension),
+    ]),
+  );
+  expect(left).not.toBe(right);
+  expect(leftHost.getComponent(TYPE)).toBe(left);
+  expect(rightHost.getComponent(TYPE)).toBe(right);
+
+  // A third widget under a provider that already started it does not start
+  // it again.
+  await loadLeft(TYPE);
+  expect(activatedWith).toHaveLength(2);
+});
+
+test('an extension that registers when imported is recorded once and replayed per provider', async () => {
+  const leftHost = createExtensionHost();
+  const rightHost = createExtensionHost();
+  const loadLeft = createExtensionWidgetLoader({
+    supersetDomain: DOMAIN,
+    host: leftHost,
+  });
+  const loadRight = createExtensionWidgetLoader({
+    supersetDomain: DOMAIN,
+    host: rightHost,
+  });
+
+  const left = await loadLeft(TYPE);
+  const right = await loadRight(TYPE);
+
+  expect(evaluations).toHaveLength(1);
+  expect(evaluations[0].started).toBe(1);
+  // What it imported is the page core, the same object for every provider.
+  expect(evaluations[0].imported).toBe(getPageCore());
+  expect(left).not.toBe(right);
+  expect(leftHost.getComponent(TYPE)).toBe(left);
+  expect(rightHost.getComponent(TYPE)).toBe(right);
+});
+
+test('the same extension served by two deployments is two bundles', async () => {
+  const loadLeft = createExtensionWidgetLoader({ supersetDomain: DOMAIN });
+  const loadRight = createExtensionWidgetLoader({
+    supersetDomain: OTHER_DOMAIN,
+  });
+
+  await Promise.all([loadLeft(TYPE), loadRight(TYPE)]);
+
   expect(scriptUrls.sort()).toEqual(
     [
       `${DOMAIN}${extension.remoteEntry}`,
       `${OTHER_DOMAIN}${extension.remoteEntry}`,
     ].sort(),
   );
-
-  // Two copies of the extension, each started exactly once with a different
-  // core, and each registered with its own host.
   expect(evaluations).toHaveLength(2);
-  evaluations.forEach(evaluation =>
-    expect(evaluation.init).toHaveBeenCalledTimes(1),
-  );
-  expect(evaluations[0].core).not.toBe(evaluations[1].core);
-  expect(evaluations[0].core?.views).not.toBe(evaluations[1].core?.views);
-  expect(left).not.toBe(right);
-  expect(leftHost.getComponent(TYPE)).toBe(left);
-  expect(rightHost.getComponent(TYPE)).toBe(right);
+  evaluations.forEach(evaluation => expect(evaluation.started).toBe(1));
+});
 
-  // The `superset` global was each copy's own core while it started, and is
-  // nobody's afterwards.
-  expect(evaluations[0].globalDuringStart).toBe(evaluations[0].core);
-  expect(evaluations[1].globalDuringStart).toBe(evaluations[1].core);
-  expect('superset' in globals).toBe(false);
+test('the `superset` global is the page core, and stays for a build that reads it late', async () => {
+  const load = createExtensionWidgetLoader({ supersetDomain: DOMAIN });
+
+  await load(TYPE);
+
+  expect(evaluations[0].globalDuringStart).toBe(getPageCore());
+  expect(globals.superset).toBe(getPageCore());
+  // It is the same object whoever asks and whenever.
+  await createExtensionWidgetLoader({ supersetDomain: OTHER_DOMAIN })(TYPE);
+  expect(globals.superset).toBe(getPageCore());
 });
 
 test('a `superset` global the page already had is put back', async () => {
@@ -261,6 +342,24 @@ test('a `superset` global the page already had is put back', async () => {
 
   await load(TYPE);
 
-  expect(evaluations[0].globalDuringStart).toBe(evaluations[0].core);
+  expect(evaluations[0].globalDuringStart).toBe(getPageCore());
   expect(globals.superset).toBe(pageGlobal);
+});
+
+test('an extension whose start fails can be started again', async () => {
+  let attempts = 0;
+  entryModule = () => ({
+    activate(core: ExtensionCore) {
+      attempts += 1;
+      if (attempts === 1) throw new Error('not yet');
+      registerChart(core);
+    },
+  });
+  const load = createExtensionWidgetLoader({ supersetDomain: DOMAIN });
+
+  await expect(load(TYPE)).rejects.toThrow('not yet');
+  await expect(load(TYPE)).resolves.toBeDefined();
+  // The bundle itself was not fetched or evaluated a second time.
+  expect(scriptUrls).toHaveLength(1);
+  expect(evaluations[0].started).toBe(1);
 });

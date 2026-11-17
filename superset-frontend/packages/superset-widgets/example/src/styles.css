@@ -543,7 +543,68 @@ legend.filter-label {
   font-size: 12px;
 }
 
-/* a free slot for dropping in any widget during a demo */
-.demo-slot {
-  margin-top: 24px;
+/* two independent providers, side by side */
+.isolation {
+  margin-top: 32px;
+}
+
+.isolation-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.isolation-provider {
+  height: auto;
+}
+
+.isolation-provider h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.isolation-provider fieldset.filter-bar {
+  margin-top: 12px;
+}
+
+.isolation-widgets {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.isolation-tile {
+  height: 96px;
+}
+
+.isolation-chart {
+  height: 260px;
+}
+
+@media (max-width: 900px) {
+  .isolation-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* right-to-left: the few physical properties above, mirrored */
+[dir='rtl'] legend.filter-label {
+  float: right;
+}
+
+[dir='rtl'] .filter-label {
+  margin-right: 0;
+  margin-left: 4px;
+}
+
+[dir='rtl'] .structure-tree ul {
+  padding-left: 0;
+  padding-right: 14px;
+  border-left: 0;
+  border-right: 1px solid #e4e2dc;
+}
+
+[dir='rtl'] .structure-tree > ul {
+  padding-right: 0;
+  border-right: 0;
 }

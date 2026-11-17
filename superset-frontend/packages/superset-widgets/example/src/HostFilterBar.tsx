@@ -16,33 +16,42 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from 'react';
-import { useSupersetFilter } from '@apache-superset/widgets';
-import { config } from './config';
+import type { HostFilter } from '@apache-superset/widgets';
 
-/** A filter owned by the host app, pushed into every widget on the dataset. */
-export function HostFilterBar() {
-  const setFilter = useSupersetFilter('host-state');
-  const [selected, setSelected] = useState<string[]>([]);
+/**
+ * The filter a set of chips stands for, in the shape `SupersetProvider`'s
+ * `filters` prop takes. `null` lifts it.
+ */
+export function hostFilter(
+  datasetId: number,
+  column: string,
+  selected: string[],
+): HostFilter | null {
+  return selected.length
+    ? { datasetId, column, operator: 'IN', value: selected }
+    : null;
+}
 
-  const apply = (next: string[]) => {
-    setSelected(next);
-    setFilter(
-      next.length
-        ? {
-            datasetId: config.datasetId,
-            column: config.filterColumn,
-            operator: 'IN',
-            value: next,
-          }
-        : null,
-    );
-  };
-
+/**
+ * A filter control that belongs to the host app. It knows nothing of
+ * Superset: it shows the host's own state and reports changes. Whoever owns
+ * that state hands it to `<SupersetProvider filters>`.
+ */
+export function HostFilterBar({
+  label,
+  values,
+  selected,
+  onChange,
+}: {
+  label: string;
+  values: string[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+}) {
   return (
     <fieldset className="filter-bar">
-      <legend className="filter-label">{config.filterColumn}</legend>
-      {config.filterValues.map(value => {
+      <legend className="filter-label">{label}</legend>
+      {values.map(value => {
         const active = selected.includes(value);
         return (
           <button
@@ -51,9 +60,9 @@ export function HostFilterBar() {
             className={active ? 'chip chip-active' : 'chip'}
             aria-pressed={active}
             onClick={() =>
-              apply(
+              onChange(
                 active
-                  ? selected.filter(v => v !== value)
+                  ? selected.filter(item => item !== value)
                   : [...selected, value],
               )
             }
@@ -66,7 +75,7 @@ export function HostFilterBar() {
         type="button"
         className="chip"
         disabled={!selected.length}
-        onClick={() => apply([])}
+        onClick={() => onChange([])}
       >
         Clear
       </button>

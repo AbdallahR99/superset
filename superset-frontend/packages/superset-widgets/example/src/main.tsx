@@ -18,16 +18,18 @@
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App';
 import { resolveDatasetShape } from './config';
 import './styles.css';
 
-// Settled before the first render so no widget queries a column the dataset
-// does not have, which is a failed query rather than an empty one.
-resolveDatasetShape().then(() => {
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  );
-});
+// Settled before the app is even imported, so no widget queries a column the
+// dataset does not have (a failed query rather than an empty one) and no
+// module reads the configuration before it is final.
+resolveDatasetShape()
+  .then(() => import('./App'))
+  .then(({ default: App }) => {
+    createRoot(document.getElementById('root')!).render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+  });
