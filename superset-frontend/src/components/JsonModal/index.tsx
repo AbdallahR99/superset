@@ -19,7 +19,7 @@
 
 import { FC, useMemo } from 'react';
 import { JSONTree } from 'react-json-tree';
-import { styled } from '@apache-superset/core/theme';
+import { LtrIsolate, styled } from '@apache-superset/core/theme';
 import { useJsonTreeTheme } from 'src/hooks/useJsonTreeTheme';
 import { Button, ModalTrigger } from '@superset-ui/core/components';
 import { CopyToClipboard } from '../CopyToClipboard';
@@ -55,11 +55,15 @@ export const JsonModal: FC<JsonModalProps> = ({
   return (
     <ModalTrigger
       modalBody={
-        <JSONTree
-          data={jsonObject}
-          theme={jsonTreeTheme}
-          valueRenderer={renderBigIntStrToNumber}
-        />
+        // JSON is left-to-right, and the tree indents with physical inline
+        // styles.
+        <LtrIsolate>
+          <JSONTree
+            data={jsonObject}
+            theme={jsonTreeTheme}
+            valueRenderer={renderBigIntStrToNumber}
+          />
+        </LtrIsolate>
       }
       modalFooter={
         <Button>
@@ -67,7 +71,9 @@ export const JsonModal: FC<JsonModalProps> = ({
         </Button>
       }
       modalTitle={modalTitle}
-      triggerNode={wrapContent ? <PreWrap>{content}</PreWrap> : content}
+      triggerNode={
+        wrapContent ? <PreWrap dir="ltr">{content}</PreWrap> : content
+      }
     />
   );
 };

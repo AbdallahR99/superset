@@ -148,7 +148,7 @@ export default function transformProps(
               const headline = groupbyLabels.length
                 ? `<p><strong>${sanitizeHtml(outlierName)}</strong></p>`
                 : '';
-              return `${headline}${numberFormatter(stats)}`;
+              return `${headline}<bdi>${numberFormatter(stats)}</bdi>`;
             },
           },
           itemStyle: {

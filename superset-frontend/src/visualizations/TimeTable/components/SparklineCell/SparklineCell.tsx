@@ -16,9 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { ReactElement, useMemo } from 'react';
+import { ReactElement, ReactNode, useMemo } from 'react';
 import { formatNumber, formatTime } from '@superset-ui/core';
-import { useTheme } from '@apache-superset/core/theme';
+import { useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { GridRows } from '@visx/grid';
 import { scaleLinear } from '@visx/scale';
 import {
@@ -67,6 +67,17 @@ const MARGIN = {
   left: 8,
 } as const;
 
+// A sparkline is a plot: its SVG keeps left-to-right semantics (time runs
+// from left to right, `text-anchor: start` is the left end of a label) inside
+// a right-to-left table. Left-to-right pages keep their markup unchanged.
+const PlotBoundary = ({
+  isolate,
+  children,
+}: {
+  isolate: boolean;
+  children?: ReactNode;
+}) => (isolate ? <div dir="ltr">{children}</div> : <>{children}</>);
+
 const SparklineCell = ({
   ariaLabel,
   dataKey,
@@ -81,6 +92,7 @@ const SparklineCell = ({
   sparkType = 'line',
 }: SparklineCellProps): ReactElement => {
   const theme = useTheme();
+  const isRtl = useIsRtl();
 
   const xyTheme = useMemo(
     () =>
@@ -149,7 +161,7 @@ const SparklineCell = ({
   if (validData.length === 0) return <div style={{ width, height }} />;
 
   return (
-    <>
+    <PlotBoundary isolate={isRtl}>
       <XYChart
         accessibilityLabel={ariaLabel}
         width={width}
@@ -219,6 +231,7 @@ const SparklineCell = ({
                 })}
               >
                 <strong
+                  dir={isRtl ? 'ltr' : undefined}
                   css={() => ({
                     color: theme.colorText,
                     display: 'block',
@@ -252,7 +265,7 @@ const SparklineCell = ({
           }
         `}
       </style>
-    </>
+    </PlotBoundary>
   );
 };
 

@@ -91,3 +91,25 @@ test('keeps quotes on numeric strings json-bigint would not have produced', () =
     '-123456789012345',
   );
 });
+
+test('keeps the JSON preview and the JSON tree left-to-right', () => {
+  const jsonData = { a: 1 };
+  const jsonValue = JSON.stringify(jsonData);
+  const { getByText, getByTestId } = render(
+    <JsonModal
+      jsonObject={jsonData}
+      jsonValue={jsonValue}
+      modalTitle="title"
+    />,
+    {
+      useRedux: true,
+    },
+  );
+  const preview = getByText(jsonValue);
+  expect(preview).toHaveAttribute('dir', 'ltr');
+  fireEvent.click(preview);
+  expect(getByTestId('mock-json-tree').parentElement).toHaveAttribute(
+    'dir',
+    'ltr',
+  );
+});

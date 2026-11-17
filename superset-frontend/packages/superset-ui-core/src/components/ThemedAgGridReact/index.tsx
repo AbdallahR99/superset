@@ -27,7 +27,7 @@ import {
   type GridReadyEvent,
   type FirstDataRenderedEvent,
 } from 'ag-grid-community';
-import { useTheme, useThemeMode } from '@apache-superset/core/theme';
+import { useIsRtl, useTheme, useThemeMode } from '@apache-superset/core/theme';
 
 // Note: With ag-grid v34's new theming API, CSS files are injected automatically
 // Do NOT import 'ag-grid-community/styles/ag-grid.css' or theme CSS files
@@ -85,6 +85,8 @@ export const ThemedAgGridReact = forwardRef<
   ref,
 ) {
   const theme = useTheme();
+  // Right-to-left locales get a mirrored grid (init-time option).
+  const isRtl = useIsRtl();
   const isDarkMode = useThemeMode();
   const containerRef = useRef<AgGridContainerElement>(null);
 
@@ -196,12 +198,20 @@ export const ThemedAgGridReact = forwardRef<
         .ag-cell {
           -webkit-font-smoothing: antialiased;
         }
+        /* Cell values are data: in a right-to-left grid each value keeps its
+           own reading order (dates, signed numbers, identifiers) and stays on
+           the leading edge. Written as left; mirrored for right-to-left. */
+        .ag-rtl .ag-cell {
+          unicode-bidi: plaintext;
+          text-align: left;
+        }
       `}
       data-themed-ag-grid="true"
     >
       <AgGridReact
         ref={ref}
         theme={agGridTheme}
+        enableRtl={isRtl}
         onGridReady={handleGridReady}
         onFirstDataRendered={handleFirstDataRendered}
         {...props}

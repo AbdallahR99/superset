@@ -32,7 +32,7 @@ const propTypes = {
 export default function OptionDescription({ option }: { option: ColumnMeta }) {
   return (
     <span>
-      <span className="option-label" style={{ marginRight: 4 }}>
+      <span className="option-label" style={{ marginInlineEnd: 4 }}>
         {option.label}
       </span>
       {option.description && (

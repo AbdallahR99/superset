@@ -18,7 +18,7 @@
  */
 import { configureStore } from '@reduxjs/toolkit';
 import { getChartComponentRegistry } from '@superset-ui/core';
-import { ThemeProvider } from '@apache-superset/core/theme';
+import { DirectionProvider, ThemeProvider } from '@apache-superset/core/theme';
 import { FC, useEffect, useState } from 'react';
 import { Provider as ReduxProvider } from 'react-redux';
 import { ChartWrapperProps } from '../types';
@@ -51,13 +51,19 @@ export const ChartWrapper: FC<ChartWrapperProps> = ({
 
   return (
     <ThemeProvider theme={theme}>
-      <ReduxProvider store={mockStore}>
-        {Chart === undefined ? (
-          <></>
-        ) : (
-          <Chart {...chartConfig.properties} height={height} width={width} />
-        )}
-      </ReduxProvider>
+      {/* This component is the top of its own React root, mounted inside the
+          left-to-right map: nothing above it provides a direction, and the
+          theme handed over by the host may carry the page direction. Charts
+          drawn on the map are plots, so they are explicitly left-to-right. */}
+      <DirectionProvider direction="ltr">
+        <ReduxProvider store={mockStore}>
+          {Chart === undefined ? (
+            <></>
+          ) : (
+            <Chart {...chartConfig.properties} height={height} width={width} />
+          )}
+        </ReduxProvider>
+      </DirectionProvider>
     </ThemeProvider>
   );
 };

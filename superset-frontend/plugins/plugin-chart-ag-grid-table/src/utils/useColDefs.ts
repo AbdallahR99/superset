@@ -32,7 +32,7 @@ import {
   JsonObject,
 } from '@superset-ui/core';
 import { GenericDataType } from '@apache-superset/core/common';
-import { useTheme } from '@apache-superset/core/theme';
+import { useIsRtl, useTheme } from '@apache-superset/core/theme';
 import {
   ColorFormatters,
   hasRenderableHeaderGroups,
@@ -268,6 +268,7 @@ export const useColDefs = ({
   zebraStriping,
 }: UseColDefsProps) => {
   const theme = useTheme();
+  const isRtl = useIsRtl();
   // transformProps.ts computes these fresh on every call (no memoization),
   // so a reference-based dependency here would recreate getCommonColProps -
   // and therefore colDefs - on every render regardless of whether the
@@ -566,7 +567,9 @@ export const useColDefs = ({
       minWidth: 30 + rowIndexLength * 6,
       sortable: false,
       filter: false,
-      pinned: 'left' as const,
+      // Pinning is physical in AG Grid: keep the row number next to the first
+      // column, which is on the right in a right-to-left grid.
+      pinned: isRtl ? ('right' as const) : ('left' as const),
       lockPosition: true,
       suppressNavigable: true,
       resizable: false,
@@ -582,6 +585,7 @@ export const useColDefs = ({
     }),
     [
       currentPage,
+      isRtl,
       pageSize,
       rowIndexLength,
       serverPagination,

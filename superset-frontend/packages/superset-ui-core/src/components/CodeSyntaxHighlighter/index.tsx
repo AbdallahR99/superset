@@ -20,7 +20,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import SyntaxHighlighterBase from 'react-syntax-highlighter/dist/cjs/light';
 import github from 'react-syntax-highlighter/dist/cjs/styles/hljs/github';
 import tomorrow from 'react-syntax-highlighter/dist/cjs/styles/hljs/tomorrow-night';
-import { css, isThemeDark, useTheme } from '@apache-superset/core/theme';
+import {
+  css,
+  DirectionProvider,
+  isThemeDark,
+  useIsRtl,
+  useTheme,
+} from '@apache-superset/core/theme';
 import { t } from '@apache-superset/core/translation';
 import copyTextToClipboard from '../../utils/copy';
 import { Icons } from '../Icons';
@@ -83,6 +89,12 @@ export const CodeSyntaxHighlighter: React.FC<CodeSyntaxHighlighterProps> = ({
   showCopyButton = true,
 }) => {
   const theme = useTheme();
+  // An ancestor's mirrored `text-align` is inherited through the `dir`
+  // attribute, so short snippets would hug the right edge of the block.
+  const isRtl = useIsRtl();
+  const alignStyle: React.CSSProperties | undefined = isRtl
+    ? { textAlign: 'left' }
+    : undefined;
   const [isLanguageReady, setIsLanguageReady] = useState(
     registeredLanguages.has(language),
   );
@@ -162,43 +174,54 @@ export const CodeSyntaxHighlighter: React.FC<CodeSyntaxHighlighterProps> = ({
   // Show a simple pre-formatted text while language is loading
   if (!isLanguageReady) {
     return (
+      <DirectionProvider direction="ltr">
+        <div
+          dir="ltr"
+          style={alignStyle}
+          css={css`
+            position: relative;
+          `}
+        >
+          {copyButton}
+          <pre
+            style={{
+              ...defaultCustomStyle,
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              margin: 0,
+            }}
+          >
+            {children}
+          </pre>
+        </div>
+      </DirectionProvider>
+    );
+  }
+
+  // Code reads left-to-right regardless of the interface language: the `dir`
+  // attribute keeps its order and alignment, and the provider keeps the styles
+  // of this subtree (the copy button corner) from being mirrored.
+  return (
+    <DirectionProvider direction="ltr">
       <div
+        dir="ltr"
+        style={alignStyle}
         css={css`
           position: relative;
         `}
       >
         {copyButton}
-        <pre
-          style={{
-            ...defaultCustomStyle,
-            fontFamily: 'monospace',
-            whiteSpace: 'pre-wrap',
-            margin: 0,
-          }}
+        <SyntaxHighlighterBase
+          language={language}
+          style={themeStyle}
+          customStyle={defaultCustomStyle}
+          showLineNumbers={showLineNumbers}
+          wrapLines={wrapLines}
         >
           {children}
-        </pre>
+        </SyntaxHighlighterBase>
       </div>
-    );
-  }
-
-  return (
-    <div
-      css={css`
-        position: relative;
-      `}
-    >
-      {copyButton}
-      <SyntaxHighlighterBase
-        language={language}
-        style={themeStyle}
-        customStyle={defaultCustomStyle}
-        showLineNumbers={showLineNumbers}
-        wrapLines={wrapLines}
-      >
-        {children}
-      </SyntaxHighlighterBase>
-    </div>
+    </DirectionProvider>
   );
 };
 

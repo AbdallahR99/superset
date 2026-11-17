@@ -88,3 +88,34 @@ test('does not render the tooltip with anchors', async () => {
   expect(within(tooltip).queryByRole('link')).not.toBeInTheDocument();
   mock.mockRestore();
 });
+
+test.each(['ltr', 'rtl'] as const)(
+  'places the "Added" badge from the measured offsets of its placeholder (%s)',
+  async direction => {
+    globalThis.featureFlags = {
+      [FeatureFlag.Thumbnails]: false,
+    };
+    const offsetLeft = jest
+      .spyOn(HTMLElement.prototype, 'offsetLeft', 'get')
+      .mockReturnValue(40);
+    const offsetTop = jest
+      .spyOn(HTMLElement.prototype, 'offsetTop', 'get')
+      .mockReturnValue(12);
+
+    await act(async () => {
+      render(<AddSliceCard {...mockedProps} isSelected />, { direction });
+    });
+
+    // the hidden placeholder inside the card, then the badge drawn over it
+    const [placeholder, badge] = screen.getAllByText('Added');
+    // offsetLeft is a physical distance from the left edge, so the badge is
+    // positioned from the left in both directions (a styled `left` would be
+    // mirrored to `right` in a right-to-left layout)
+    expect(badge.style.left).toBe('38px');
+    expect(badge.style.right).toBe('');
+    expect(badge.style.top).toBe('12px');
+    expect(placeholder.style.left).toBe('');
+    offsetLeft.mockRestore();
+    offsetTop.mockRestore();
+  },
+);

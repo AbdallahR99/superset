@@ -24,7 +24,12 @@ import {
   isEqualArray,
   NumberFormats,
 } from '@superset-ui/core';
-import { styled, useTheme, css } from '@apache-superset/core/theme';
+import {
+  styled,
+  useTheme,
+  css,
+  DirectionProvider,
+} from '@apache-superset/core/theme';
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { FilterBarOrientation } from 'src/dashboard/types';
 // import Metadata from '@superset-ui/core/components/Metadata';
@@ -57,6 +62,13 @@ const Wrapper = styled.div`
   .ant-input-number {
     min-width: 80px;
     position: relative;
+  }
+
+  /* The number fields are left-to-right in every locale (see renderInput). */
+  /* Keep their text at the inline-start edge of the interface, away from the */
+  /* step buttons: written for left-to-right, mirrored for right-to-left. */
+  .ant-input-number .ant-input-number-input {
+    text-align: left;
   }
 `;
 
@@ -120,6 +132,11 @@ const FocusContainer = styled.div`
 `;
 
 const numberFormatter = getNumberFormatter(NumberFormats.SMART_NUMBER);
+
+// Numbers read left-to-right in every locale. Without a direction of its own
+// a negative value is reordered to "5-" inside a right-to-left tooltip.
+const formatSliderTooltip = (val?: number | null) =>
+  val !== null ? <span dir="ltr">{numberFormatter(val)}</span> : '';
 
 const getLabel = (
   lower: number | null,
@@ -649,9 +666,7 @@ export default function RangeFilterPlugin(props: PluginFilterRangeProps) {
             step={sliderStep}
             value={Array.isArray(sliderValue) ? sliderValue[0] : sliderValue}
             onChange={handleSliderChange}
-            tooltip={{
-              formatter: val => (val !== null ? numberFormatter(val) : ''),
-            }}
+            tooltip={{ formatter: formatSliderTooltip }}
           />
         </SliderWrapper>
       );
@@ -665,9 +680,7 @@ export default function RangeFilterPlugin(props: PluginFilterRangeProps) {
           range
           value={Array.isArray(sliderValue) ? sliderValue : [min, sliderValue]}
           onChange={handleSliderChange}
-          tooltip={{
-            formatter: val => (val !== null ? numberFormatter(val) : ''),
-          }}
+          tooltip={{ formatter: formatSliderTooltip }}
         />
       </SliderWrapper>
     );
@@ -679,20 +692,26 @@ export default function RangeFilterPlugin(props: PluginFilterRangeProps) {
     bound: number | undefined,
   ) => {
     const input = (
-      <InputNumber
-        value={inputValue[index]}
-        onChange={val => handleChange(val, index)}
-        onKeyDown={handleKeyDown}
-        aria-label={manualBounds ? label : undefined}
-        placeholder={manualBounds || bound === undefined ? '' : `${bound}`}
-        style={{ width: '100%' }}
-        status={filterState.validateStatus}
-        data-test={
-          index === minIndex
-            ? 'range-filter-from-input'
-            : 'range-filter-to-input'
-        }
-      />
+      // A number is typed and read left-to-right in every locale ("-5", not
+      // "5-"), so the field itself stays left-to-right in a right-to-left
+      // interface; the Wrapper keeps its text at the inline-start edge.
+      <DirectionProvider direction="ltr">
+        <InputNumber
+          dir="ltr"
+          value={inputValue[index]}
+          onChange={val => handleChange(val, index)}
+          onKeyDown={handleKeyDown}
+          aria-label={manualBounds ? label : undefined}
+          placeholder={manualBounds || bound === undefined ? '' : `${bound}`}
+          style={{ width: '100%' }}
+          status={filterState.validateStatus}
+          data-test={
+            index === minIndex
+              ? 'range-filter-from-input'
+              : 'range-filter-to-input'
+          }
+        />
+      </DirectionProvider>
     );
     return manualBounds ? (
       <label>

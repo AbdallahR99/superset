@@ -67,6 +67,7 @@ import {
 import { Dashboard } from 'src/types/Dashboard';
 import { canOverwriteSlice as canOverwriteSliceFor } from 'src/explore/exploreUtils/canOverwriteSlice';
 import { TabNode, TabTreeNode } from '../types';
+import InputDirection from './controls/shared/InputDirection';
 import { CHART_WIDTH, CHART_HEIGHT } from 'src/dashboard/constants';
 
 // Session storage key for recent dashboard
@@ -769,14 +770,16 @@ const SaveModal = ({
       </FormItem>
       <Divider />
       <FormItem label={t('Chart name')} required>
-        <Input
-          name="new_slice_name"
-          type="text"
-          placeholder={t('Name')}
-          value={newSliceName}
-          onChange={onSliceNameChange}
-          data-test="new-chart-name"
-        />
+        <InputDirection mode="auto" value={newSliceName}>
+          <Input
+            name="new_slice_name"
+            type="text"
+            placeholder={t('Name')}
+            value={newSliceName}
+            onChange={onSliceNameChange}
+            data-test="new-chart-name"
+          />
+        </InputDirection>
       </FormItem>
       {datasource?.type === 'query' && (
         <FormItem
@@ -792,14 +795,16 @@ const SaveModal = ({
           }
           required
         >
-          <Input
-            name="dataset_name"
-            type="text"
-            placeholder={t('Dataset Name')}
-            value={datasetName}
-            onChange={handleDatasetNameChange}
-            data-test="new-dataset-name"
-          />
+          <InputDirection mode="auto" value={datasetName}>
+            <Input
+              name="dataset_name"
+              type="text"
+              placeholder={t('Dataset Name')}
+              value={datasetName}
+              onChange={handleDatasetNameChange}
+              data-test="new-dataset-name"
+            />
+          </InputDirection>
         </FormItem>
       )}
       <FormItem

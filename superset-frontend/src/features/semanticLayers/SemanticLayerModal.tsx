@@ -631,7 +631,7 @@ export default function SemanticLayerModal({
                 {!isEditMode && (
                   <Button
                     buttonStyle="link"
-                    icon={<Icons.CaretLeftOutlined iconSize="s" />}
+                    icon={<Icons.CaretLeftOutlined iconSize="s" mirrorInRtl />}
                     onClick={handleBack}
                   >
                     {t('Back')}

@@ -78,7 +78,7 @@ export default function EchartsRose(props: RoseChartTransformedProps) {
       tooltip: {
         confine: true,
         formatter: (params: { name: string; value: number; percent: number }) =>
-          `<div><b>${escapeHtml(period.label)}</b></div>${escapeHtml(params.name)}: ${escapeHtml(format(params.value))} (${params.percent}%)`,
+          `<div><b>${escapeHtml(period.label)}</b></div><bdi>${escapeHtml(params.name)}</bdi>: <bdi>${escapeHtml(format(params.value))} (${params.percent}%)</bdi>`,
       },
       series: [
         {

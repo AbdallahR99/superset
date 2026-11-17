@@ -17,7 +17,7 @@
  * under the License.
  */
 import { useCallback, useMemo } from 'react';
-import { css, useTheme } from '@apache-superset/core/theme';
+import { css, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { ThemedAgGridReact } from '@superset-ui/core/components';
 import type {
   CellKeyDownEvent,
@@ -53,6 +53,9 @@ export function GridTable<RecordType extends object>({
   themeOverrides,
 }: TableProps<RecordType>) {
   const theme = useTheme();
+  // ag-grid keeps pinned sides physical in a mirrored grid, so the row-number
+  // column is pinned to whichever side the columns start from.
+  const isRtl = useIsRtl();
   const isExternalFilterPresent = useCallback(
     () => Boolean(externalFilter),
     [externalFilter],
@@ -103,7 +106,7 @@ export function GridTable<RecordType extends object>({
           width: 30 + rowIndexLength * 6,
           suppressNavigable: true,
           resizable: false,
-          pinned: 'left' as const,
+          pinned: isRtl ? ('right' as const) : ('left' as const),
           sortable: false,
           ...(columnReorderable && { suppressMovable: true }),
         },
@@ -129,6 +132,7 @@ export function GridTable<RecordType extends object>({
       rowIndexLength,
       columnReorderable,
       columns,
+      isRtl,
       showRowNumber,
       sortable,
       theme,

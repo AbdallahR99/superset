@@ -64,3 +64,23 @@ test('receives 0 value', async () => {
     expect(defaultProps.onChange).toHaveBeenLastCalledWith([0, null]),
   );
 });
+
+test('lets a bound resolve its own direction in right-to-left layouts', () => {
+  // A negative bound is displayed as "5-" when laid out right-to-left.
+  render(<BoundsControl {...defaultProps} value={[-5, null]} />, {
+    direction: 'rtl',
+  });
+
+  const [minInput, maxInput] = screen.getAllByRole('spinbutton');
+  expect(minInput).toHaveAttribute('dir', 'auto');
+  // An empty bound keeps its placeholder on the side of the interface.
+  expect(maxInput).not.toHaveAttribute('dir');
+});
+
+test('adds no direction attribute to the bounds in left-to-right layouts', () => {
+  render(<BoundsControl {...defaultProps} value={[-5, 5]} />);
+
+  screen
+    .getAllByRole('spinbutton')
+    .forEach(input => expect(input).not.toHaveAttribute('dir'));
+});

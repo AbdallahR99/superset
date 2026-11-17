@@ -135,3 +135,11 @@ test('renders relative URLs as links', () => {
     getByRole('link', { name: defaultProps.metric.verbose_name }),
   ).toHaveAttribute('href', '/superset/dashboard/1/');
 });
+
+test('lets the metric label resolve its own direction', () => {
+  const { container } = setup();
+  expect(container.querySelector('.option-label')).toHaveAttribute(
+    'dir',
+    'auto',
+  );
+});

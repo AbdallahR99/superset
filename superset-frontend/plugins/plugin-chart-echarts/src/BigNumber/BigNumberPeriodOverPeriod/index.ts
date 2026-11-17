@@ -28,6 +28,9 @@ export default class PopKPIPlugin extends ChartPlugin {
   constructor() {
     const metadata = new ChartMetadata({
       category: t('KPI'),
+      // KPI text follows the interface direction; the numbers themselves are
+      // isolated left-to-right by the component.
+      direction: 'inherit',
       description: t(
         'Showcases a metric along with a comparison of value, change, and percent change for a selected time period.',
       ),

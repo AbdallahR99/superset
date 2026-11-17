@@ -52,6 +52,7 @@ import {
 import {
   styled,
   css,
+  useIsRtl,
   useTheme,
   SupersetTheme,
 } from '@apache-superset/core/theme';
@@ -96,6 +97,7 @@ import DataTable, {
 } from './DataTable';
 import Styles from './Styles';
 import { formatColumnValue } from './utils/formatValue';
+import { isolateCellText, toLogicalTextAlign } from './utils/direction';
 import { PAGE_SIZE_OPTIONS, SERVER_PAGE_SIZE_OPTIONS } from './consts';
 import { updateTableOwnState } from './DataTable/utils/externalAPIs';
 import getScrollBarSize from './DataTable/utils/getScrollBarSize';
@@ -475,6 +477,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
   // recalculated totals to display when the search filter is applied (client-side pagination)
   const [displayedTotals, setDisplayedTotals] = useState<D | undefined>(totals);
   const theme = useTheme();
+  const isRtl = useIsRtl();
 
   useEffect(() => {
     setDisplayedTotals(totals);
@@ -637,9 +640,12 @@ export default function TableChart<D extends DataRecord = DataRecord>(
   const getSharedStyle = useCallback(
     (column: DataColumnMeta): CSSProperties => {
       const { isNumeric, config = {} } = column;
-      const textAlign =
+      // Logical values: the same style object is used inline (th, footer)
+      // and inside a styled cell, and both have to follow the table direction.
+      const textAlign = toLogicalTextAlign(
         config.horizontalAlign ||
-        (isNumeric && !isUsingTimeComparison ? 'right' : 'left');
+          (isNumeric && !isUsingTimeComparison ? 'right' : 'left'),
+      );
       return {
         textAlign,
       };
@@ -1029,7 +1035,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                   data-dimension-separator={hasDimensionSeparator || undefined}
                   style={{
                     borderBottom: cell.label ? undefined : 0,
-                    textAlign: cell.labelAlign ?? 'center',
+                    textAlign: toLogicalTextAlign(cell.labelAlign ?? 'center'),
                   }}
                 >
                   {cell.label}
@@ -1344,7 +1350,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                 ColorSchemeEnum.Green
                 ? theme.colorSuccess
                 : theme.colorError,
-            marginRight: theme.sizeUnit,
+            marginInlineEnd: theme.sizeUnit,
           };
 
           if (
@@ -1359,7 +1365,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                   columnArrowColor === ColorSchemeEnum.Green
                     ? theme.colorSuccess
                     : theme.colorError,
-                marginRight: theme.sizeUnit,
+                marginInlineEnd: theme.sizeUnit,
               };
             }
           }
@@ -1447,12 +1453,12 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                   style={columnWidth ? { width: columnWidth } : undefined}
                 >
                   {arrow && <span style={arrowStyles}>{arrow}</span>}
-                  {text}
+                  {isolateCellText(text, column, isRtl)}
                 </div>
               ) : (
                 <>
                   {arrow && <span style={arrowStyles}>{arrow}</span>}
-                  {text}
+                  {isolateCellText(text, column, isRtl)}
                 </>
               )}
             </StyledCell>
@@ -1535,7 +1541,11 @@ export default function TableChart<D extends DataRecord = DataRecord>(
           ) : (
             <td key={`footer-total-${i}`} style={sharedStyle}>
               <strong>
-                {formatColumnValue(column, displayedTotals[key])[1]}
+                {isolateCellText(
+                  formatColumnValue(column, displayedTotals[key])[1],
+                  column,
+                  isRtl,
+                )}
               </strong>
             </td>
           )
@@ -1571,6 +1581,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
       toggleFilter,
       handleContextMenu,
       allowRearrangeColumns,
+      isRtl,
     ],
   );
 

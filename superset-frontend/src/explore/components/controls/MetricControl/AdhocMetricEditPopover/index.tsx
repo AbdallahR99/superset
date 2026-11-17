@@ -22,7 +22,7 @@ import { useSelector } from 'react-redux';
 import { isDefined, ensureIsArray, DatasourceType } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
 import type { editors } from '@apache-superset/core';
-import { css, styled } from '@apache-superset/core/theme';
+import { css, styled, useIsRtl } from '@apache-superset/core/theme';
 import Tabs from '@superset-ui/core/components/Tabs';
 import {
   Button,
@@ -51,6 +51,7 @@ import {
 import { getColumnKeywords } from 'src/explore/controlUtils/getColumnKeywords';
 import SQLEditorWithValidation from 'src/components/SQLEditorWithValidation';
 import { selectCompatibleMetricNames } from 'src/explore/selectors/compatibility';
+import { getResizeDeltaX } from 'src/explore/components/ExploreContentPopover';
 import type { RefObject } from 'react';
 
 interface ColumnType {
@@ -135,6 +136,7 @@ function AdhocMetricEditPopover({
   );
   const [width, setWidth] = useState(POPOVER_INITIAL_WIDTH);
   const [height, setHeight] = useState(POPOVER_INITIAL_HEIGHT);
+  const isRtl = useIsRtl();
 
   const compatibleMetrics = useSelector(selectCompatibleMetricNames);
 
@@ -171,7 +173,8 @@ function AdhocMetricEditPopover({
       onResize();
       setWidth(
         Math.max(
-          dragStartRef.current.width + (e.clientX - dragStartRef.current.x),
+          dragStartRef.current.width +
+            getResizeDeltaX(dragStartRef.current.x, e.clientX, isRtl),
           POPOVER_INITIAL_WIDTH,
         ),
       );
@@ -182,7 +185,7 @@ function AdhocMetricEditPopover({
         ),
       );
     },
-    [onResize],
+    [onResize, isRtl],
   );
 
   const onMouseUp = useCallback((): void => {

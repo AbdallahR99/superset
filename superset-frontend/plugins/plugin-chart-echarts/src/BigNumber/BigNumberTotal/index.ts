@@ -32,6 +32,9 @@ import { EchartsChartPlugin } from '../../types';
 
 const metadata = {
   category: t('KPI'),
+  // KPI text follows the interface direction; the number itself and the
+  // trendline canvas are isolated left-to-right by the component.
+  direction: 'inherit',
   description: t(
     'Showcases a single metric front-and-center. Big number is best used to call attention to a KPI or the one thing you want your audience to focus on.',
   ),

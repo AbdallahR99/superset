@@ -89,3 +89,53 @@ test('collapses on click', async () => {
   );
   expect(screen.queryByText('Content 2')).not.toBeInTheDocument();
 });
+
+// Rotation the stylesheet gives the chevron's svg for a selector, or
+// `undefined` when no rule targets it.
+function arrowRotation(match: (selector: string) => boolean) {
+  const rotations: string[] = [];
+  for (const sheet of Array.from(document.styleSheets)) {
+    for (const rule of Array.from(sheet.cssRules)) {
+      const { selectorText, style } = rule as CSSStyleRule;
+      if (selectorText && match(selectorText) && style.transform) {
+        rotations.push(style.transform);
+      }
+    }
+  }
+  return rotations[rotations.length - 1];
+}
+
+const isRtlRule = (selector: string) => selector.includes('.ant-collapse-rtl');
+const isActiveRule = (selector: string) =>
+  selector.includes('.ant-collapse-item-active');
+
+test('an end-positioned chevron points down when collapsed and up when expanded', () => {
+  renderCollapse({ expandIconPosition: 'end' });
+
+  expect(arrowRotation(s => !isRtlRule(s) && !isActiveRule(s))).toBe(
+    'rotate(90deg)',
+  );
+  expect(arrowRotation(s => !isRtlRule(s) && isActiveRule(s))).toBe(
+    'rotate(-90deg)',
+  );
+});
+
+test('right-to-left reverses the chevron rotation that Ant Design turns by 180 degrees', () => {
+  const { container } = render(
+    <Collapse
+      expandIconPosition="end"
+      items={[{ key: '1', label: 'Header 1', children: 'Content 1' }]}
+    />,
+    { direction: 'rtl' },
+  );
+
+  expect(container.querySelector('.ant-collapse')).toHaveClass(
+    'ant-collapse-rtl',
+  );
+  expect(arrowRotation(s => isRtlRule(s) && !isActiveRule(s))).toBe(
+    'rotate(-90deg)',
+  );
+  expect(arrowRotation(s => isRtlRule(s) && isActiveRule(s))).toBe(
+    'rotate(90deg)',
+  );
+});

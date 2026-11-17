@@ -33,6 +33,9 @@ import { EchartsChartPlugin } from '../../types';
 
 const metadata = {
   category: t('KPI'),
+  // KPI text follows the interface direction; the number itself and the
+  // trendline canvas are isolated left-to-right by the component.
+  direction: 'inherit',
   description: t(
     'Showcases a single number accompanied by a simple line chart, to call attention to an important metric along with its change over time or other dimension.',
   ),

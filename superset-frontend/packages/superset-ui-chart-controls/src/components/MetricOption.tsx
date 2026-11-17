@@ -79,6 +79,7 @@ export function MetricOption({
   const label = (
     <span
       className="option-label metric-option-label"
+      dir="auto"
       css={(theme: SupersetTheme) => css`
         margin-right: ${theme.sizeUnit}px;
       `}

@@ -28,11 +28,11 @@ const TIME_PICKER_HELPER = (
       <h3>DATETIME</h3>
       <p>{t('Return to specific datetime.')}</p>
       <h4>{t('Syntax')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>datetime([string])</code>
       </pre>
       <h4>{t('Example')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`datetime("2020-03-01 12:00:00")
 datetime("now")
 datetime("last year")`}</code>
@@ -42,12 +42,12 @@ datetime("last year")`}</code>
       <h3>DATEADD</h3>
       <p>{t('Moves the given set of dates by a specified interval.')}</p>
       <h4>{t('Syntax')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`dateadd([datetime], [integer], [dateunit])
 dateunit = (year | quarter | month | week | day | hour | minute | second)`}</code>
       </pre>
       <h4>{t('Example')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`dateadd(datetime("today"), -13, day)
 dateadd(datetime("2020-03-01"), 2, day)`}</code>
       </pre>
@@ -60,12 +60,12 @@ dateadd(datetime("2020-03-01"), 2, day)`}</code>
         )}
       </p>
       <h4>{t('Syntax')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`datetrunc([datetime], [dateunit])
 dateunit = (year | quarter | month | week)`}</code>
       </pre>
       <h4>{t('Example')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`datetrunc(datetime("2020-03-01"), week)
 datetrunc(datetime("2020-03-01"), month)`}</code>
       </pre>
@@ -74,12 +74,12 @@ datetrunc(datetime("2020-03-01"), month)`}</code>
       <h3>LASTDAY</h3>
       <p>{t('Get the last date by the date unit.')}</p>
       <h4>{t('Syntax')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`lastday([datetime], [dateunit])
 dateunit = (year | month | week)`}</code>
       </pre>
       <h4>{t('Example')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>lastday(datetime("today"), month)</code>
       </pre>
     </div>
@@ -87,14 +87,14 @@ dateunit = (year | month | week)`}</code>
       <h3>HOLIDAY</h3>
       <p>{t('Get the specified date for the holiday')}</p>
       <h4>{t('Syntax')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`holiday([string])
 holiday([holiday string], [datetime])
 holiday([holiday string], [country code])
 holiday([holiday string], [datetime], [country code])`}</code>
       </pre>
       <h4>{t('Example')}</h4>
-      <pre>
+      <pre dir="ltr">
         <code>{`holiday("new year")
 holiday("christmas", datetime("2019"))
 holiday("christmas", dateadd(datetime("2019"), 1, year))
@@ -129,7 +129,7 @@ const StyledTooltip = (props: any) => {
               }
               pre {
                 border: none;
-                text-align: left;
+                text-align: start;
                 word-break: break-word;
                 font-size: ${theme.fontSizeSM}px;
               }

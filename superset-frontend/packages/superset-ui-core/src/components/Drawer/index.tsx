@@ -16,7 +16,21 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Drawer as AntdDrawer } from 'antd';
+import { flipPlacement, useDirection } from '@apache-superset/core/theme';
 import type { DrawerProps } from './types';
 
-export { Drawer } from 'antd';
+/**
+ * Ant Design drawer whose side follows the text direction: `placement` names
+ * the side in a left-to-right layout (`right` by default, as in Ant Design)
+ * and is mirrored in a right-to-left one, so a navigation drawer opened from
+ * the start edge stays on the start edge.
+ */
+export const Drawer = ({ placement = 'right', ...props }: DrawerProps) => {
+  const direction = useDirection();
+  return (
+    <AntdDrawer placement={flipPlacement(placement, direction)} {...props} />
+  );
+};
+
 export type { DrawerProps };

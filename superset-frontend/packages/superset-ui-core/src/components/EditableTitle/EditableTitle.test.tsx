@@ -101,3 +101,27 @@ describe('should handle blur', () => {
     expect(callback).not.toHaveBeenCalled();
   });
 });
+
+test('lets an editable title decide its own direction', () => {
+  const { getByTestId } = render(<EditableTitle {...mockProps} />);
+  expect(getByTestId('textarea-editable-title-input')).toHaveAttribute(
+    'dir',
+    'auto',
+  );
+});
+
+test('keeps the interface direction for the placeholder of an empty title', () => {
+  const { getByTestId } = render(
+    <EditableTitle {...mockProps} title="" placeholder="Add a title" />,
+  );
+  expect(getByTestId('textarea-editable-title-input')).not.toHaveAttribute(
+    'dir',
+  );
+});
+
+test('lets a read-only title decide its own direction', () => {
+  const { getByTestId } = render(
+    <EditableTitle title="my title" onSaveTitle={jest.fn()} />,
+  );
+  expect(getByTestId('span-title')).toHaveAttribute('dir', 'auto');
+});

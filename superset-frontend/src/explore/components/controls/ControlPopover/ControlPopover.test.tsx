@@ -33,6 +33,7 @@ import { TooltipPlacement } from '@superset-ui/core/components/Tooltip/types';
 import ControlPopover, {
   SHIFT_INTO_VIEWPORT,
   getAutoAdjustOverflow,
+  getElementVisibilityRatio,
   PopoverProps,
 } from './ControlPopover';
 
@@ -351,4 +352,56 @@ test('Hands the overflow options for its placement to the popover', async () => 
 
   // Callers stay in control.
   expect(await openAt('rightTop', { autoAdjustOverflow: false })).toBe(false);
+});
+
+const triggerAt = (left: number, right: number) =>
+  ({
+    getBoundingClientRect: () =>
+      ({ top: 100, left, right, width: right - left }) as DOMRect,
+  }) as HTMLElement;
+
+test('measures the horizontal position of the trigger from the left edge', () => {
+  // jsdom viewport: 1024 x 768
+  expect(getElementVisibilityRatio(triggerAt(256, 512)).xRatio).toBeCloseTo(
+    256 / window.innerWidth,
+  );
+});
+
+test('measures the horizontal position of the trigger from the right edge in right-to-left layouts', () => {
+  // The control panel sits on the right there: a trigger close to the right
+  // edge is "near the start", exactly like one close to the left edge in a
+  // left-to-right layout, so both get the same (mirrored) placement.
+  const trigger = triggerAt(window.innerWidth - 512, window.innerWidth - 256);
+
+  expect(getElementVisibilityRatio(trigger, true).xRatio).toBeCloseTo(
+    256 / window.innerWidth,
+  );
+  expect(getElementVisibilityRatio(trigger, false).xRatio).toBeCloseTo(
+    (window.innerWidth - 512) / window.innerWidth,
+  );
+});
+
+test('asks for the trigger position in the direction of the layout', async () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  try {
+    const getVisibilityRatio = jest.fn(() => ({ yRatio: 0.2, xRatio: 0.3 }));
+    const { setStateMock } = setupTest({
+      ...createProps(),
+      getVisibilityRatio,
+    });
+
+    await userEvent.click(screen.getByTestId('control-popover'));
+
+    // The placement stays in left-to-right terms: the popover component
+    // mirrors an explicit placement together with the rest of the layout.
+    await waitFor(() => {
+      expect(setStateMock).toHaveBeenCalledWith('rightTop');
+    });
+    expect(getVisibilityRatio).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      true,
+    );
+  } finally {
+    document.documentElement.removeAttribute('dir');
+  }
 });

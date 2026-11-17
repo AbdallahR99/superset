@@ -30,6 +30,8 @@ import {
   POPOVER_INITIAL_WIDTH,
 } from 'src/explore/constants';
 import { Icons } from '@superset-ui/core/components';
+import { useIsRtl } from '@apache-superset/core/theme';
+import { getResizeDeltaX } from 'src/explore/components/ExploreContentPopover';
 
 const RESIZE_THROTTLE_MS = 50;
 
@@ -46,6 +48,7 @@ export default function useResizeButton(
   const [dragStartWidth, setDragStartWidth] = useState(width);
   const [dragStartHeight, setDragStartHeight] = useState(height);
   const [isDragging, setIsDragging] = useState(false);
+  const isRtl = useIsRtl();
 
   const onMouseMove = useCallback((ev: MouseEvent): void => {
     ev.preventDefault();
@@ -60,6 +63,11 @@ export default function useResizeButton(
   const onDragDown = useCallback((ev: ReactMouseEvent): void => {
     setDragStartX(ev.clientX);
     setDragStartY(ev.clientY);
+    // Start from the grip: the last known pointer position is the origin (or
+    // where the previous drag ended) and would resize the popover by the
+    // distance to it before the pointer has moved at all.
+    setClientX(ev.clientX);
+    setClientY(ev.clientY);
     setIsDragging(true);
   }, []);
 
@@ -84,6 +92,7 @@ export default function useResizeButton(
         clientY,
         minWidth,
         minHeight,
+        isRtl,
       }: {
         dragStartX: number;
         dragStartY: number;
@@ -93,8 +102,14 @@ export default function useResizeButton(
         clientY: number;
         minWidth: number;
         minHeight: number;
+        isRtl: boolean;
       }): void => {
-        setWidth(Math.max(dragStartWidth + (clientX - dragStartX), minWidth));
+        setWidth(
+          Math.max(
+            dragStartWidth + getResizeDeltaX(dragStartX, clientX, isRtl),
+            minWidth,
+          ),
+        );
         setHeight(
           Math.max(dragStartHeight + (clientY - dragStartY), minHeight),
         );
@@ -115,6 +130,7 @@ export default function useResizeButton(
         clientY,
         minWidth,
         minHeight,
+        isRtl,
       });
     }
   }, [

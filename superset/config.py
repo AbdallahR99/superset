@@ -623,6 +623,12 @@ LANGUAGES = {
 # incomplete and not well maintained.
 LANGUAGES = {}
 
+# Lay the interface out right-to-left for right-to-left locales (Arabic,
+# Hebrew, Persian, Urdu, ...). The direction is derived from the active
+# locale; set this to False to keep every locale left-to-right and only
+# translate the text.
+RTL_LAYOUT_ENABLED = True
+
 
 # Override the default d3 locale format
 # Default values are equivalent to

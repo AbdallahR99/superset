@@ -17,7 +17,9 @@
  * under the License.
  */
 import { useEffect, useRef, useState, cloneElement } from 'react';
+import { useIsRtl } from '@apache-superset/core/theme';
 import { PopoverContainer, PopoverWrapper } from '../../styles';
+import { getPopoverLeft } from '../../utils/direction';
 
 interface Props {
   content: React.ReactNode;
@@ -35,6 +37,7 @@ const CustomPopover: React.FC<Props> = ({
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const isRtl = useIsRtl();
 
   const handleClickOutside = (event: MouseEvent) => {
     if (
@@ -50,21 +53,15 @@ const CustomPopover: React.FC<Props> = ({
     const updatePosition = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
       if (rect) {
-        const popoverWidth = popoverRef.current?.offsetWidth || 200;
-        const windowWidth = window.innerWidth;
-        const rightEdgePosition = rect.left + 10 + 160 + popoverWidth;
-
-        // Check if popover would spill out of the window
-        const shouldUseOffset = rightEdgePosition <= windowWidth;
-
         setPosition({
           top: rect.bottom + 8,
-          left: Math.max(
-            0,
-            rect.right -
-              (popoverRef.current?.offsetWidth || 0) +
-              (shouldUseOffset ? 170 : 0),
-          ),
+          left: getPopoverLeft({
+            rect,
+            popoverWidth: popoverRef.current?.offsetWidth || 200,
+            measuredPopoverWidth: popoverRef.current?.offsetWidth || 0,
+            windowWidth: window.innerWidth,
+            isRtl,
+          }),
         });
       }
     };
@@ -81,7 +78,7 @@ const CustomPopover: React.FC<Props> = ({
       window.removeEventListener('scroll', updatePosition);
       window.removeEventListener('resize', updatePosition);
     };
-  }, [isOpen]);
+  }, [isOpen, isRtl]);
 
   return (
     <PopoverWrapper>

@@ -81,13 +81,16 @@ const CrossFilterTag = (props: {
       onClose={() => removeCrossFilter(filter.emitterId)}
       editable
     >
+      {/* Column label and value come from users and data: each takes its
+          direction from its own text (a numeric value reads left-to-right),
+          whatever the interface direction. */}
       <Tooltip title={columnIsTruncated ? columnLabel : null}>
-        <StyledCrossFilterColumn ref={columnRef}>
+        <StyledCrossFilterColumn ref={columnRef} dir="auto">
           {columnLabel}
         </StyledCrossFilterColumn>
       </Tooltip>
       <Tooltip title={valueIsTruncated ? filter.value : null}>
-        <StyledCrossFilterValue ref={valueRef}>
+        <StyledCrossFilterValue ref={valueRef} dir="auto">
           {filter.value}
         </StyledCrossFilterValue>
       </Tooltip>

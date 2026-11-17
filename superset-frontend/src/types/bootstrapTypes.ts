@@ -165,6 +165,8 @@ export interface CommonBootstrapData {
   static_assets_prefix: string;
   conf: JsonObject;
   locale: Locale;
+  /** Text direction of the active locale, decided by the server. */
+  direction?: 'ltr' | 'rtl';
   feature_flags: FeatureFlagMap;
   language_pack: LanguagePack;
   extra_categorical_color_schemes: ColorSchemeConfig[];

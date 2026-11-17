@@ -46,10 +46,12 @@ export function InvalidSQLErrorMessage({
     errorLine = lines[0];
   }
   const body = errorLine ? (
-    <>
+    // SQL is left-to-right, and the caret below only lines up with the
+    // offending column when both lines share that direction.
+    <div dir="ltr">
       <pre>{errorLine}</pre>
       {column !== null && <pre>{' '.repeat(column - 1)}^</pre>}
-    </>
+    </div>
   ) : (
     message
   );

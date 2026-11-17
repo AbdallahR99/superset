@@ -103,18 +103,18 @@ export default function OptionWrapper(
 
   const LabelContent = () => {
     if (!shouldShowTooltip) {
-      return <span>{label}</span>;
+      return <span dir="auto">{label}</span>;
     }
     if (tooltipOverlay) {
       return (
         <Tooltip overlay={tooltipOverlay}>
-          <span>{label}</span>
+          <span dir="auto">{label}</span>
         </Tooltip>
       );
     }
     return (
       <Tooltip title={tooltipTitle || label}>
-        <span>{label}</span>
+        <span dir="auto">{label}</span>
       </Tooltip>
     );
   };

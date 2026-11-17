@@ -466,3 +466,23 @@ test('should have fontWeightStrong in theme for bold markdown rendering', async 
   expect(supersetTheme.fontWeightStrong).toBeDefined();
   expect(supersetTheme.fontWeightStrong).toBeGreaterThanOrEqual(600);
 });
+
+test('paragraphs and headings take their direction from their own text', async () => {
+  await setup({
+    component: {
+      ...mockLayout.present.MARKDOWN_ID,
+      meta: { code: '# عنوان\n\nEnglish paragraph.' },
+    },
+  });
+
+  // user-authored content: the equivalent of dir="auto" on every block, so
+  // left-to-right text reads correctly in a right-to-left interface and
+  // right-to-left text in a left-to-right one
+  const markdown = screen.getByTestId('dashboard-markdown-editor');
+  expect(markdown).toHaveStyleRule('unicode-bidi', 'plaintext', {
+    target: /\bp\b/,
+  });
+  expect(markdown).toHaveStyleRule('unicode-bidi', 'plaintext', {
+    target: /\bh1\b/,
+  });
+});

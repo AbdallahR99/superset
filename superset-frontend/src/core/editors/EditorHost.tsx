@@ -28,7 +28,7 @@
 
 import { useSyncExternalStore, forwardRef } from 'react';
 import type { editors } from '@apache-superset/core';
-import { useTheme } from '@apache-superset/core/theme';
+import { LtrIsolate, useTheme } from '@apache-superset/core/theme';
 import EditorProviders from './EditorProviders';
 import AceEditorProvider from './AceEditorProvider';
 
@@ -40,6 +40,8 @@ type EditorHandle = editors.EditorHandle;
  * Uses the generic EditorProps interface that all editor implementations support.
  */
 export type EditorHostProps = EditorProps;
+
+const LTR_BOUNDARY_STYLE = { display: 'contents' } as const;
 
 /**
  * EditorHost component that dynamically resolves and renders the appropriate editor.
@@ -72,14 +74,21 @@ const EditorHost = forwardRef<EditorHandle, EditorHostProps>((props, ref) => {
   // Merge theme into props
   const propsWithTheme = { ...props, theme };
 
-  // Use extension-provided editor if available
-  if (provider) {
-    const EditorComponent = provider.component;
-    return <EditorComponent ref={ref} {...propsWithTheme} />;
-  }
-
-  // Fall back to default Ace editor
-  return <AceEditorProvider ref={ref} {...propsWithTheme} />;
+  // Code is left-to-right regardless of the interface language. The boundary
+  // generates no box (`display: contents`), so the editor keeps sizing against
+  // the host's parent, while direction and non-mirrored styles still apply to
+  // whichever editor implementation renders inside.
+  return (
+    <LtrIsolate style={LTR_BOUNDARY_STYLE}>
+      {provider ? (
+        // Use extension-provided editor if available
+        <provider.component ref={ref} {...propsWithTheme} />
+      ) : (
+        // Fall back to default Ace editor
+        <AceEditorProvider ref={ref} {...propsWithTheme} />
+      )}
+    </LtrIsolate>
+  );
 });
 
 EditorHost.displayName = 'EditorHost';

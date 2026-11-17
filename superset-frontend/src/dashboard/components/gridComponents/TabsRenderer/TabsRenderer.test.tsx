@@ -432,3 +432,12 @@ describe('TabsRenderer', () => {
     scrollTo.mockRestore();
   });
 });
+
+test('pads the tab bar on its inline-start side', () => {
+  const { container } = render(<TabsRenderer {...mockProps} />);
+  const tabBar = container.querySelector('.ant-tabs-nav') as HTMLElement;
+  // logical, so the padding follows the tab bar to the right-hand side in a
+  // right-to-left layout; an inline physical padding is never mirrored
+  expect(tabBar.style.paddingInlineStart).toBe('16px');
+  expect(tabBar.style.paddingLeft).toBe('');
+});

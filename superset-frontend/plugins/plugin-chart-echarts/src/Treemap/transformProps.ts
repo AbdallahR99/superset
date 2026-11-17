@@ -48,6 +48,7 @@ import {
 } from './constants';
 import { OpacityEnum } from '../constants';
 import { getDefaultTooltip } from '../utils/tooltip';
+import { bidi } from '../utils/bidi';
 import { Refs } from '../types';
 import { treeBuilder, TreeNode } from '../utils/treeBuilder';
 
@@ -69,7 +70,7 @@ export function formatLabel({
     case EchartsTreemapLabelType.Value:
       return formattedValue;
     case EchartsTreemapLabelType.KeyValue:
-      return `${name}: ${formattedValue}`;
+      return bidi`${name}: ${formattedValue}`;
     default:
       return name;
   }

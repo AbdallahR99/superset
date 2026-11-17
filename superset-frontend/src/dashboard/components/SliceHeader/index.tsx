@@ -266,6 +266,9 @@ const SliceHeader = forwardRef<HTMLDivElement, SliceHeaderProps>(
     const renderExploreLink = (title: string) => (
       <Link
         to={exploreUrl}
+        // The chart name is written by a user and takes its direction from
+        // its own text, as EditableTitle does for the titles it renders.
+        dir="auto"
         css={(theme: SupersetTheme) => css`
           color: ${theme.colorText};
           text-decoration: none;

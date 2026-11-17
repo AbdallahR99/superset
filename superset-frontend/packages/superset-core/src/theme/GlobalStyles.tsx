@@ -47,6 +47,35 @@ export const GlobalStyles = () => {
           height: 100%;
         }
 
+        ${
+          theme.direction === 'rtl'
+            ? `/* Right-to-left interface only; left-to-right output is unchanged.
+           Option and value labels are data (column names, format strings, user
+           text): each takes its direction from its own first strong character
+           so punctuation and digits are not reordered by the interface direction.
+           Ant Design 6 class names: option label in the dropdown; tag label of
+           a multiple select; selected label of a single select, which is a bare
+           text node of the content box unless the option carries its own
+           className or style (then it is wrapped in content-value). */
+        .ant-select-item-option-content,
+        .ant-select-selection-item-content,
+        .ant-select-content-has-value,
+        .ant-select-content-value,
+        pre,
+        code {
+          unicode-bidi: plaintext;
+        }
+        /* Keep those labels on the interface's leading edge whatever their own
+           direction is (written left, mirrored to right). */
+        .ant-select-item-option-content,
+        .ant-select-selection-item-content,
+        .ant-select-content-has-value,
+        .ant-select-content-value {
+          text-align: left;
+        }`
+            : ''
+        }
+
         /* Growable shell so content a host page injects above #app shrinks #app instead of #app clipping past the viewport (#44867). */
         body {
           min-height: 100vh;

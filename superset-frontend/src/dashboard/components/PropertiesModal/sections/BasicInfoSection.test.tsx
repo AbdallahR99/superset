@@ -114,3 +114,24 @@ test('can type in name field', async () => {
 
   expect(nameInput).toHaveValue('My Dashboard');
 });
+
+test('user-written fields resolve their own direction and the slug stays left-to-right', () => {
+  render(
+    <Form>
+      <BasicInfoSection {...defaultProps} />
+    </Form>,
+    { direction: 'rtl' },
+  );
+
+  // name and description are written by users, in any language
+  expect(screen.getByTestId('dashboard-title-input')).toHaveStyle({
+    unicodeBidi: 'plaintext',
+  });
+  expect(screen.getByTestId('dashboard-description-input')).toHaveStyle({
+    unicodeBidi: 'plaintext',
+  });
+  // the slug is part of a URL
+  const slug = screen.getByTestId('dashboard-slug-input');
+  expect(slug).toHaveAttribute('dir', 'ltr');
+  expect(slug).not.toHaveStyle({ unicodeBidi: 'plaintext' });
+});

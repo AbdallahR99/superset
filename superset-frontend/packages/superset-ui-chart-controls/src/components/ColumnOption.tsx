@@ -17,7 +17,12 @@
  * under the License.
  */
 import { useState, ReactNode, useLayoutEffect, RefObject } from 'react';
-import { css, styled, SupersetTheme } from '@apache-superset/core/theme';
+import {
+  css,
+  styled,
+  SupersetTheme,
+  useIsRtl,
+} from '@apache-superset/core/theme';
 import {
   SafeMarkdown,
   Tooltip,
@@ -57,6 +62,7 @@ export function ColumnOption({
   const warningMarkdown =
     column.warning_markdown || column.warning_text || column.error_text;
   const type = hasExpression ? 'expression' : type_generic;
+  const isRtl = useIsRtl();
   const [tooltipText, setTooltipText] = useState<ReactNode>(column.column_name);
   const [columnTypeTooltipText, setcolumnTypeTooltipText] = useState<ReactNode>(
     getColumnTypeTooltipNode(column),
@@ -74,7 +80,8 @@ export function ColumnOption({
           id="metric-type-tooltip"
           title={columnTypeTooltipText}
           placement="bottomRight"
-          align={{ offset: [8, -2] }}
+          // The placement mirrors in right-to-left layouts; so must the nudge.
+          align={{ offset: [isRtl ? -8 : 8, -2] }}
         >
           <span>
             <ColumnTypeLabel type={type} />
@@ -84,6 +91,7 @@ export function ColumnOption({
       <Tooltip id="metric-name-tooltip" title={tooltipText}>
         <span
           className="option-label column-option-label"
+          dir="auto"
           css={(theme: SupersetTheme) => css`
             margin-right: ${theme.sizeUnit}px;
           `}

@@ -46,6 +46,8 @@ const metadata = new ChartMetadata({
     'EXPORT_CURRENT_VIEW' as Behavior,
   ],
   category: t('Table'),
+  // A table is a document, not a plot: it follows the interface direction.
+  direction: 'inherit',
   canBeAnnotationTypes: ['EVENT', 'INTERVAL'],
   description: t(
     'Classic row-by-column spreadsheet like view of a dataset. Use tables to showcase a view into the underlying data or to show aggregated metrics.',

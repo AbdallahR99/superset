@@ -32,6 +32,7 @@ import {
   ThemeMode,
 } from '@apache-superset/core/theme';
 import { ThemeController } from './ThemeController';
+import { AntdLocaleProvider } from './AntdLocaleProvider';
 
 export const ThemeContext = createContext<ThemeContextType | null>(null);
 
@@ -184,7 +185,7 @@ export function SupersetThemeProvider({
   return (
     <ThemeContext.Provider value={contextValue}>
       <currentTheme.SupersetThemeProvider>
-        {children}
+        <AntdLocaleProvider>{children}</AntdLocaleProvider>
       </currentTheme.SupersetThemeProvider>
     </ThemeContext.Provider>
   );

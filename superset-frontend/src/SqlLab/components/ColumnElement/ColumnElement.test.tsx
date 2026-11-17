@@ -50,4 +50,14 @@ describe('ColumnElement', () => {
       container.querySelector('[data-test="col-name"]')?.firstChild,
     ).toHaveTextContent('last_name');
   });
+
+  test('isolates the identifier and keeps the data type left-to-right', () => {
+    const { container, getByText } = render(
+      <ColumnElement column={{ name: '_internal_id', type: 'VARCHAR(255)' }} />,
+    );
+    expect(
+      container.querySelector('[data-test="col-name"] bdi'),
+    ).toHaveTextContent('_internal_id');
+    expect(getByText('VARCHAR(255)')).toHaveAttribute('dir', 'ltr');
+  });
 });

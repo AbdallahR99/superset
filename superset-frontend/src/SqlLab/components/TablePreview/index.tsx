@@ -331,8 +331,10 @@ const TablePreview: FC<Props> = ({ dbId, catalog, schema, tableName }) => {
       </div>
       <Title>
         <Icons.InsertRowAboveOutlined iconSize="l" />
-        {schema ? `${schema}.` : ''}
-        {tableName}
+        <bdi>
+          {schema ? `${schema}.` : ''}
+          {tableName}
+        </bdi>
         {titleActions()}
       </Title>
       {isMetadataRefreshing ? (
@@ -385,7 +387,7 @@ const TablePreview: FC<Props> = ({ dbId, catalog, schema, tableName }) => {
                     key: TABS_KEYS.INDEXES,
                     label: t('Indexes (%s)', tableData.indexes.length),
                     children: tableData.indexes.map((ix, i) => (
-                      <pre className="code" key={i}>
+                      <pre className="code" dir="ltr" key={i}>
                         {JSON.stringify(ix, null, '  ')}
                       </pre>
                     )),
@@ -432,7 +434,7 @@ const TablePreview: FC<Props> = ({ dbId, catalog, schema, tableName }) => {
                     css={css`
                       height: ${height}px;
                     `}
-                    tabBarStyle={{ paddingLeft: theme.sizeUnit * 4 }}
+                    tabBarStyle={{ paddingInlineStart: theme.sizeUnit * 4 }}
                     items={tabItems}
                   />
                 );

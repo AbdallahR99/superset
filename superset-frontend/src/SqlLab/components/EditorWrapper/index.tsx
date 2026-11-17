@@ -20,7 +20,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { shallowEqual, useSelector } from 'react-redux';
 import { useAppDispatch } from 'src/SqlLab/hooks/useAppDispatch';
 import { usePrevious } from '@superset-ui/core';
-import { css, useTheme } from '@apache-superset/core/theme';
+import { css, noFlip, useTheme } from '@apache-superset/core/theme';
 import { Global } from '@emotion/react';
 import type { editors } from '@apache-superset/core';
 
@@ -332,7 +332,8 @@ const EditorWrapper = ({
           position: absolute;
           top: 0;
           bottom: 0;
-          right: ${theme.sizeUnit * 2}px;
+          /* The Ace gutter is left-to-right in every interface direction. */
+          ${noFlip} right: ${theme.sizeUnit * 2}px;
           width: 1px;
           height: 100%;
           background-color: ${theme.colorBorder};

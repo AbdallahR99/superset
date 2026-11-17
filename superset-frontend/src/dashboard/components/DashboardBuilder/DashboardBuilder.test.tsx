@@ -1597,3 +1597,47 @@ test('restored dashboard hydration survives entering edit mode', async () => {
       ));
   }
 });
+
+test.each(['ltr', 'rtl'] as const)(
+  'pulls the top-level tabs under the collapsed filter bar on its own side (%s)',
+  direction => {
+    (useStoredSidebarWidth as jest.Mock).mockImplementation(() => [
+      OPEN_FILTER_BAR_WIDTH,
+      jest.fn(),
+    ]);
+    const nativeFiltersSpy = jest
+      .spyOn(useNativeFiltersModule, 'useNativeFilters')
+      .mockReturnValue({
+        showDashboard: true,
+        missingInitialFilters: [],
+        dashboardFiltersOpen: false,
+        toggleDashboardFiltersOpen: jest.fn(),
+        nativeFiltersEnabled: true,
+        hasFilters: true,
+      });
+
+    const { getByTestId, unmount } = render(<DashboardBuilder />, {
+      useRedux: true,
+      store: storeWithState({
+        ...mockState,
+        dashboardLayout: undoableDashboardLayout,
+      }),
+      useDnd: true,
+      useRouter: true,
+      useTheme: true,
+      direction,
+    });
+
+    const topLevelTabs = getByTestId('dashboard-header-wrapper').querySelector(
+      '[data-test="dragdroppable-object"]',
+    ) as HTMLElement;
+    // A logical margin: the collapsed filter bar is on the left in a
+    // left-to-right layout and on the right in a right-to-left one, and a
+    // physical inline margin would not be mirrored.
+    expect(topLevelTabs.style.marginInlineStart).toBe('-32px');
+    expect(topLevelTabs.style.marginLeft).toBe('');
+
+    unmount();
+    nativeFiltersSpy.mockRestore();
+  },
+);

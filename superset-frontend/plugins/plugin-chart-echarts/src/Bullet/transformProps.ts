@@ -295,14 +295,14 @@ export default function transformProps(
           formatter: (params?: { dataIndex?: number }) => {
             const i = params?.dataIndex ?? 0;
             const prefix = grouped
-              ? `${escapeHtml(categories[i])} \u2014 `
+              ? `<bdi>${escapeHtml(categories[i])}</bdi> \u2014 `
               : '';
             const band = containingRangeLabel(measures[i]);
             const bandLine = band
               ? `<br/>${escapeHtml(t('Range'))}: ${escapeHtml(band)}`
               : '';
             return sanitizeHtml(
-              `${prefix}${escapeHtml(metricLabel)}: <b>${escapeHtml(formatter(measures[i]))}</b>${bandLine}`,
+              `${prefix}<bdi>${escapeHtml(metricLabel)}</bdi>: <b><bdi>${escapeHtml(formatter(measures[i]))}</bdi></b>${bandLine}`,
             );
           },
         },
@@ -331,7 +331,7 @@ export default function transformProps(
           tooltip: {
             formatter: () =>
               sanitizeHtml(
-                `${escapeHtml(rangeLabels[index] || '')} \u2264 <b>${escapeHtml(formatter(value))}</b>`,
+                `<bdi>${escapeHtml(rangeLabels[index] || '')}</bdi> \u2264 <b><bdi>${escapeHtml(formatter(value))}</bdi></b>`,
               ),
           },
         })),
@@ -348,7 +348,7 @@ export default function transformProps(
           tooltip: {
             formatter: () =>
               sanitizeHtml(
-                `${escapeHtml(markerLabelAt(index, markerLabels, markers))}: <b>${escapeHtml(formatter(value))}</b>`,
+                `<bdi>${escapeHtml(markerLabelAt(index, markerLabels, markers))}</bdi>: <b><bdi>${escapeHtml(formatter(value))}</bdi></b>`,
               ),
           },
         })),

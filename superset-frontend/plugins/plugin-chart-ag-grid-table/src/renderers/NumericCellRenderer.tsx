@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { styled } from '@apache-superset/core/theme';
+import { ReactNode } from 'react';
+import { styled, useIsRtl } from '@apache-superset/core/theme';
 import { CustomCellRendererProps } from '@superset-ui/core/components/ThemedAgGridReact';
 import { BasicColorFormatterType, InputColumn, ValueRange } from '../types';
 import getRowBasicColorFormatter from '../utils/getRowBasicColorFormatter';
@@ -154,9 +155,19 @@ export const NumericCellRenderer = (
     alignPositiveNegative,
     colorPositiveNegative,
   } = params;
+  const isRtl = useIsRtl();
+  // Numbers read left-to-right: isolate them in a right-to-left grid so that
+  // signs, percent signs and currency symbols stay on the correct side.
+  const formattedValue: ReactNode = valueFormatted ?? value;
+  const cellValue =
+    isRtl && formattedValue != null && formattedValue !== '' ? (
+      <bdi dir="ltr">{formattedValue}</bdi>
+    ) : (
+      formattedValue
+    );
 
   if (node?.rowPinned === 'bottom') {
-    return <StyledTotalCell>{valueFormatted ?? value}</StyledTotalCell>;
+    return <StyledTotalCell>{cellValue}</StyledTotalCell>;
   }
 
   let arrow = '';
@@ -180,7 +191,7 @@ export const NumericCellRenderer = (
         {arrow && (
           <ArrowContainer arrowColor={arrowColor}>{arrow}</ArrowContainer>
         )}
-        <div>{valueFormatted ?? value}</div>
+        <div>{cellValue}</div>
       </CellContainer>
     );
   }
@@ -203,7 +214,7 @@ export const NumericCellRenderer = (
   return (
     <div>
       <Bar offset={CellOffset} percentage={CellWidth} background={background} />
-      {valueFormatted ?? value}
+      {cellValue}
     </div>
   );
 };

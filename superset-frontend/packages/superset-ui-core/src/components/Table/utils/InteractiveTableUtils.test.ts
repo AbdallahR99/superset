@@ -41,6 +41,7 @@ const createMockTable = (numCols = 2): HTMLTableElement => {
 
 afterEach(() => {
   document.body.innerHTML = '';
+  document.documentElement.removeAttribute('dir');
 });
 
 test('constructor initializes with correct defaults', () => {
@@ -571,4 +572,118 @@ test('clearListeners removes document mouseup listener', () => {
   utils.clearListeners();
 
   expect(removeEventSpy).toHaveBeenCalledWith('mouseup', utils.handleMouseup);
+});
+
+const createHeaderCell = (offsetWidth = 100) => {
+  const target = document.createElement('th') as any;
+  Object.defineProperty(target, 'offsetWidth', {
+    value: offsetWidth,
+    configurable: true,
+  });
+  return target;
+};
+
+test('isRtl follows the nearest dir attribute', () => {
+  const table = createMockTable();
+  const utils = new InteractiveTableUtils(table, mockColumns, jest.fn());
+  expect(utils.isRtl()).toBe(false);
+
+  document.documentElement.setAttribute('dir', 'rtl');
+  expect(utils.isRtl()).toBe(true);
+
+  // A left-to-right island inside a right-to-left page wins.
+  const island = document.createElement('div');
+  island.setAttribute('dir', 'ltr');
+  document.body.appendChild(island);
+  island.appendChild(table);
+  expect(utils.isRtl()).toBe(false);
+});
+
+test('handleMouseDown starts a resize from the left edge in a right-to-left table', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  const table = createMockTable();
+  const utils = new InteractiveTableUtils(table, mockColumns, jest.fn());
+  const target = createHeaderCell();
+
+  utils.handleMouseDown({
+    currentTarget: target,
+    offsetX: 5, // 5px from the left edge, within the threshold of 8
+    x: 205,
+  } as unknown as MouseEvent);
+
+  expect(target.mouseDown).toBe(true);
+  expect(target.oldX).toBe(205);
+  expect(target.oldWidth).toBe(100);
+  expect(target.draggable).toBe(false);
+});
+
+test('handleMouseDown ignores the right edge in a right-to-left table', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  const table = createMockTable();
+  const utils = new InteractiveTableUtils(table, mockColumns, jest.fn());
+  utils.reorderable = true;
+  const target = createHeaderCell();
+
+  utils.handleMouseDown({
+    currentTarget: target,
+    offsetX: 95, // the resize zone of a left-to-right table
+    x: 295,
+  } as unknown as MouseEvent);
+
+  expect(target.mouseDown).toBeUndefined();
+  expect(target.draggable).toBe(true);
+});
+
+test('handleMouseMove shows the resize cursor over the left edge in a right-to-left table', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  const table = createMockTable();
+  const utils = new InteractiveTableUtils(table, mockColumns, jest.fn());
+  utils.resizable = true;
+  const target = createHeaderCell();
+
+  utils.handleMouseMove({
+    currentTarget: target,
+    offsetX: 3,
+    x: 3,
+  } as unknown as MouseEvent);
+  expect(target.style.cursor).toBe('col-resize');
+
+  utils.handleMouseMove({
+    currentTarget: target,
+    offsetX: 97,
+    x: 97,
+  } as unknown as MouseEvent);
+  expect(target.style.cursor).toBe('default');
+});
+
+test('handleMouseMove widens the column when dragging left in a right-to-left table', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  const table = createMockTable(2);
+  const setDerivedColumns = jest.fn();
+  const utils = new InteractiveTableUtils(
+    table,
+    mockColumns,
+    setDerivedColumns,
+  );
+  utils.resizable = true;
+
+  const col = table.rows[0].cells[0] as any;
+  col.mouseDown = true;
+  col.oldWidth = 100;
+  col.oldX = 50;
+  utils.columnRef = col;
+
+  utils.handleMouseMove({
+    currentTarget: createHeaderCell(),
+    offsetX: 50,
+    x: 30, // 20px to the left: width = 100 + 20 = 120
+  } as unknown as MouseEvent);
+  expect(utils.derivedColumns[0].width).toBe(120);
+
+  utils.handleMouseMove({
+    currentTarget: createHeaderCell(),
+    offsetX: 50,
+    x: 70, // 20px to the right: width = 100 - 20 = 80
+  } as unknown as MouseEvent);
+  expect(utils.derivedColumns[0].width).toBe(80);
 });

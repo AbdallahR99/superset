@@ -71,7 +71,7 @@ export function Timer({
       role="timer"
       style={{ fontFamily: theme.fontFamilyCode }}
     >
-      {clockStr}
+      <bdi dir="ltr">{clockStr}</bdi>
     </Label>
   );
 }

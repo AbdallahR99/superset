@@ -53,6 +53,12 @@ import { resolveLegendLayout } from '../utils/legendLayout';
 import { defaultGrid } from '../defaults';
 import { convertInteger } from '../utils/convertInteger';
 import { getDefaultTooltip } from '../utils/tooltip';
+import {
+  bidi,
+  bidiSentence,
+  hasRtlCharacters,
+  isolatePart,
+} from '../utils/bidi';
 import { Refs } from '../types';
 import { getContributionLabel } from './utils';
 
@@ -454,8 +460,16 @@ export default function transformProps(
       '\\n': '\n',
     };
 
+    // When a value is right-to-left (an Arabic category name, for example),
+    // every value is isolated so that the template keeps its reading order.
+    const isMixed = Object.values(items).some(hasRtlCharacters);
+
     return Object.entries(items).reduce(
-      (acc, [key, value]) => acc.replaceAll(key, value),
+      (acc, [key, value]) =>
+        acc.replaceAll(
+          key,
+          isMixed && key !== '\\n' ? isolatePart(value) : value,
+        ),
       template,
     );
   };
@@ -474,11 +488,11 @@ export default function transformProps(
       case EchartsPieLabelType.Percent:
         return formattedPercent;
       case EchartsPieLabelType.KeyValue:
-        return `${name}: ${formattedValue}`;
+        return bidi`${name}: ${formattedValue}`;
       case EchartsPieLabelType.KeyValuePercent:
-        return `${name}: ${formattedValue} (${formattedPercent})`;
+        return bidi`${name}: ${formattedValue} (${formattedPercent})`;
       case EchartsPieLabelType.KeyPercent:
-        return `${name}: ${formattedPercent}`;
+        return bidi`${name}: ${formattedPercent}`;
       case EchartsPieLabelType.ValuePercent:
         return `${formattedValue} (${formattedPercent})`;
       case EchartsPieLabelType.Template:
@@ -623,7 +637,10 @@ export default function transformProps(
               (width - chartPadding.left - chartPadding.right) / 2,
           y: donut ? pieLayout.totalAnchor.y : chartPadding.top,
           style: {
-            text: t('Total: %s', numberFormatter(totalValue)),
+            text: bidiSentence(
+              value => t('Total: %s', value),
+              numberFormatter(totalValue),
+            ),
             align: 'center',
             verticalAlign: donut ? 'middle' : 'top',
             fontSize: 16,

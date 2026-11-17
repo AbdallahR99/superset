@@ -120,7 +120,9 @@ const KeyboardShortcutButton: FC<{ children?: ReactNode }> = ({ children }) => (
             >
               <ShortcutWrapper>
                 {shortcuts.map(shortcut => (
-                  <ShortcutCode key={shortcut}>{shortcut}</ShortcutCode>
+                  <ShortcutCode key={shortcut} dir="ltr">
+                    {shortcut}
+                  </ShortcutCode>
                 ))}
               </ShortcutWrapper>
             </div>

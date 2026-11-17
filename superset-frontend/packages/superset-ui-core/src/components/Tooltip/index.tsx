@@ -19,20 +19,28 @@
 import { forwardRef } from 'react';
 import { Tooltip as AntdTooltip } from 'antd';
 import type { TooltipRef } from 'antd/es/tooltip';
+import { flipPlacement, useDirection } from '@apache-superset/core/theme';
 
 import type { TooltipProps, TooltipPlacement } from './types';
 
 export const Tooltip = forwardRef<TooltipRef, TooltipProps>(
-  ({ overlayStyle, ...props }, ref) => (
-    <AntdTooltip
-      ref={ref}
-      styles={{
-        // antd v6 renamed the inner content slot `body` -> `container`
-        container: { overflow: 'hidden', textOverflow: 'ellipsis' },
-        root: overlayStyle ?? {},
-      }}
-      {...props}
-    />
-  ),
+  ({ overlayStyle, mirrorPlacement = true, placement, ...props }, ref) => {
+    const direction = useDirection();
+    return (
+      <AntdTooltip
+        ref={ref}
+        styles={{
+          // antd v6 renamed the inner content slot `body` -> `container`
+          container: { overflow: 'hidden', textOverflow: 'ellipsis' },
+          root: overlayStyle ?? {},
+        }}
+        // antd mirrors only its default placement in right-to-left layouts
+        placement={
+          mirrorPlacement ? flipPlacement(placement, direction) : placement
+        }
+        {...props}
+      />
+    );
+  },
 );
 export type { TooltipProps, TooltipPlacement };

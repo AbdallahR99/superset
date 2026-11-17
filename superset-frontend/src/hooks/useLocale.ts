@@ -36,6 +36,10 @@ import 'dayjs/locale/cs';
 import 'dayjs/locale/sk';
 import 'dayjs/locale/sl';
 import 'dayjs/locale/nl';
+import 'dayjs/locale/ar';
+import 'dayjs/locale/fa';
+import 'dayjs/locale/he';
+import 'dayjs/locale/ur';
 
 /* eslint-disable no-restricted-imports */
 import { Locale } from 'antd/es/locale';
@@ -57,6 +61,10 @@ export const LOCALE_MAPPING = {
   sk: () => import('antd/locale/sk_SK'),
   sl: () => import('antd/locale/sl_SI'),
   nl: () => import('antd/locale/nl_NL'),
+  ar: () => import('antd/locale/ar_EG'),
+  fa: () => import('antd/locale/fa_IR'),
+  he: () => import('antd/locale/he_IL'),
+  ur: () => import('antd/locale/ur_PK'),
 };
 /* eslint-enable no-restricted-imports */
 
@@ -75,6 +83,39 @@ const DAYJS_LOCALE_OVERRIDES: Record<string, string> = {
 export const toDayjsLocale = (localeCode: string): string =>
   DAYJS_LOCALE_OVERRIDES[localeCode] ??
   localeCode.toLowerCase().replace(/_/g, '-');
+
+const loadedAntdLocales: Record<string, Locale | undefined> = {};
+
+/**
+ * Ant Design locale already loaded for a Flask-Babel locale code, if any.
+ */
+export const getLoadedAntdLocale = (localeCode?: string): Locale | undefined =>
+  localeCode ? loadedAntdLocales[localeCode] : undefined;
+
+/**
+ * Loads (once) the Ant Design locale for a Flask-Babel locale code. Resolves
+ * to undefined for English and for locales Ant Design has no bundle for, in
+ * which case Ant Design keeps its built-in English strings.
+ */
+export const loadAntdLocale = async (
+  localeCode?: string,
+): Promise<Locale | undefined> => {
+  if (!localeCode || localeCode === 'en') {
+    return undefined;
+  }
+  if (loadedAntdLocales[localeCode]) {
+    return loadedAntdLocales[localeCode];
+  }
+  const loader =
+    LOCALE_MAPPING[localeCode as keyof typeof LOCALE_MAPPING] ??
+    LOCALE_MAPPING[localeCode.split('_')[0] as keyof typeof LOCALE_MAPPING];
+  if (!loader) {
+    return undefined;
+  }
+  const module: { default: Locale } = await loader();
+  loadedAntdLocales[localeCode] = module.default;
+  return module.default;
+};
 
 export const useLocale = (): Locale | undefined | null => {
   const [datePickerLocale, setDatePickerLocale] = useState<

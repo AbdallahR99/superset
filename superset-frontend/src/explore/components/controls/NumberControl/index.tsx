@@ -20,6 +20,7 @@ import { useRef } from 'react';
 import { styled } from '@apache-superset/core/theme';
 import { InputNumber } from '@superset-ui/core/components/Input';
 import ControlHeader, { ControlHeaderProps } from '../../ControlHeader';
+import InputDirection from '../shared/InputDirection';
 
 type NumberValueType = number | undefined;
 
@@ -79,18 +80,21 @@ export default function NumberControl({
   return (
     <FullWidthDiv>
       <ControlHeader {...rest} />
-      <FullWidthInputNumber
-        min={min}
-        max={max}
-        step={step}
-        placeholder={placeholder}
-        value={value}
-        onChange={handleChange}
-        onBlur={handleBlur}
-        onStep={handleStep}
-        disabled={disabled}
-        aria-label={rest.label}
-      />
+      {/* A negative number reads `5-` when laid out right-to-left. */}
+      <InputDirection mode="auto" value={value}>
+        <FullWidthInputNumber
+          min={min}
+          max={max}
+          step={step}
+          placeholder={placeholder}
+          value={value}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          onStep={handleStep}
+          disabled={disabled}
+          aria-label={rest.label}
+        />
+      </InputDirection>
     </FullWidthDiv>
   );
 }

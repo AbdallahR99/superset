@@ -143,3 +143,21 @@ test('should return empty div when all data is null', () => {
   expect(container).toBeInTheDocument();
   expect(container.querySelector('svg')).toBeNull();
 });
+
+test('should keep the sparkline left-to-right in a right-to-left interface', () => {
+  const { container } = render(<SparklineCell {...defaultProps} />, {
+    direction: 'rtl',
+  });
+
+  const svg = container.querySelector('svg');
+  expect(svg).toBeInTheDocument();
+  expect(svg?.closest('[dir]')).toHaveAttribute('dir', 'ltr');
+});
+
+test('should not wrap the sparkline in a left-to-right interface', () => {
+  const { container } = render(<SparklineCell {...defaultProps} />);
+
+  const svg = container.querySelector('svg');
+  expect(svg).toBeInTheDocument();
+  expect(svg?.closest('[dir]')).toBeNull();
+});

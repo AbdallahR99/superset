@@ -32,7 +32,10 @@ interface TooltipTableProps {
   data: TooltipRowData[];
 }
 
-const VALUE_CELL_STYLE: CSSProperties = { paddingLeft: 8, textAlign: 'right' };
+const VALUE_CELL_STYLE: CSSProperties = {
+  paddingInlineStart: 8,
+  textAlign: 'end',
+};
 
 const TooltipTable = ({ className = '', data }: TooltipTableProps) => {
   const columns: TableColumnsType<TooltipRowData> = [
@@ -48,7 +51,7 @@ const TooltipTable = ({ className = '', data }: TooltipTableProps) => {
       title: '',
       dataIndex: 'valueColumn',
       key: 'valueColumn',
-      align: 'right',
+      align: 'end',
       render: (text, record) => (
         <div
           style={

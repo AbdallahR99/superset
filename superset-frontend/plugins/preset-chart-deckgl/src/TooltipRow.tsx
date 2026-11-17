@@ -16,16 +16,23 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { useIsRtl } from '@apache-superset/core/theme';
+
 type TooltipRowProps = {
   label: string;
   value: string;
 };
 
-const TooltipRow = ({ label, value }: TooltipRowProps) => (
-  <div>
-    {label}
-    <strong>{value}</strong>
-  </div>
-);
+const TooltipRow = ({ label, value }: TooltipRowProps) => {
+  // In a right-to-left tooltip the value keeps its own reading order, so that
+  // a coordinate such as `-122.41` or a left-to-right name is not reordered.
+  const isRtl = useIsRtl();
+  return (
+    <div>
+      {label}
+      <strong dir={isRtl ? 'auto' : undefined}>{value}</strong>
+    </div>
+  );
+};
 
 export default TooltipRow;

@@ -88,3 +88,40 @@ test('opens the popupRender content without crashing on click trigger', async ()
   fireEvent.click(buttons[buttons.length - 1]);
   expect(await findByText('Custom Menu')).toBeInTheDocument();
 });
+
+const placementClass = () =>
+  // eslint-disable-next-line testing-library/no-node-access
+  Array.from(document.querySelector('.ant-dropdown')?.classList ?? []).find(
+    name => name.startsWith('ant-dropdown-placement-'),
+  );
+
+const overlay = () => <div>Overlay</div>;
+
+test('mirrors an explicit placement in a right-to-left layout', () => {
+  render(
+    <DropdownButton popupRender={overlay} placement="bottomLeft" open>
+      Click
+    </DropdownButton>,
+    { direction: 'rtl' },
+  );
+  expect(placementClass()).toBe('ant-dropdown-placement-bottomRight');
+});
+
+test('leaves the default placement to Ant Design', () => {
+  // Ant Design opens the menu at the end of the button and mirrors that
+  // default itself: bottomRight left-to-right, bottomLeft right-to-left.
+  const { unmount } = render(
+    <DropdownButton popupRender={overlay} open>
+      Click
+    </DropdownButton>,
+  );
+  expect(placementClass()).toBe('ant-dropdown-placement-bottomRight');
+  unmount();
+  render(
+    <DropdownButton popupRender={overlay} open>
+      Click
+    </DropdownButton>,
+    { direction: 'rtl' },
+  );
+  expect(placementClass()).toBe('ant-dropdown-placement-bottomLeft');
+});

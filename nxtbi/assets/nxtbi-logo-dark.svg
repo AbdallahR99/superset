@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 148 40" width="148" height="40" role="img" aria-label="NxtBI">
+  <rect x="2" y="4" width="32" height="32" rx="8" fill="#14B8A6"/>
+  <rect x="9" y="21" width="5" height="9" rx="1.5" fill="#CCFBF1"/>
+  <rect x="16" y="15" width="5" height="15" rx="1.5" fill="#F0FDFA"/>
+  <rect x="23" y="10" width="5" height="20" rx="1.5" fill="#FFFFFF"/>
+  <text x="44" y="28" font-family="'IBM Plex Sans','Segoe UI',Inter,Helvetica,Arial,sans-serif" font-size="23" font-weight="700" letter-spacing="-0.3">
+    <tspan fill="#F1F5F9">Nxt</tspan><tspan fill="#5EEAD4">BI</tspan>
+  </text>
+</svg>

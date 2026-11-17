@@ -28,7 +28,7 @@ import {
 } from 'react';
 import { isNil } from 'lodash-es';
 import { t } from '@apache-superset/core/translation';
-import { css, styled, useTheme } from '@apache-superset/core/theme';
+import { css, styled, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { Modal as AntdModal, ModalProps as AntdModalProps } from 'antd';
 import { Resizable } from 're-resizable';
 import RawDraggable, {
@@ -216,7 +216,14 @@ export const StyledModal = styled(BaseModal)<StyledModalProps>`
   }}
 `;
 
-const defaultResizableConfig = (hideFooter: boolean | undefined) => ({
+// The modal box is anchored to its leading edge (left, or right in a
+// right-to-left layout) and grows towards the trailing one, so that is where
+// the horizontal resize handles belong: there the dragged edge follows the
+// pointer.
+const defaultResizableConfig = (
+  hideFooter: boolean | undefined,
+  isRtl = false,
+) => ({
   maxHeight: RESIZABLE_MAX_HEIGHT,
   maxWidth: RESIZABLE_MAX_WIDTH,
   minHeight: hideFooter
@@ -225,13 +232,13 @@ const defaultResizableConfig = (hideFooter: boolean | undefined) => ({
   minWidth: RESIZABLE_MIN_WIDTH,
   enable: {
     bottom: true,
-    bottomLeft: false,
-    bottomRight: true,
-    left: false,
+    bottomLeft: isRtl,
+    bottomRight: !isRtl,
+    left: isRtl,
     top: false,
     topLeft: false,
     topRight: false,
-    right: true,
+    right: !isRtl,
   },
 });
 
@@ -239,8 +246,9 @@ const defaultResizableConfig = (hideFooter: boolean | undefined) => ({
 export function mergeResizableConfig(
   hideFooter: boolean | undefined,
   overrides: ModalProps['resizableConfig'] = {},
+  isRtl = false,
 ): NonNullable<ModalProps['resizableConfig']> {
-  const defaults = defaultResizableConfig(hideFooter);
+  const defaults = defaultResizableConfig(hideFooter, isRtl);
   if (!overrides || Object.keys(overrides).length === 0) {
     return defaults;
   }
@@ -279,7 +287,7 @@ const CustomModal = ({
   wrapProps,
   draggable = false,
   resizable = false,
-  resizableConfig = defaultResizableConfig(hideFooter),
+  resizableConfig,
   draggableConfig,
   destroyOnHidden,
   openerRef,
@@ -313,6 +321,7 @@ const CustomModal = ({
   }, [show]);
 
   const theme = useTheme();
+  const isRtl = useIsRtl();
 
   const handleOnHide = () => {
     openerRef?.current?.focus();
@@ -383,8 +392,8 @@ const CustomModal = ({
   };
 
   const getResizableConfig = useMemo(
-    () => mergeResizableConfig(hideFooter, resizableConfig),
-    [hideFooter, resizableConfig],
+    () => mergeResizableConfig(hideFooter, resizableConfig, isRtl),
+    [hideFooter, resizableConfig, isRtl],
   );
 
   const ModalTitle = () =>
@@ -453,6 +462,9 @@ const CustomModal = ({
                   // When resizing from the top or left, the opposite corner
                   // should stay anchored. re-resizable adjusts size but
                   // cannot move the Draggable wrapper, so we sync position.
+                  // In a right-to-left layout the box is anchored to its
+                  // right edge instead, so it is a resize from the right
+                  // that has to move the wrapper, in the other direction.
                   // delta is cumulative from gesture start, so the target
                   // position must be derived from the position captured at
                   // resize start, not accumulated per event. Direction
@@ -469,8 +481,14 @@ const CustomModal = ({
                   setPosition(prev => ({
                     // Only the axis matching the resized edge moves; clamp it
                     // so the modal cannot be pushed outside the viewport.
-                    x: dir.includes('left')
-                      ? Math.min(Math.max(base.x - delta.width, left), right)
+                    x: dir.includes(isRtl ? 'right' : 'left')
+                      ? Math.min(
+                          Math.max(
+                            base.x + (isRtl ? delta.width : -delta.width),
+                            left,
+                          ),
+                          right,
+                        )
                       : prev.x,
                     y: dir.includes('top')
                       ? Math.min(Math.max(base.y - delta.height, top), bottom)

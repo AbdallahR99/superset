@@ -55,6 +55,9 @@ export default class PivotTableChartPlugin extends ChartPlugin<
         Behavior.DrillBy,
       ],
       category: t('Table'),
+      // A pivot table is a document, not a plot: it follows the interface
+      // direction.
+      direction: 'inherit',
       description: t(
         'Used to summarize a set of data by grouping together multiple statistics along two axes. Examples: Sales numbers by region and month, tasks by status and assignee, active users by age and location. Not the most visually stunning visualization, but highly informative and versatile.',
       ),

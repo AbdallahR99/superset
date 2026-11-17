@@ -83,6 +83,14 @@ export const CaretContainer = styled.div`
   height: 100%;
   border-left: solid 1px ${({ theme }) => theme.colorSplit};
   margin-left: auto;
+  /* The caret points at the popover the pill opens, towards inline-end. */
+  ${({ theme }) =>
+    theme.direction === 'rtl' &&
+    css`
+      .anticon {
+        transform: scaleX(-1);
+      }
+    `}
 `;
 
 export const CloseContainer = styled.button`
@@ -343,11 +351,17 @@ export const OptionControlLabel = ({
       );
     }
     if (!shouldShowTooltip) {
-      return <LabelText ref={labelRef}>{label}</LabelText>;
+      return (
+        <LabelText ref={labelRef} dir="auto">
+          {label}
+        </LabelText>
+      );
     }
     return (
       <Tooltip title={tooltipTitle || label}>
-        <LabelText ref={labelRef}>{label}</LabelText>
+        <LabelText ref={labelRef} dir="auto">
+          {label}
+        </LabelText>
       </Tooltip>
     );
   };

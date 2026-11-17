@@ -221,6 +221,24 @@ test('aria-live region is visually hidden but accessible', () => {
   expect(ariaLiveRegion?.style.overflow).toBe('hidden');
 });
 
+test('aria-live region is parked past the right edge in right-to-left layouts', () => {
+  document.documentElement.dir = 'rtl';
+  try {
+    const { container } = setup();
+
+    const ariaLiveRegion = container.querySelector(
+      '[aria-live="polite"]',
+    ) as HTMLElement;
+
+    // An element parked past the left edge of a right-to-left page extends
+    // the scrollable area and adds a horizontal scrollbar.
+    expect(ariaLiveRegion.style.right).toBe('-9999px');
+    expect(ariaLiveRegion.style.left).toBe('');
+  } finally {
+    document.documentElement.removeAttribute('dir');
+  }
+});
+
 test('renders tablist with correct aria-label when label is string', () => {
   const { container } = setup({ label: 'String Label' });
 

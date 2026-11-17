@@ -32,7 +32,7 @@ import {
 import { Global } from '@emotion/react';
 import { t } from '@apache-superset/core/translation';
 import { usePrevious } from '@superset-ui/core';
-import { css, useTheme } from '@apache-superset/core/theme';
+import { css, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { useResizeDetector } from 'react-resize-detector';
 import { Badge, Icons, Button, Tooltip, Popover } from '..';
 import { DropdownContainerProps, DropdownItem, DropdownRef } from './types';
@@ -57,6 +57,7 @@ export const DropdownContainer = forwardRef(
     outerRef: ForwardedRef<DropdownRef>,
   ) => {
     const theme = useTheme();
+    const isRtl = useIsRtl();
     const { ref, width = 0 } = useResizeDetector<HTMLDivElement>();
     const previousWidth = usePrevious(width) || 0;
     const { current } = ref;
@@ -186,11 +187,15 @@ export const DropdownContainer = forwardRef(
         }
 
         // Calculates the index of the first overflowed element
-        // +1 is to give at least one pixel of difference and avoid flakiness
-        const index = childrenArray.findIndex(
-          child =>
-            child.getBoundingClientRect().right >
-            container.getBoundingClientRect().right + 1,
+        // +1 is to give at least one pixel of difference and avoid flakiness.
+        // Items overflow past the inline-end edge of the container, which is
+        // its left edge in a right-to-left layout.
+        const index = childrenArray.findIndex(child =>
+          isRtl
+            ? child.getBoundingClientRect().left <
+              container.getBoundingClientRect().left - 1
+            : child.getBoundingClientRect().right >
+              container.getBoundingClientRect().right + 1,
         );
 
         // If elements fit (-1) and there's overflowed items
@@ -206,7 +211,10 @@ export const DropdownContainer = forwardRef(
           const button = current?.children.item(1);
           const buttonRight = button?.getBoundingClientRect().right || 0;
           const containerRight = current?.getBoundingClientRect().right || 0;
-          const remainingSpace = containerRight - buttonRight;
+          const remainingSpace = isRtl
+            ? (button?.getBoundingClientRect().left || 0) -
+              (current?.getBoundingClientRect().left || 0)
+            : containerRight - buttonRight;
 
           // Checks if some elements in the dropdown fits in the remaining space
           let sum = 0;
@@ -225,6 +233,7 @@ export const DropdownContainer = forwardRef(
       }
     }, [
       current,
+      isRtl,
       items.length,
       itemsWidth,
       overflowedItems.length,

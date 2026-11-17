@@ -646,7 +646,7 @@ const ResultSet = ({
             key={index}
             title={t('Database error')}
             error={error}
-            subtitle={<MonospaceDiv>{error.message}</MonospaceDiv>}
+            subtitle={<MonospaceDiv dir="auto">{error.message}</MonospaceDiv>}
             copyText={error.message || undefined}
             link={query.link}
             source="sqllab"
@@ -683,8 +683,10 @@ const ResultSet = ({
             <>
               {t(object)} [
               <strong>
-                {tempSchema ? `${tempSchema}.` : ''}
-                {tempTable}
+                <bdi>
+                  {tempSchema ? `${tempSchema}.` : ''}
+                  {tempTable}
+                </bdi>
               </strong>
               ] {t('was created')} &nbsp;
               <ButtonGroup>

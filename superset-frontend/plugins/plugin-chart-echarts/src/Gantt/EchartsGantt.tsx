@@ -19,6 +19,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { sharedControlComponents } from '@superset-ui/chart-controls';
 import { t } from '@apache-superset/core/translation';
+import {
+  DirectionProvider,
+  getDocumentDirection,
+} from '@apache-superset/core/theme';
 import Echart from '../components/Echart';
 import { EchartsGanttChartTransformedProps } from './types';
 import { EventHandlers } from '../types';
@@ -51,18 +55,28 @@ export default function EchartsGantt(props: EchartsGanttChartTransformedProps) {
     onLegendScroll,
   );
 
+  // The control is ordinary interface inside the chart container, which is
+  // kept left-to-right for the plot: give it the page direction back.
+  const pageDirection = getDocumentDirection();
+
   return (
     <>
-      <div ref={extraControlRef} css={{ textAlign: 'center' }}>
+      <div
+        ref={extraControlRef}
+        css={{ textAlign: 'center' }}
+        dir={pageDirection === 'rtl' ? 'rtl' : undefined}
+      >
         {formData.showExtraControls ? (
-          <RadioButtonControl
-            options={[
-              [false, t('Plain')],
-              [true, t('Subcategories')],
-            ]}
-            value={formData.subcategories}
-            onChange={v => setControlValue?.('subcategories', v)}
-          />
+          <DirectionProvider direction={pageDirection}>
+            <RadioButtonControl
+              options={[
+                [false, t('Plain')],
+                [true, t('Subcategories')],
+              ]}
+              value={formData.subcategories}
+              onChange={v => setControlValue?.('subcategories', v)}
+            />
+          </DirectionProvider>
         ) : null}
       </div>
       <Echart

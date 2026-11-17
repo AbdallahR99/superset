@@ -61,7 +61,10 @@ const FilterIndicator = forwardRef<HTMLButtonElement, IndicatorProps>(
             {name}
             {resultValue ? ': ' : ''}
           </FilterName>
-          <FilterValue>{resultValue}</FilterValue>
+          {/* The value comes from the data and takes its direction from its
+              own text: a number reads left-to-right whatever the interface
+              direction. */}
+          <FilterValue dir="auto">{resultValue}</FilterValue>
         </div>
       </FilterItem>
     );

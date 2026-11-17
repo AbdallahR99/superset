@@ -19,6 +19,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { t } from '@apache-superset/core/translation';
+import { useIsRtl } from '@apache-superset/core/theme';
 import {
   UniqueIdentifier,
   DragStartEvent,
@@ -60,6 +61,10 @@ export function useDragHandlers({
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
   const [overId, setOverId] = useState<UniqueIdentifier | null>(null);
   const [dragOverlayWidth, setDragOverlayWidth] = useState<number | null>(null);
+  const isRtl = useIsRtl();
+  // Horizontal drag distance towards deeper nesting. The tree is indented
+  // from the inline-start edge, so dragging right nests an item deeper in a
+  // left-to-right layout and dragging left does in a right-to-left one.
   const offsetLeftRef = useRef(0);
   // Track current drop target - use state so virtualized items can render correctly
   const [currentDropTargetId, setCurrentDropTargetId] = useState<string | null>(
@@ -220,7 +225,8 @@ export function useDragHandlers({
 
   const handleDragMove = useCallback(
     ({ delta }: DragMoveEvent) => {
-      offsetLeftRef.current = delta.x;
+      const nestingOffset = isRtl ? -delta.x : delta.x;
+      offsetLeftRef.current = nestingOffset;
 
       if (activeId && overId) {
         if (typeof overId === 'string' && overId.endsWith('-empty')) {
@@ -233,7 +239,7 @@ export function useDragHandlers({
           projectionItems,
           activeId,
           overId,
-          delta.x,
+          nestingOffset,
           DRAG_INDENTATION_WIDTH,
           projectionIndexMap,
         );
@@ -241,7 +247,7 @@ export function useDragHandlers({
         setCurrentDropTargetId(newParentId);
       }
     },
-    [activeId, overId, projectionItems, projectionIndexMap],
+    [activeId, overId, projectionItems, projectionIndexMap, isRtl],
   );
 
   const handleDragOver = useCallback(

@@ -76,7 +76,7 @@ export const UnsavedChangesModal: FC<UnsavedChangesModalProps> = ({
       destroyOnHidden
       title={
         <>
-          <Icons.WarningOutlined iconSize="m" style={{ marginRight: 8 }} />
+          <Icons.WarningOutlined iconSize="m" style={{ marginInlineEnd: 8 }} />
           {title}
         </>
       }

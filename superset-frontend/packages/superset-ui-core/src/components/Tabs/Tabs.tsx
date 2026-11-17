@@ -30,6 +30,16 @@ export interface TabsProps extends AntdTabsProps {
   contentPadding?: SerializedStyles;
 }
 
+// The physical `tabPosition` names a side in a left-to-right layout. Ant
+// Design mirrors only the logical `tabPlacement` in right-to-left layouts, so
+// the physical value is handed over as its logical counterpart.
+const LOGICAL_TAB_PLACEMENT = {
+  top: 'top',
+  bottom: 'bottom',
+  left: 'start',
+  right: 'end',
+} as const;
+
 const StyledTabs = ({
   animated = false,
   allowOverflow = true,
@@ -38,11 +48,16 @@ const StyledTabs = ({
   tabBarStyle,
   contentStyle,
   contentPadding,
+  tabPosition,
+  tabPlacement,
   ...props
 }: TabsProps) => (
   <AntdTabs
     animated={animated}
     {...props}
+    tabPlacement={
+      tabPlacement ?? (tabPosition && LOGICAL_TAB_PLACEMENT[tabPosition])
+    }
     tabBarStyle={tabBarStyle}
     css={theme => css`
       overflow: ${allowOverflow ? 'visible' : 'hidden'};
@@ -69,7 +84,11 @@ const StyledTabs = ({
       }
       .ant-tabs-nav-wrap {
         ${
-          !(tabBarStyle && 'paddingLeft' in tabBarStyle)
+          !(
+            tabBarStyle &&
+            ('paddingLeft' in tabBarStyle ||
+              'paddingInlineStart' in tabBarStyle)
+          )
             ? `padding: 0 ${theme.sizeUnit * 4}px;`
             : ''
         }

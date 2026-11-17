@@ -20,11 +20,32 @@ import { forwardRef } from 'react';
 import { Popover as AntdPopover } from 'antd';
 import { PopoverProps as AntdPopoverProps } from 'antd/es/popover';
 import type { TooltipRef } from 'antd/es/tooltip';
+import { flipPlacement, useDirection } from '@apache-superset/core/theme';
 
 export interface PopoverProps extends AntdPopoverProps {
   forceRender?: boolean;
+  /**
+   * Mirror an explicit `placement` in right-to-left layouts (`left` becomes
+   * `right`, `bottomLeft` becomes `bottomRight`, ...). Set to `false` when the
+   * placement is physical by nature, for example computed from the position
+   * of the trigger in the viewport.
+   * @default true
+   */
+  mirrorPlacement?: boolean;
 }
 
-export const Popover = forwardRef<TooltipRef, PopoverProps>((props, ref) => (
-  <AntdPopover ref={ref} {...props} />
-));
+export const Popover = forwardRef<TooltipRef, PopoverProps>(
+  ({ mirrorPlacement = true, placement, ...props }, ref) => {
+    const direction = useDirection();
+    return (
+      <AntdPopover
+        ref={ref}
+        // antd mirrors only its default placement in right-to-left layouts
+        placement={
+          mirrorPlacement ? flipPlacement(placement, direction) : placement
+        }
+        {...props}
+      />
+    );
+  },
+);

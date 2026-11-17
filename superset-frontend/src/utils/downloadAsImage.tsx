@@ -357,7 +357,7 @@ const createEnhancedClone = (
   const tempContainer = document.createElement('div');
   tempContainer.style.cssText = `
     position: absolute;
-    left: -20000px;
+    inset-inline-start: -20000px;
     top: -20000px;
     visibility: hidden;
     pointer-events: none;

@@ -115,6 +115,20 @@ const MarkdownStyles = styled.div`
         font-size: ${theme.fontSizeSM}px;
       }
 
+      /* Markdown is written by users, in any language. Each paragraph and
+         heading takes its direction and alignment from its own text, as
+         dir='auto' would, so left-to-right text reads correctly in a
+         right-to-left interface and vice versa. */
+      p,
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6 {
+        unicode-bidi: plaintext;
+      }
+
       .dashboard-component-chart-holder {
         overflow-y: auto;
         overflow-x: hidden;

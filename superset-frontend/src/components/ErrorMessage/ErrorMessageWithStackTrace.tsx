@@ -101,7 +101,7 @@ export function ErrorMessageWithStackTrace({
           </Typography.Link>
         )}
         <br />
-        {stackTrace && <StackTrace>{stackTrace}</StackTrace>}
+        {stackTrace && <StackTrace dir="ltr">{stackTrace}</StackTrace>}
       </>
     ) : undefined);
 

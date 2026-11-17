@@ -62,3 +62,34 @@ test('renders nothing without a tooltip', () => {
   const { container } = renderWithTheme(<Tooltip tooltip={null} />);
   expect(container).toBeEmptyDOMElement();
 });
+
+test('positions the tooltip with an inline style, never a mirrored style rule', () => {
+  renderWithTheme(<Tooltip tooltip={tooltip} />);
+
+  const container = screen.getByTestId('tooltip-content').parentElement;
+  // The pointer position is physical: it must not go through a style rule,
+  // which is mirrored (left -> right) in right-to-left layouts.
+  expect(container?.style.left).toBe('10px');
+  expect(container?.style.top).toBe('20px');
+  expect(container).not.toHaveStyleRule('left', expect.anything());
+  expect(container).not.toHaveStyleRule('right', expect.anything());
+  expect(container).not.toHaveAttribute('dir');
+});
+
+test('keeps the pointer position physical on a right-to-left page', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  try {
+    renderWithTheme(<Tooltip tooltip={tooltip} />);
+
+    const container = screen.getByTestId('tooltip-content').parentElement;
+    expect(container?.style.left).toBe('10px');
+    expect(container?.style.right).toBe('');
+    expect(container?.style.top).toBe('20px');
+    expect(container).not.toHaveStyleRule('left', expect.anything());
+    expect(container).not.toHaveStyleRule('right', expect.anything());
+    // The tooltip text follows the page, the map around it does not.
+    expect(container).toHaveAttribute('dir', 'rtl');
+  } finally {
+    document.documentElement.removeAttribute('dir');
+  }
+});

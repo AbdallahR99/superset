@@ -31,3 +31,13 @@ test('getTooltipHTML returns the expected HTML (string inputs)', () => {
   expect(html).toContain('body text');
   expect(html).toContain('footer note');
 });
+
+test('getTooltipHTML keeps the tooltip content left-to-right', () => {
+  const html = getTooltipHTML({ title: 'column_name', body: 'INTEGER' });
+
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = html;
+  expect(wrapper.querySelector('.tooltip-detail')?.getAttribute('dir')).toBe(
+    'ltr',
+  );
+});

@@ -28,6 +28,7 @@ import { legacyValidateNumber, legacyValidateInteger } from '@superset-ui/core';
 import ControlHeader from 'src/explore/components/ControlHeader';
 import { debounce } from 'lodash-es';
 import { Constants, Input } from '@superset-ui/core/components';
+import InputDirection from '../shared/InputDirection';
 
 type InputValueType = string | number;
 
@@ -202,17 +203,19 @@ function TextControl<T extends InputValueType = InputValueType>({
         validationErrors={validationErrors}
         hovered={hovered}
       />
-      <Input
-        type="text"
-        data-test="inline-name"
-        placeholder={placeholder}
-        onChange={onChangeWrapper}
-        onFocus={onFocus}
-        onBlur={onBlurFlush}
-        value={displayValue}
-        disabled={disabled}
-        aria-label={ariaLabel ?? label}
-      />
+      <InputDirection mode="auto" value={displayValue}>
+        <Input
+          type="text"
+          data-test="inline-name"
+          placeholder={placeholder}
+          onChange={onChangeWrapper}
+          onFocus={onFocus}
+          onBlur={onBlurFlush}
+          value={displayValue}
+          disabled={disabled}
+          aria-label={ariaLabel ?? label}
+        />
+      </InputDirection>
     </div>
   );
 }

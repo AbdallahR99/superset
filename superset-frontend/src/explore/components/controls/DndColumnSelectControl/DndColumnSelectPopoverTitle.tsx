@@ -75,7 +75,7 @@ export const DndColumnSelectPopoverTitle = ({
   const defaultLabel = t('My column');
 
   if (isEditDisabled) {
-    return <span>{title || defaultLabel}</span>;
+    return <span dir="auto">{title || defaultLabel}</span>;
   }
 
   return isEditMode ? (
@@ -106,7 +106,7 @@ export const DndColumnSelectPopoverTitle = ({
         onClick={onClick}
         onBlur={onBlur}
       >
-        {title || defaultLabel}
+        <bdi>{title || defaultLabel}</bdi>
         &nbsp;
         <Icons.EditOutlined
           iconColor={isHovered ? theme.colorPrimary : theme.colorText}

@@ -18,7 +18,7 @@
  */
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { t } from '@apache-superset/core/translation';
-import { css, styled } from '@apache-superset/core/theme';
+import { css, styled, useIsRtl } from '@apache-superset/core/theme';
 import { Button, Input, Popover, Select } from '@superset-ui/core/components';
 import { Radio } from '@superset-ui/core/components/Radio';
 import { Icons } from '@superset-ui/core/components/Icons';
@@ -253,6 +253,16 @@ function HeaderGroupForm({
   const isTopLevel = path.length === 1;
   const hasSubgroups = (group.children ?? []).length > 0;
   const canCollapse = showRemove || hasSubgroups;
+  // Groups follow the reading direction of the table: the stored `left` side
+  // and a lower index are the right-hand side in right-to-left layouts, so
+  // the physical wording and the arrows swap there.
+  const isRtl = useIsRtl();
+  const [moveBackwardLabel, moveForwardLabel] = isRtl
+    ? [t('Move group right'), t('Move group left')]
+    : [t('Move group left'), t('Move group right')];
+  const [BackwardIcon, ForwardIcon] = isRtl
+    ? [Icons.RightOutlined, Icons.LeftOutlined]
+    : [Icons.LeftOutlined, Icons.RightOutlined];
   const isCollapseControlled = settingsCollapsedProp !== undefined;
   const settingsCollapsed = isCollapseControlled
     ? Boolean(settingsCollapsedProp)
@@ -276,18 +286,18 @@ function HeaderGroupForm({
             <Button
               buttonStyle="link"
               buttonSize="small"
-              aria-label={t('Move group left')}
+              aria-label={moveBackwardLabel}
               disabled={path[path.length - 1] === 0}
               onClick={() => onMove(path, path[path.length - 1] - 1)}
-              icon={<Icons.LeftOutlined iconSize="s" />}
+              icon={<BackwardIcon iconSize="s" />}
             />
             <Button
               buttonStyle="link"
               buttonSize="small"
-              aria-label={t('Move group right')}
+              aria-label={moveForwardLabel}
               disabled={path[path.length - 1] >= siblingCount - 1}
               onClick={() => onMove(path, path[path.length - 1] + 1)}
-              icon={<Icons.RightOutlined iconSize="s" />}
+              icon={<ForwardIcon iconSize="s" />}
             />
             <Button
               buttonStyle="link"
@@ -351,9 +361,15 @@ function HeaderGroupForm({
                     })
                   }
                 >
-                  {LABEL_ALIGN_OPTIONS.map(option => (
+                  {LABEL_ALIGN_OPTIONS.map((option, index) => (
                     <Radio.Button key={option.value} value={option.value}>
-                      {option.label}
+                      {/* The stored value is the reading-start side, like
+                          the table side below, so the labels swap. */}
+                      {isRtl
+                        ? LABEL_ALIGN_OPTIONS[
+                            LABEL_ALIGN_OPTIONS.length - 1 - index
+                          ].label
+                        : option.label}
                     </Radio.Button>
                   ))}
                 </Radio.Group>
@@ -375,9 +391,13 @@ function HeaderGroupForm({
                     })
                   }
                 >
-                  {PLACEMENT_OPTIONS.map(option => (
+                  {PLACEMENT_OPTIONS.map((option, index) => (
                     <Radio.Button key={option.value} value={option.value}>
-                      {option.label}
+                      {isRtl
+                        ? PLACEMENT_OPTIONS[
+                            PLACEMENT_OPTIONS.length - 1 - index
+                          ].label
+                        : option.label}
                     </Radio.Button>
                   ))}
                 </Radio.Group>

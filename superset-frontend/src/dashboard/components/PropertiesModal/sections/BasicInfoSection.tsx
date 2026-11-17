@@ -20,6 +20,7 @@ import { t } from '@apache-superset/core/translation';
 import { FormItem, Input, FormInstance } from '@superset-ui/core/components';
 import { ModalFormField } from 'src/components/Modal';
 import { ValidationObject } from 'src/components/Modal/useModalValidation';
+import { USER_TEXT_STYLE } from 'src/dashboard/util/userTextDirection';
 
 interface BasicInfoSectionProps {
   form: FormInstance;
@@ -57,6 +58,7 @@ const BasicInfoSection = ({
           <Input
             placeholder={t('The display name of your dashboard')}
             data-test="dashboard-title-input"
+            style={USER_TEXT_STYLE}
             type="text"
           />
         </FormItem>
@@ -70,6 +72,8 @@ const BasicInfoSection = ({
           <Input
             placeholder={t('A readable URL for your dashboard')}
             data-test="dashboard-slug-input"
+            dir="ltr"
+            style={{ direction: 'ltr' }}
             type="text"
           />
         </FormItem>
@@ -83,6 +87,7 @@ const BasicInfoSection = ({
           <Input.TextArea
             placeholder={t('A description for your dashboard')}
             data-test="dashboard-description-input"
+            style={USER_TEXT_STYLE}
           />
         </FormItem>
       </ModalFormField>

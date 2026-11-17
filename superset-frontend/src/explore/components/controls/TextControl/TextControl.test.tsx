@@ -307,3 +307,27 @@ test('should drop a pending edit on unmount', () => {
     jest.useRealTimers();
   }
 });
+
+test('lets the value decide its direction in right-to-left layouts', () => {
+  // A format, a URL or a negative number is reordered when laid out
+  // right-to-left; free text in Arabic still resolves to right-to-left.
+  render(<TextControl {...mockedProps} value="%Y-%m-%d" />, {
+    direction: 'rtl',
+  });
+
+  const input = screen.getByRole('textbox');
+  expect(input).toHaveAttribute('dir', 'auto');
+  expect(input).not.toHaveClass('ant-input-rtl');
+});
+
+test('keeps an empty text control in the direction of the interface', () => {
+  render(<TextControl {...mockedProps} value="" />, { direction: 'rtl' });
+
+  expect(screen.getByRole('textbox')).not.toHaveAttribute('dir');
+});
+
+test('adds no direction attribute in left-to-right layouts', () => {
+  render(<TextControl {...mockedProps} value="%Y-%m-%d" />);
+
+  expect(screen.getByRole('textbox')).not.toHaveAttribute('dir');
+});

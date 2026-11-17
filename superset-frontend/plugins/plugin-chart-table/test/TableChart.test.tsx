@@ -307,7 +307,9 @@ test('marks dimension header groups and applies label alignment', () => {
 
   expect(dimHeader).toBeDefined();
   expect(dimHeader?.getAttribute('data-dimension-separator')).toBe('true');
-  expect(dimHeader?.getAttribute('style')).toContain('left');
+  // "left" is applied as the logical `start`, so that the label sits at the
+  // start of the header in both left-to-right and right-to-left tables.
+  expect(dimHeader).toHaveStyle({ textAlign: 'start' });
 });
 
 test('renders multi-level header groups above column names', () => {

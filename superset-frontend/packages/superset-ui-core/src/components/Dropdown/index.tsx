@@ -19,7 +19,11 @@
 import { ReactElement, cloneElement, forwardRef } from 'react';
 
 import { Dropdown as AntdDropdown, DropdownProps } from 'antd';
-import { styled } from '@apache-superset/core/theme';
+import {
+  flipPlacement,
+  styled,
+  useDirection,
+} from '@apache-superset/core/theme';
 import { t } from '@apache-superset/core/translation';
 import { Icons } from '@superset-ui/core/components/Icons';
 import {
@@ -91,37 +95,63 @@ const RenderIcon = (
 export const MenuDotsDropdown = forwardRef<
   HTMLButtonElement,
   MenuDotsDropdownProps
->(({ overlay, iconOrientation = IconOrientation.Vertical, ...rest }, ref) => (
-  <AntdDropdown popupRender={() => overlay} {...rest}>
-    <MenuDotsWrapper
-      ref={ref}
-      type="button"
-      aria-label={t('Actions')}
-      data-test="dropdown-trigger"
-    >
-      {RenderIcon(iconOrientation)}
-    </MenuDotsWrapper>
-  </AntdDropdown>
-));
+>(
+  (
+    { overlay, iconOrientation = IconOrientation.Vertical, placement, ...rest },
+    ref,
+  ) => {
+    const direction = useDirection();
+    return (
+      <AntdDropdown
+        popupRender={() => overlay}
+        // antd mirrors only its default placement in right-to-left layouts
+        placement={flipPlacement(placement, direction)}
+        {...rest}
+      >
+        <MenuDotsWrapper
+          ref={ref}
+          type="button"
+          aria-label={t('Actions')}
+          data-test="dropdown-trigger"
+        >
+          {RenderIcon(iconOrientation)}
+        </MenuDotsWrapper>
+      </AntdDropdown>
+    );
+  },
+);
 
 MenuDotsDropdown.displayName = 'MenuDotsDropdown';
 
 export const NoAnimationDropdown = (props: NoAnimationDropdownProps) => {
-  const { children, onBlur, onKeyDown, ...rest } = props;
+  const { children, onBlur, onKeyDown, placement, ...rest } = props;
+  const direction = useDirection();
   const childrenWithProps = cloneElement(children as ReactElement, {
     onBlur,
     onKeyDown,
   });
 
   return (
-    <AntdDropdown autoFocus overlayStyle={props.overlayStyle} {...rest}>
+    <AntdDropdown
+      autoFocus
+      overlayStyle={props.overlayStyle}
+      placement={flipPlacement(placement, direction)}
+      {...rest}
+    >
       {childrenWithProps}
     </AntdDropdown>
   );
 };
 
-export const Dropdown = (props: DropdownProps) => (
-  <AntdDropdown autoFocus {...props} />
-);
+export const Dropdown = ({ placement, ...props }: DropdownProps) => {
+  const direction = useDirection();
+  return (
+    <AntdDropdown
+      autoFocus
+      placement={flipPlacement(placement, direction)}
+      {...props}
+    />
+  );
+};
 
 export type { DropdownProps, NoAnimationDropdownProps, MenuDotsDropdownProps };

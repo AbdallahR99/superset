@@ -337,7 +337,10 @@ export default function DateFilterLabel(props: DateFilterControlProps) {
         <div className="section-title">{t('Actual time range')}</div>
         {validTimeRange && (
           <div>
-            {evalResponse === 'No filter' ? t('No filter') : evalResponse}
+            {/* The evaluated range is an expression; it keeps its own order. */}
+            <bdi>
+              {evalResponse === 'No filter' ? t('No filter') : evalResponse}
+            </bdi>
           </div>
         )}
         {!validTimeRange && (

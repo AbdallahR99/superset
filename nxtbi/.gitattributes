@@ -1,0 +1,4 @@
+# Everything here is mounted into Linux containers: keep LF endings on every platform.
+* text=auto eol=lf
+*.png binary
+*.woff2 binary

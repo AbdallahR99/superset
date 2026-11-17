@@ -43,3 +43,52 @@ describe('ResizableContainer', () => {
     expect(resizableContainer).toBeVisible();
   });
 });
+
+const editableProps: ResizableContainerProps = {
+  editMode: true,
+  id: 'id',
+  heightMultiple: 10,
+  widthMultiple: 4,
+};
+
+const widthHandle = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>('.resizable-container-handle--right');
+
+test('left-to-right puts the width handles on the right edge', () => {
+  const { container } = render(<ResizableContainer {...editableProps} />);
+  expect(widthHandle(container)?.style.right).toBe('-5px');
+  expect(widthHandle(container)?.style.left).toBe('');
+  const corner = container.querySelector('.resize-handle--bottom-right')
+    ?.parentElement as HTMLElement;
+  expect(corner.style.right).toBe('-10px');
+  expect(corner.style.cursor).toBe('se-resize');
+});
+
+test('right-to-left puts the width handles on the left edge', () => {
+  const { container } = render(<ResizableContainer {...editableProps} />, {
+    direction: 'rtl',
+  });
+  // same class and handle components (their styles are mirrored), but
+  // re-resizable anchors them to the physical left edge
+  expect(widthHandle(container)?.style.left).toBe('-5px');
+  expect(widthHandle(container)?.style.right).toBe('');
+  expect(
+    widthHandle(container)?.querySelector('.resize-handle--right'),
+  ).toBeInTheDocument();
+  const corner = container.querySelector('.resize-handle--bottom-right')
+    ?.parentElement as HTMLElement;
+  expect(corner.style.left).toBe('-10px');
+  expect(corner.style.cursor).toBe('sw-resize');
+  expect(
+    container.querySelector('.resizable-container-handle--bottom'),
+  ).toBeInTheDocument();
+});
+
+test('the height label keeps its physical offset from the pointer in right-to-left', () => {
+  render(<ResizableContainer {...editableProps} />, { direction: 'rtl' });
+  // rendered in a portal on document.body, positioned with physical pixels
+  const label = Array.from(document.body.children).find(
+    node => (node as HTMLElement).style.display === 'none',
+  );
+  expect(label).toHaveStyleRule('transform', 'translate(12px, 12px)');
+});

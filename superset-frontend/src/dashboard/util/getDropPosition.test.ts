@@ -32,7 +32,9 @@ import {
   HEADER_TYPE,
   ROW_TYPE,
   TAB_TYPE,
+  TABS_TYPE,
 } from 'src/dashboard/util/componentTypes';
+import reorderItem from 'src/dashboard/util/dnd-reorder';
 
 // Cast to accept partial mock data in tests
 const getDropPosition = getDropPositionOriginal as (
@@ -539,4 +541,134 @@ test('allows a drop on an unrelated component', () => {
       }),
     ),
   ).not.toBe(DROP_FORBIDDEN);
+});
+
+// A tab dragged over a sibling tab: the only drop whose left/right result is
+// consumed (by reorderItem and by the tab drop indicators).
+const tabOverTabMocks = (clientX: number) => [
+  {
+    getItem: () => ({ id: 'TAB-dragged', type: TAB_TYPE }),
+    getClientOffset: () => ({ x: clientX, y: 10 }),
+  },
+  {
+    props: {
+      depth: 1,
+      component: { id: 'TAB-target', type: TAB_TYPE, children: [] },
+      parentComponent: { id: 'TABS-parent', type: TABS_TYPE, children: [] },
+      orientation: 'column',
+      isDraggingOverShallow: true,
+    },
+    ref: {
+      getBoundingClientRect: () => ({
+        top: 0,
+        right: 200,
+        bottom: 40,
+        left: 100,
+      }),
+    },
+  },
+];
+
+const tabsEntities = () => ({
+  'TABS-parent': {
+    id: 'TABS-parent',
+    type: TABS_TYPE,
+    children: ['TAB-a', 'TAB-target', 'TAB-dragged'],
+  },
+});
+
+afterEach(() => {
+  document.documentElement.removeAttribute('dir');
+});
+
+test('left-to-right: the physical left half of a tab is the "before" side', () => {
+  expect(getDropPosition(...tabOverTabMocks(110))).toBe(DROP_LEFT);
+  expect(getDropPosition(...tabOverTabMocks(190))).toBe(DROP_RIGHT);
+});
+
+test('right-to-left: the physical left half of a tab is the "after" side', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  expect(getDropPosition(...tabOverTabMocks(110))).toBe(DROP_RIGHT);
+  expect(getDropPosition(...tabOverTabMocks(190))).toBe(DROP_LEFT);
+});
+
+test('right-to-left: dropping on the visual left of a tab inserts after it', () => {
+  // Tabs render right-to-left, so the visual left neighbour of a tab is the
+  // next child in the persisted (reading-order) list.
+  document.documentElement.setAttribute('dir', 'rtl');
+  const result = reorderItem({
+    entitiesMap: tabsEntities(),
+    source: { id: 'TABS-parent', type: TABS_TYPE, index: 2 },
+    destination: { id: 'TABS-parent', type: TABS_TYPE, index: 1 },
+    position: getDropPosition(...tabOverTabMocks(110)),
+  });
+  // already the next child of the target: nothing moves
+  expect(result['TABS-parent'].children).toEqual([
+    'TAB-a',
+    'TAB-target',
+    'TAB-dragged',
+  ]);
+});
+
+test('right-to-left: dropping on the visual right of a tab inserts before it', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  const result = reorderItem({
+    entitiesMap: tabsEntities(),
+    source: { id: 'TABS-parent', type: TABS_TYPE, index: 2 },
+    destination: { id: 'TABS-parent', type: TABS_TYPE, index: 1 },
+    position: getDropPosition(...tabOverTabMocks(190)),
+  });
+  expect(result['TABS-parent'].children).toEqual([
+    'TAB-a',
+    'TAB-dragged',
+    'TAB-target',
+  ]);
+});
+
+test('right-to-left leaves the append/prepend and top/bottom results alone', () => {
+  document.documentElement.setAttribute('dir', 'rtl');
+  // valid child + invalid sibling: logical prepend/append, no pointer involved
+  const dropOnGrid = (hasChildren: boolean) =>
+    getDropPosition(
+      {
+        getItem: () => ({ id: 'id', type: HEADER_TYPE }),
+        getClientOffset: () => ({ x: 0, y: 0 }),
+      },
+      {
+        props: {
+          depth: 1,
+          parentComponent: { type: DASHBOARD_ROOT_TYPE },
+          component: {
+            type: DASHBOARD_GRID_TYPE,
+            children: hasChildren ? [''] : [],
+          },
+          orientation: 'row',
+          isDraggingOverShallow: true,
+        },
+        ref: { getBoundingClientRect: () => ({}) },
+      },
+    );
+  expect(dropOnGrid(false)).toBe(DROP_LEFT);
+  expect(dropOnGrid(true)).toBe(DROP_RIGHT);
+
+  // vertical siblings do not depend on direction
+  const dropOnRow = (clientY: number) =>
+    getDropPosition(
+      {
+        getItem: () => ({ id: 'id', type: HEADER_TYPE }),
+        getClientOffset: () => ({ x: 0, y: clientY }),
+      },
+      {
+        props: {
+          depth: 1,
+          parentComponent: { type: DASHBOARD_GRID_TYPE },
+          component: { type: ROW_TYPE, children: [] },
+          orientation: 'row',
+          isDraggingOverShallow: true,
+        },
+        ref: { getBoundingClientRect: () => ({ top: 0, bottom: 100 }) },
+      },
+    );
+  expect(dropOnRow(10)).toBe(DROP_TOP);
+  expect(dropOnRow(60)).toBe(DROP_BOTTOM);
 });

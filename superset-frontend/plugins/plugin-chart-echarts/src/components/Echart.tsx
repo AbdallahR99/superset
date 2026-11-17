@@ -475,6 +475,11 @@ function Echart(
     <Styles
       ref={divRef}
       className={ECHARTS_HOST_CLASS}
+      // A canvas inherits the direction of its host for the bidirectional
+      // resolution of neutral characters (`-5`, `10%`, `(1, 2)`), so the plot
+      // stays left-to-right even when an ancestor is right-to-left (charts
+      // that follow the interface direction, such as Big Number).
+      dir="ltr"
       height={height}
       width={width}
     />

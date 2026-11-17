@@ -18,7 +18,11 @@
  */
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { HandlerFunction, JsonValue } from '@superset-ui/core';
-import { styled } from '@apache-superset/core/theme';
+import {
+  DirectionProvider,
+  getDocumentDirection,
+  styled,
+} from '@apache-superset/core/theme';
 import { sharedControlComponents } from '@superset-ui/chart-controls';
 import { AreaChartStackControlOptions } from '../constants';
 
@@ -98,13 +102,20 @@ export function ExtraControls<
     return null;
   }
 
+  // The controls are ordinary interface rendered inside the chart container,
+  // which is kept left-to-right for the plot: give them the page direction
+  // back. Left-to-right pages keep their markup unchanged.
+  const pageDirection = getDocumentDirection();
+
   return (
-    <ExtraControlsWrapper>
-      <RadioButtonControl
-        options={extraControlsOptions}
-        onChange={extraControlsHandler}
-        value={extraValue}
-      />
-    </ExtraControlsWrapper>
+    <DirectionProvider direction={pageDirection}>
+      <ExtraControlsWrapper dir={pageDirection === 'rtl' ? 'rtl' : undefined}>
+        <RadioButtonControl
+          options={extraControlsOptions}
+          onChange={extraControlsHandler}
+          value={extraValue}
+        />
+      </ExtraControlsWrapper>
+    </DirectionProvider>
   );
 }

@@ -136,7 +136,7 @@ function ArchivedRowActions({
         label={t('Recover')}
         tooltip={t('Recover this item')}
         placement="bottom"
-        icon={<Icons.RollbackOutlined iconSize="l" />}
+        icon={<Icons.RollbackOutlined iconSize="l" mirrorInRtl />}
         dataTest="archived-row-restore"
         disabled={busy}
         onClick={() => onRestore(item)}

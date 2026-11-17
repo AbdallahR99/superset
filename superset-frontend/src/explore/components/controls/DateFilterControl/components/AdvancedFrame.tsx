@@ -20,6 +20,7 @@ import { t } from '@apache-superset/core/translation';
 import { SEPARATOR } from '@superset-ui/core';
 import { Input, Icons, InfoTooltip } from '@superset-ui/core/components';
 import { FrameComponentProps } from 'src/explore/components/controls/DateFilterControl/types';
+import InputDirection from 'src/explore/components/controls/shared/InputDirection';
 import DateFunctionTooltip from './DateFunctionTooltip';
 
 function getAdvancedRange(value: string): string {
@@ -65,11 +66,14 @@ export function AdvancedFrame(props: FrameComponentProps) {
           placement="right"
         />
       </div>
-      <Input
-        key="since"
-        value={since}
-        onChange={e => onChange('since', e.target.value)}
-      />
+      {/* Date expressions (`Last week`, `DATEADD(...)`) read left-to-right. */}
+      <InputDirection mode="ltr">
+        <Input
+          key="since"
+          value={since}
+          onChange={e => onChange('since', e.target.value)}
+        />
+      </InputDirection>
       <div className="control-label">
         {t('End (exclusive)')}{' '}
         <InfoTooltip
@@ -77,11 +81,13 @@ export function AdvancedFrame(props: FrameComponentProps) {
           placement="right"
         />
       </div>
-      <Input
-        key="until"
-        value={until}
-        onChange={e => onChange('until', e.target.value)}
-      />
+      <InputDirection mode="ltr">
+        <Input
+          key="until"
+          value={until}
+          onChange={e => onChange('until', e.target.value)}
+        />
+      </InputDirection>
     </>
   );
 }

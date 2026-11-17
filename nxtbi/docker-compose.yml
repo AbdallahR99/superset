@@ -1,0 +1,187 @@
+# NxtBI Superset demo. Additive overlay: nothing outside nxtbi/ is modified.
+# Read nxtbi/README.md first. From the repository root:
+#
+#   python nxtbi/scripts/gen_env.py                       # once: nxtbi/.env with random secrets
+#   python nxtbi/scripts/keycloak_setup.py apply          # once per Keycloak container: client, groups, users
+#   docker compose -f nxtbi/docker-compose.yml up -d --build
+#   python nxtbi/scripts/smoke_test.py
+#
+# Web UI  http://localhost:8088      MCP  http://localhost:5008/mcp (bearer token required)
+# Published ports are bound to 127.0.0.1. Data lives in named volumes: `down` keeps it,
+# `down -v` deletes it and the next `up` rebuilds everything from code.
+#
+# Values come from nxtbi/.env by interpolation. Each container receives only the
+# variables it needs; host-only secrets (Keycloak user passwords) never enter a container.
+name: nxtbi-superset
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+# The image is built straight from the fork's own Dockerfile (target "superset":
+# lean + postgres/mysql drivers + fastmcp + Playwright Chromium) with Arabic and the
+# other language packs compiled in. No NxtBI-specific image layer exists.
+x-superset: &superset
+  image: nxtbi/superset-fork:local
+  build:
+    context: ..
+    dockerfile: Dockerfile
+    target: superset
+    args:
+      BUILD_TRANSLATIONS: "true"
+  environment: &superset-env
+    SUPERSET_ENV: production
+    FLASK_DEBUG: "false"
+    DEV_MODE: "false"
+    PYTHONUNBUFFERED: "1"
+    DATABASE_HOST: db
+    DATABASE_PORT: "5432"
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL:-http://localhost:8088}
+    SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?run python nxtbi/scripts/gen_env.py}
+    GUEST_TOKEN_JWT_SECRET: ${GUEST_TOKEN_JWT_SECRET:?run python nxtbi/scripts/gen_env.py}
+    POSTGRES_DB: ${POSTGRES_DB:-superset}
+    POSTGRES_USER: ${POSTGRES_USER:-superset}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+    EXAMPLES_PASSWORD: ${EXAMPLES_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+    NXTBI_DEMO_RO_PASSWORD: ${NXTBI_DEMO_RO_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+    SUPERSET_SERVICE_USERNAME: ${SUPERSET_SERVICE_USERNAME:-nxtbi-service}
+    KEYCLOAK_BROWSER_URL: ${KEYCLOAK_BROWSER_URL:-http://localhost:8180}
+    KEYCLOAK_INTERNAL_URL: ${KEYCLOAK_INTERNAL_URL:-http://host.docker.internal:8180}
+    KEYCLOAK_REALM: ${KEYCLOAK_REALM:-nxtbi}
+    KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-nxtbi-superset}
+    KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?run python nxtbi/scripts/gen_env.py}
+    KEYCLOAK_SCOPE: ${KEYCLOAK_SCOPE:-openid groups}
+    NXTBI_PLATFORM_ADMINS: ${NXTBI_PLATFORM_ADMINS:-}
+    NXTBI_EXPERIMENTAL_FLAGS: ${NXTBI_EXPERIMENTAL_FLAGS:-}
+    NXTBI_MCP_AUTH: ${NXTBI_MCP_AUTH:-local-jwt}
+    MCP_JWT_SECRET: ${MCP_JWT_SECRET:?run python nxtbi/scripts/gen_env.py --add-missing}
+    SMTP_HOST: ${SMTP_HOST:-host.docker.internal}
+    SMTP_PORT: ${SMTP_PORT:-1025}
+    SMTP_MAIL_FROM: ${SMTP_MAIL_FROM:-nxtbi-superset@nxtbi.local}
+  volumes:
+    - ./config:/app/pythonpath:ro
+    - ./assets:/app/superset/static/nxtbi:ro
+    - ./bootstrap:/app/nxtbi/bootstrap:ro
+    - ./seed:/app/nxtbi/seed:ro
+    - superset_home:/app/superset_home
+  # Keycloak (and Mailpit) run on the host loopback, outside this compose project.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  restart: unless-stopped
+  logging: *logging
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-superset}
+      POSTGRES_USER: ${POSTGRES_USER:-superset}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+      EXAMPLES_PASSWORD: ${EXAMPLES_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+      NXTBI_DEMO_OWNER_PASSWORD: ${NXTBI_DEMO_OWNER_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+      NXTBI_DEMO_RO_PASSWORD: ${NXTBI_DEMO_RO_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-nxtbi.sh:ro
+    healthcheck:
+      # TCP on purpose: the temporary server that runs the init script only listens on the
+      # unix socket, so this cannot pass before all three databases exist.
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -U $$POSTGRES_USER -d nxtbi_demo -tAc 'select 1' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 30
+    restart: unless-stopped
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
+
+  # One-shot: migrations, roles, demo warehouse, examples, dashboards-as-code, RLS.
+  # Runs on every `up` and converges (see bootstrap/init.sh for the switches).
+  superset-init:
+    <<: *superset
+    command: ["bash", "/app/nxtbi/bootstrap/init.sh"]
+    environment:
+      <<: *superset-env
+      NXTBI_DEMO_OWNER_PASSWORD: ${NXTBI_DEMO_OWNER_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+      SUPERSET_SERVICE_PASSWORD: ${SUPERSET_SERVICE_PASSWORD:?run python nxtbi/scripts/gen_env.py}
+      SUPERSET_LOAD_EXAMPLES: ${SUPERSET_LOAD_EXAMPLES:-yes}
+      SUPERSET_FORCE_LOAD_EXAMPLES: ${SUPERSET_FORCE_LOAD_EXAMPLES:-no}
+      NXTBI_FORCE_SEED: ${NXTBI_FORCE_SEED:-no}
+      NXTBI_SKIP_CONTENT_IMPORT: ${NXTBI_SKIP_CONTENT_IMPORT:-no}
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck: {disable: true}
+    restart: "no"
+
+  superset:
+    <<: *superset
+    command: ["/usr/bin/run-server.sh"]
+    environment:
+      <<: *superset-env
+      SUPERSET_PORT: "8088"
+      SERVER_WORKER_AMOUNT: "4"
+      SERVER_THREADS_AMOUNT: "20"
+      GUNICORN_TIMEOUT: "120"
+    ports:
+      - "127.0.0.1:8088:8088"
+    depends_on:
+      superset-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8088/health"]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 10
+
+  # SQL Lab async queries, thumbnails, alerts & reports (Playwright Chromium).
+  superset-worker:
+    <<: *superset
+    command: ["celery", "--app=superset.tasks.celery_app:app", "worker", "-O", "fair", "-l", "INFO", "--concurrency=4"]
+    depends_on:
+      superset-init: {condition: service_completed_successfully}
+    healthcheck: {disable: true}
+
+  superset-beat:
+    <<: *superset
+    command: ["celery", "--app=superset.tasks.celery_app:app", "beat", "-l", "INFO", "--pidfile", "/tmp/celerybeat.pid", "-s", "/tmp/celerybeat-schedule"]
+    depends_on:
+      superset-init: {condition: service_completed_successfully}
+    healthcheck: {disable: true}
+
+  # Model Context Protocol server (streamable HTTP at /mcp). Callers authenticate with a
+  # bearer token (see NXTBI_MCP_AUTH in config/superset_config.py and scripts/mcp_token.py).
+  superset-mcp:
+    <<: *superset
+    command: ["superset", "mcp", "run", "--host", "0.0.0.0", "--port", "5008"]
+    ports:
+      - "127.0.0.1:5008:5008"
+    depends_on:
+      superset: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5008/health"]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 10
+
+volumes:
+  db_data:
+  redis_data:
+  superset_home:

@@ -152,3 +152,39 @@ test('renders AddIconButton', () => {
   const { container } = render(<AddIconButton />);
   expect(container).toBeInTheDocument();
 });
+
+test('mirrors the caret of a pill in right-to-left layouts only', () => {
+  // The caret points at the popover the pill opens, on its inline-end side.
+  const { unmount } = render(
+    <CaretContainer data-test="caret">
+      <span className="anticon" />
+    </CaretContainer>,
+  );
+  expect(screen.getByTestId('caret')).not.toHaveStyleRule(
+    'transform',
+    'scaleX(-1)',
+    { target: '.anticon' },
+  );
+  unmount();
+
+  render(
+    <CaretContainer data-test="caret">
+      <span className="anticon" />
+    </CaretContainer>,
+    { direction: 'rtl' },
+  );
+  expect(screen.getByTestId('caret')).toHaveStyleRule(
+    'transform',
+    'scaleX(-1)',
+    { target: '.anticon' },
+  );
+  // The separator and the push to the end of the pill are mirrored by the
+  // style engine.
+  expect(screen.getByTestId('caret')).toHaveStyleRule('margin-right', 'auto');
+});
+
+test('lets the label of a pill resolve its own direction', async () => {
+  setup({ label: 'SUM(amount)', tooltipTitle: 'SUM(amount)' });
+
+  expect(await screen.findByText('SUM(amount)')).toHaveAttribute('dir', 'auto');
+});

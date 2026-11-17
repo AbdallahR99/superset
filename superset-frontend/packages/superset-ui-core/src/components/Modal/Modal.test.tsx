@@ -73,6 +73,21 @@ describe('mergeResizableConfig', () => {
     });
   });
 
+  test('moves the default horizontal handles to the left edge in a right-to-left layout', () => {
+    const config = mergeResizableConfig(false, { minWidth: 512 }, true);
+
+    expect(config.enable).toEqual({
+      bottom: true,
+      bottomLeft: true,
+      bottomRight: false,
+      left: true,
+      top: false,
+      topLeft: false,
+      topRight: false,
+      right: false,
+    });
+  });
+
   test('preserves explicit enable: false opt-out', () => {
     const config = mergeResizableConfig(false, { enable: false });
 
@@ -123,6 +138,38 @@ describe('Modal resizable', () => {
       screen.queryByTestId('resize-handle-top-left'),
     ).not.toBeInTheDocument();
   });
+});
+
+test('a resizable modal renders its handles on the left edge in a right-to-left layout', () => {
+  const handleComponent = {
+    right: <span data-test="resize-handle-right" />,
+    bottom: <span data-test="resize-handle-bottom" />,
+    left: <span data-test="resize-handle-left" />,
+    bottomRight: <span data-test="resize-handle-bottom-right" />,
+    bottomLeft: <span data-test="resize-handle-bottom-left" />,
+  };
+
+  render(
+    <Modal
+      show
+      onHide={() => {}}
+      title="Edit Dataset"
+      name="test"
+      resizable
+      resizableConfig={{ minWidth: 512, handleComponent }}
+    >
+      content
+    </Modal>,
+    { direction: 'rtl' },
+  );
+
+  expect(screen.getByTestId('resize-handle-left')).toBeInTheDocument();
+  expect(screen.getByTestId('resize-handle-bottom')).toBeInTheDocument();
+  expect(screen.getByTestId('resize-handle-bottom-left')).toBeInTheDocument();
+  expect(screen.queryByTestId('resize-handle-right')).not.toBeInTheDocument();
+  expect(
+    screen.queryByTestId('resize-handle-bottom-right'),
+  ).not.toBeInTheDocument();
 });
 
 describe('Modal draggable', () => {

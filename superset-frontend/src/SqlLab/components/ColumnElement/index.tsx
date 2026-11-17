@@ -19,7 +19,7 @@
 import { ReactNode } from 'react';
 import { ClassNames } from '@emotion/react';
 import { t } from '@apache-superset/core/translation';
-import { styled, useTheme } from '@apache-superset/core/theme';
+import { noFlip, styled, useTheme } from '@apache-superset/core/theme';
 import { Flex, Tooltip } from '@superset-ui/core/components';
 
 const StyledTooltip = (props: any) => {
@@ -37,7 +37,7 @@ const StyledTooltip = (props: any) => {
               pre {
                 background: transparent;
                 border: none;
-                text-align: left;
+                ${noFlip} text-align: left;
                 color: ${theme.colorBgLayout};
                 font-size: ${theme.fontSizeXS}px;
               }
@@ -84,10 +84,14 @@ const ColumnType = styled.div`
 `;
 
 const ColumnElement = ({ column, actions }: ColumnElementProps) => {
-  let columnName: ReactNode = column.name;
+  let columnName: ReactNode = <bdi>{column.name}</bdi>;
   let icons;
   if (column.keys && column.keys.length > 0) {
-    columnName = <strong>{column.name}</strong>;
+    columnName = (
+      <strong>
+        <bdi>{column.name}</bdi>
+      </strong>
+    );
     icons = column.keys.map((key, i) => (
       <span key={i} className="ColumnElement">
         <StyledTooltip
@@ -96,7 +100,7 @@ const ColumnElement = ({ column, actions }: ColumnElementProps) => {
             <>
               <strong>{tooltipTitleMap[key.type]}</strong>
               <Hr />
-              <pre className="text-small">
+              <pre className="text-small" dir="ltr">
                 {JSON.stringify(key, null, '  ')}
               </pre>
             </>
@@ -115,7 +119,7 @@ const ColumnElement = ({ column, actions }: ColumnElementProps) => {
         {icons}
         {actions}
       </div>
-      <ColumnType>{column.type}</ColumnType>
+      <ColumnType dir="ltr">{column.type}</ColumnType>
     </Flex>
   );
 };

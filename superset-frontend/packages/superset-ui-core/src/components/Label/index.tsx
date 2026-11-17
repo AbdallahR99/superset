@@ -111,6 +111,14 @@ export const Label = forwardRef<HTMLSpanElement, LabelProps>((props, ref) => {
         )
       }
       css={labelStyles}
+      /*
+       * Labels mostly hold short values that are not prose in the interface
+       * language: database, schema, table and column names, types, counts,
+       * durations. `auto` lets the content pick its own direction, so that an
+       * identifier such as `VARCHAR(255)` is not reordered inside a
+       * right-to-left interface, while translated text still reads naturally.
+       */
+      dir="auto"
       {...rest}
     >
       {children}

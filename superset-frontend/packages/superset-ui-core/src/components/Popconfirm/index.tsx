@@ -18,9 +18,17 @@
  */
 import { Popconfirm as AntdPopconfirm } from 'antd';
 import { PopconfirmProps as AntdPopconfirmProps } from 'antd/es/popconfirm';
+import { flipPlacement, useDirection } from '@apache-superset/core/theme';
 
 export interface PopconfirmProps extends AntdPopconfirmProps {}
 
-export const Popconfirm = (props: PopconfirmProps) => (
-  <AntdPopconfirm {...props} />
-);
+export const Popconfirm = ({ placement, ...props }: PopconfirmProps) => {
+  const direction = useDirection();
+  return (
+    <AntdPopconfirm
+      // antd mirrors only its default placement in right-to-left layouts
+      placement={flipPlacement(placement, direction)}
+      {...props}
+    />
+  );
+};

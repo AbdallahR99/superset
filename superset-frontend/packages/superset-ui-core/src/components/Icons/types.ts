@@ -27,6 +27,14 @@ export type IconType = AntdIconProps & {
   iconSize?: 'xs' | 's' | 'm' | 'l' | 'xl' | 'xxl';
   fileName?: string;
   customIcons?: boolean;
+  /**
+   * Mirror the icon horizontally in right-to-left layouts. Opt in for icons
+   * that imply a direction of reading or movement (back and forward arrows,
+   * sideways expand carets, submenu chevrons). Leave it off for symmetric
+   * icons, brand marks, check marks, clocks, media controls and icons that
+   * contain text or digits.
+   */
+  mirrorInRtl?: boolean;
 };
 
 export type CustomIconType = ComponentType<SVGProps<SVGSVGElement>>;

@@ -48,7 +48,7 @@ import {
   ControlStateMapping,
   ControlPanelState,
 } from '@superset-ui/chart-controls';
-import { styled, css, useTheme } from '@apache-superset/core/theme';
+import { styled, css, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { t } from '@apache-superset/core/translation';
 import { logging } from '@apache-superset/core/utils';
 import { debounce, isEqual, isObjectLike, omit, pick } from 'lodash-es';
@@ -458,6 +458,13 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
   );
 
   const theme = useTheme();
+  const isRtl = useIsRtl();
+  // The side panels grow towards the chart, so their resize handle sits on the
+  // inline-end edge: the right one left-to-right, the left one right-to-left.
+  const resizeEdge = useMemo(
+    () => (isRtl ? { left: true } : { right: true }),
+    [isRtl],
+  );
 
   // Update document title when slice name changes
   useEffect(() => {
@@ -999,7 +1006,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
 
     let errorMessage;
     if (errors.length > 0) {
-      errorMessage = <div style={{ textAlign: 'left' }}>{errors}</div>;
+      errorMessage = <div style={{ textAlign: 'start' }}>{errors}</div>;
     }
     return errorMessage;
   }, [props.controls]);
@@ -1158,7 +1165,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
           }}
           minWidth={defaultSidebarsWidth[LocalStorageKeys.DatasourceWidth]}
           maxWidth="33%"
-          enable={{ right: true }}
+          enable={resizeEdge}
           className={
             isCollapsed ? 'no-show' : 'explore-column data-source-selection'
           }
@@ -1171,7 +1178,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
                 <Icons.VerticalAlignTopOutlined
                   iconSize="xl"
                   css={css`
-                    transform: rotate(-90deg);
+                    transform: rotate(${isRtl ? 90 : -90}deg);
                   `}
                   className="collapse-icon"
                   iconColor={theme.colorPrimary}
@@ -1228,7 +1235,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
                 <Icons.VerticalAlignTopOutlined
                   iconSize="xl"
                   css={css`
-                    transform: rotate(90deg);
+                    transform: rotate(${isRtl ? -90 : 90}deg);
                   `}
                   className="collapse-icon"
                   iconColor={theme.colorPrimary}
@@ -1247,7 +1254,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
           }}
           minWidth={defaultSidebarsWidth[LocalStorageKeys.ControlsWidth]}
           maxWidth="33%"
-          enable={{ right: true }}
+          enable={resizeEdge}
           className="col-sm-3 explore-column controls-column"
         >
           <div

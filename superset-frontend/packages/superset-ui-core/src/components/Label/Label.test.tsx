@@ -83,3 +83,21 @@ test('renders all the storybook gallery variants', () => {
     renderedLabelCount,
   );
 });
+
+test('lets its content decide its own direction', () => {
+  const { getByText } = render(<Label>VARCHAR(255)</Label>);
+  // eslint-disable-next-line testing-library/no-node-access
+  expect(getByText('VARCHAR(255)').closest('.ant-tag')).toHaveAttribute(
+    'dir',
+    'auto',
+  );
+});
+
+test('lets callers pin a direction', () => {
+  const { getByText } = render(<Label dir="ltr">00:00:01.50</Label>);
+  // eslint-disable-next-line testing-library/no-node-access
+  expect(getByText('00:00:01.50').closest('.ant-tag')).toHaveAttribute(
+    'dir',
+    'ltr',
+  );
+});

@@ -18,6 +18,7 @@
  */
 import { ReactNode } from 'react';
 import { t } from '@apache-superset/core/translation';
+import { useIsRtl } from '@apache-superset/core/theme';
 import { JsonValue } from '@superset-ui/core';
 import {
   Radio,
@@ -66,6 +67,7 @@ export default function RadioButtonControl({
 }: RadioButtonControlProps) {
   const normalizedOptions = options.map(normalizeOption);
   const currentValue = initialValue ?? normalizedOptions[0]?.value;
+  const isRtl = useIsRtl();
 
   return (
     <div>
@@ -127,7 +129,9 @@ export default function RadioButtonControl({
         aria-live="polite"
         style={{
           position: 'absolute',
-          left: '-9999px',
+          // Parked past the inline-start edge: content beyond the inline-end
+          // edge would give the page a horizontal scrollbar.
+          [isRtl ? 'right' : 'left']: '-9999px',
           height: '1px',
           width: '1px',
           overflow: 'hidden',

@@ -31,7 +31,7 @@ import {
 
 import { t } from '@apache-superset/core/translation';
 import { isFeatureEnabled, FeatureFlag } from '@superset-ui/core';
-import { css } from '@apache-superset/core/theme';
+import { css, noFlip } from '@apache-superset/core/theme';
 import { Tooltip, ImageLoader } from '@superset-ui/core/components';
 import { GenericLink, usePluginContext } from 'src/components';
 import { assetUrl } from 'src/utils/assetUrl';
@@ -156,15 +156,22 @@ const SliceAddedBadge: FC<{ placeholder?: HTMLDivElement }> = ({
       font-size: ${theme.fontSizeXS}px;
       letter-spacing: 0.02em;
       padding: ${theme.sizeUnit / 2}px ${theme.sizeUnit * 2}px;
-      margin-left: ${theme.sizeUnit * 4}px;
+      /* part of the physical offset set below, so it is not mirrored */
+      ${noFlip} margin-left: ${theme.sizeUnit * 4}px;
       pointer-events: none;
 
       /* Position styles */
       display: ${placeholder ? 'unset' : 'none'};
       position: absolute;
-      top: ${placeholder ? `${placeholder.offsetTop}px` : 'unset'};
-      left: ${placeholder ? `${placeholder.offsetLeft - 2}px` : 'unset'};
     `}
+    // The badge is drawn over the placeholder from its measured offsets.
+    // offsetLeft is a physical distance from the left edge in every text
+    // direction, so it is set inline: a styled left would be mirrored.
+    style={
+      placeholder
+        ? { top: placeholder.offsetTop, left: placeholder.offsetLeft - 2 }
+        : undefined
+    }
   >
     {t('Added')}
   </div>

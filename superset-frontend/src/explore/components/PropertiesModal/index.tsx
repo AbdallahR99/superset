@@ -33,6 +33,7 @@ import {
 } from '@superset-ui/core/components';
 import rison from 'rison';
 import { t } from '@apache-superset/core/translation';
+import { css } from '@apache-superset/core/theme';
 import {
   SupersetClient,
   isFeatureEnabled,
@@ -56,6 +57,17 @@ import SubjectPicker, {
   mapSubjectsToPickerValues,
   type SubjectPickerValue,
 } from 'src/features/subjects/SubjectPicker';
+import InputDirection from '../controls/shared/InputDirection';
+
+// The section headers show a vertical chevron (down = collapsed, up =
+// expanded) drawn by rotating the arrow's svg. In RTL antd also turns the
+// arrow wrapper by 180deg, which is meant for its horizontal arrow and would
+// show the opposite state here.
+const sectionArrowStyles = css`
+  & > .ant-collapse-item > .ant-collapse-header .ant-collapse-arrow {
+    transform: none !important;
+  }
+`;
 
 export type PropertiesModalProps = {
   slice: Slice;
@@ -336,6 +348,7 @@ function PropertiesModal({
       wrapProps={{ 'data-test': 'properties-edit-modal' }}
     >
       <Collapse
+        css={sectionArrowStyles}
         expandIconPosition="end"
         defaultActiveKey="general"
         accordion
@@ -362,15 +375,17 @@ function PropertiesModal({
                       : undefined
                   }
                 >
-                  <Input
-                    aria-label={t('Name')}
-                    data-test="properties-modal-name-input"
-                    type="text"
-                    value={name}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      setName(event.target.value ?? '')
-                    }
-                  />
+                  <InputDirection mode="auto" value={name}>
+                    <Input
+                      aria-label={t('Name')}
+                      data-test="properties-modal-name-input"
+                      type="text"
+                      value={name}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setName(event.target.value ?? '')
+                      }
+                    />
+                  </InputDirection>
                 </ModalFormField>
                 <ModalFormField
                   label={t('Description')}
@@ -378,13 +393,15 @@ function PropertiesModal({
                     'The description can be displayed as widget headers in the dashboard view. Supports markdown.',
                   )}
                 >
-                  <Input.TextArea
-                    rows={3}
-                    value={description}
-                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
-                      setDescription(event.target.value ?? '')
-                    }
-                  />
+                  <InputDirection mode="auto" value={description}>
+                    <Input.TextArea
+                      rows={3}
+                      value={description}
+                      onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                        setDescription(event.target.value ?? '')
+                      }
+                    />
+                  </InputDirection>
                 </ModalFormField>
                 {isFeatureEnabled(FeatureFlag.TaggingSystem) && (
                   <ModalFormField
@@ -495,13 +512,15 @@ function PropertiesModal({
                     'Person or group that has certified this chart.',
                   )}
                 >
-                  <Input
-                    aria-label={t('Certified by')}
-                    value={certifiedBy}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      setCertifiedBy(event.target.value ?? '')
-                    }
-                  />
+                  <InputDirection mode="auto" value={certifiedBy}>
+                    <Input
+                      aria-label={t('Certified by')}
+                      value={certifiedBy}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setCertifiedBy(event.target.value ?? '')
+                      }
+                    />
+                  </InputDirection>
                 </ModalFormField>
                 <ModalFormField
                   label={t('Certification details')}
@@ -510,13 +529,15 @@ function PropertiesModal({
                   )}
                   bottomSpacing={false}
                 >
-                  <Input
-                    aria-label={t('Certification details')}
-                    value={certificationDetails}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      setCertificationDetails(event.target.value ?? '')
-                    }
-                  />
+                  <InputDirection mode="auto" value={certificationDetails}>
+                    <Input
+                      aria-label={t('Certification details')}
+                      value={certificationDetails}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setCertificationDetails(event.target.value ?? '')
+                      }
+                    />
+                  </InputDirection>
                 </ModalFormField>
               </>
             ),

@@ -252,7 +252,7 @@ function AnnotationLayerControl({
     >
       <CustomListItem selectable>
         <span>{anno.name}</span>
-        <span style={{ float: 'right' }}>{renderInfo(anno)}</span>
+        <span style={{ float: 'inline-end' }}>{renderInfo(anno)}</span>
       </CustomListItem>
     </ControlPopover>
   ));

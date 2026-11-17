@@ -23,11 +23,12 @@ import { Button, Icons, Select } from '@superset-ui/core/components';
 import { ErrorBoundary } from 'src/components';
 import { SupersetClient } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
-import { styled } from '@apache-superset/core/theme';
+import { styled, useIsRtl } from '@apache-superset/core/theme';
 import Tabs from '@superset-ui/core/components/Tabs';
 import AdhocFilter from 'src/explore/components/controls/FilterControl/AdhocFilter';
 import AdhocFilterEditPopoverSimpleTabContent from 'src/explore/components/controls/FilterControl/AdhocFilterEditPopoverSimpleTabContent';
 import AdhocFilterEditPopoverSqlTabContent from 'src/explore/components/controls/FilterControl/AdhocFilterEditPopoverSqlTabContent';
+import { getResizeDeltaX } from 'src/explore/components/ExploreContentPopover';
 import type { Dataset } from '@superset-ui/chart-controls';
 import type { ColumnType } from 'src/explore/components/controls/FilterControl/AdhocFilterEditPopoverSimpleTabContent';
 import {
@@ -116,6 +117,7 @@ function AdhocFilterEditPopover({
   const [adhocFilter, setAdhocFilter] = useState<AdhocFilter>(propsAdhocFilter);
   const [width, setWidth] = useState(POPOVER_INITIAL_WIDTH);
   const [height, setHeight] = useState(POPOVER_INITIAL_HEIGHT);
+  const isRtl = useIsRtl();
   const [isSimpleTabValid, setIsSimpleTabValid] = useState(true);
   const [selectedLayers, setSelectedLayers] = useState<LayerOption[]>([
     { id: null, value: -1, label: 'All' },
@@ -197,7 +199,8 @@ function AdhocFilterEditPopover({
       onResize();
       setWidth(
         Math.max(
-          dragStartRef.current.width + (e.clientX - dragStartRef.current.x),
+          dragStartRef.current.width +
+            getResizeDeltaX(dragStartRef.current.x, e.clientX, isRtl),
           POPOVER_INITIAL_WIDTH,
         ),
       );
@@ -208,7 +211,7 @@ function AdhocFilterEditPopover({
         ),
       );
     },
-    [onResize],
+    [onResize, isRtl],
   );
 
   const onMouseUp = useCallback(() => {

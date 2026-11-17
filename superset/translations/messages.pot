@@ -492,6 +492,10 @@ msgid "%s operator(s)"
 msgstr ""
 
 #, python-format
+msgid "%s-%s of %s"
+msgstr ""
+
+#, python-format
 msgid "%s option"
 msgid_plural "%s options"
 msgstr[0] ""

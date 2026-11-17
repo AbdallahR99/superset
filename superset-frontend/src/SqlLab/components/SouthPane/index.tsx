@@ -199,7 +199,7 @@ const SouthPane = ({
               margin-right: ${theme.sizeUnit}px;
             `}
           />
-          {`${schema}.${decodeURIComponent(name)}`}
+          <bdi>{`${schema}.${decodeURIComponent(name)}`}</bdi>
         </>
       ),
       children: (

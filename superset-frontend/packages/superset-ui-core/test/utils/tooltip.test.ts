@@ -29,9 +29,9 @@ const TITLE_STYLE =
 const TR_STYLE = 'style="opacity:0.8;"';
 const TR_FOCUS_STYLE = 'style="font-weight:700;"';
 const TD_TEXT_STYLE =
-  'style="text-align:left;padding-left:0px;max-width:300px;overflow:hidden;text-overflow:ellipsis;"';
+  'style="text-align:start;padding-inline-start:0px;max-width:300px;overflow:hidden;text-overflow:ellipsis;"';
 const TD_NUMBER_STYLE =
-  'style="text-align:right;padding-left:16px;max-width:300px;overflow:hidden;text-overflow:ellipsis;"';
+  'style="text-align:end;padding-inline-start:16px;max-width:300px;overflow:hidden;text-overflow:ellipsis;"';
 
 const data = [
   ['a', 'b', 'c'],
@@ -48,17 +48,17 @@ test('should return a table with the given data', () => {
   const expectedHtml = removeWhitespaces(
     sanitizeHtml(`
     <div>
-        <span ${TITLE_STYLE}>Title</span>
+        <span ${TITLE_STYLE}><bdi>Title</bdi></span>
         <table>
             <tr ${TR_STYLE}>
-                <td ${TD_TEXT_STYLE}>a</td>
-                <td ${TD_NUMBER_STYLE}>b</td>
-                <td ${TD_NUMBER_STYLE}>c</td>
+                <td ${TD_TEXT_STYLE}><bdi>a</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>b</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>c</bdi></td>
             </tr>
             <tr ${TR_STYLE}>
-                <td ${TD_TEXT_STYLE}>1</td>
-                <td ${TD_NUMBER_STYLE}>2</td>
-                <td ${TD_NUMBER_STYLE}>3</td>
+                <td ${TD_TEXT_STYLE}><bdi>1</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>2</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>3</bdi></td>
             </tr>
         </table>
     </div>`),
@@ -73,17 +73,17 @@ test('should return a table with the given data and a focused row', () => {
   const expectedHtml = removeWhitespaces(
     sanitizeHtml(`
     <div>
-        <span ${TITLE_STYLE}>Title</span>
+        <span ${TITLE_STYLE}><bdi>Title</bdi></span>
         <table>
             <tr ${TR_STYLE}>
-                <td ${TD_TEXT_STYLE}>a</td>
-                <td ${TD_NUMBER_STYLE}>b</td>
-                <td ${TD_NUMBER_STYLE}>c</td>
+                <td ${TD_TEXT_STYLE}><bdi>a</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>b</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>c</bdi></td>
             </tr>
             <tr ${TR_FOCUS_STYLE}>
-                <td ${TD_TEXT_STYLE}>1</td>
-                <td ${TD_NUMBER_STYLE}>2</td>
-                <td ${TD_NUMBER_STYLE}>3</td>
+                <td ${TD_TEXT_STYLE}><bdi>1</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>2</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>3</bdi></td>
             </tr>
         </table>
     </div>`),
@@ -97,7 +97,7 @@ test('should return a table with no data', () => {
   const expectedHtml = removeWhitespaces(
     sanitizeHtml(`
     <div>
-        <span ${TITLE_STYLE}>Title</span>
+        <span ${TITLE_STYLE}><bdi>Title</bdi></span>
         <table>
             <tr><td>No data</td></tr>
         </table>
@@ -113,14 +113,14 @@ test('should return a table with the given data and no title', () => {
     <div>
         <table>
             <tr ${TR_STYLE}>
-                <td ${TD_TEXT_STYLE}>a</td>
-                <td ${TD_NUMBER_STYLE}>b</td>
-                <td ${TD_NUMBER_STYLE}>c</td>
+                <td ${TD_TEXT_STYLE}><bdi>a</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>b</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>c</bdi></td>
             </tr>
             <tr ${TR_STYLE}>
-                <td ${TD_TEXT_STYLE}>1</td>
-                <td ${TD_NUMBER_STYLE}>2</td>
-                <td ${TD_NUMBER_STYLE}>3</td>
+                <td ${TD_TEXT_STYLE}><bdi>1</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>2</bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>3</bdi></td>
             </tr>
         </table>
     </div>`),
@@ -140,15 +140,15 @@ test('should sanitize HTML input', () => {
   const expectedHtml = removeWhitespaces(
     sanitizeHtml(`
     <div>
-        <span ${TITLE_STYLE}>Titlealert("message");</span>
+        <span ${TITLE_STYLE}><bdi>Titlealert("message");</bdi></span>
         <table>
             <tr ${TR_STYLE}>
-                <td ${TD_TEXT_STYLE}><b>B message</b></td>
-                <td ${TD_NUMBER_STYLE}>message2</td>
+                <td ${TD_TEXT_STYLE}><bdi><b>B message</b></bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi>message2</bdi></td>
             </tr>
             <tr ${TR_STYLE}>
-                <td ${TD_TEXT_STYLE}><img src="x" /></td>
-                <td ${TD_NUMBER_STYLE}><i>Italic</i></td>
+                <td ${TD_TEXT_STYLE}><bdi><img src="x" /></bdi></td>
+                <td ${TD_NUMBER_STYLE}><bdi><i>Italic</i></bdi></td>
             </tr>
         </table>
     </div>`),
@@ -182,11 +182,25 @@ test('should preserve table styling after sanitization (fixes ECharts tooltip fo
   const html = tooltipHtml(data, 'Test Tooltip');
 
   expect(html).toContain('style="opacity:0.8;"');
-  expect(html).toContain('text-align:left');
-  expect(html).toContain('text-align:right');
-  expect(html).toContain('padding-left:0px');
-  expect(html).toContain('padding-left:16px');
+  expect(html).toContain('text-align:start');
+  expect(html).toContain('text-align:end');
+  expect(html).toContain('padding-inline-start:0px');
+  expect(html).toContain('padding-inline-start:16px');
   expect(html).toContain('max-width:300px');
+});
+
+test('emits direction-agnostic markup: logical properties and isolated text', () => {
+  const html = removeWhitespaces(tooltipHtml([['Label', '-5%']], 'Title'));
+
+  // No physical side survives, so the same markup is correct in a
+  // left-to-right and in a right-to-left tooltip.
+  expect(html).not.toMatch(/text-align:(left|right)/);
+  expect(html).not.toMatch(/(padding|margin)-(left|right)/);
+  // Every text is isolated with automatic direction: `-5%` keeps its sign in
+  // front and a left-to-right label is not reordered by right-to-left text.
+  expect(html).toContain('<bdi>Title</bdi>');
+  expect(html).toContain('<bdi>Label</bdi>');
+  expect(html).toContain('<bdi>-5%</bdi>');
 });
 
 describe('truncateLabel', () => {
@@ -299,6 +313,19 @@ describe('tooltipMarker', () => {
 
   test('falls back to a circle for unknown symbols', () => {
     expect(tooltipMarker('red', 'arrow')).toBe(tooltipMarker('red', 'circle'));
+  });
+
+  test('spaces the marker with logical margins that survive sanitizeHtml', () => {
+    const circle = removeWhitespaces(sanitizeHtml(tooltipMarker('#1f77b4')));
+    expect(circle).toContain('margin-inline-start:1px');
+    expect(circle).toContain('margin-inline-end:5px');
+    expect(circle).not.toMatch(/margin(-left|-right)?:/);
+
+    const diamond = removeWhitespaces(
+      sanitizeHtml(tooltipMarker('#1f77b4', 'diamond')),
+    );
+    expect(diamond).toContain('margin-inline-end:4px');
+    expect(diamond).not.toMatch(/margin(-left|-right)?:/);
   });
 
   test('returns nothing without a color string', () => {

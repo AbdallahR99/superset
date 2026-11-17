@@ -33,6 +33,20 @@ import { RootState } from 'src/dashboard/types';
 import { withChartDisplayLabels } from 'src/dashboard/util/withChartDisplayLabels';
 import { FilterElement } from './FilterControls/types';
 
+/**
+ * Rotation that turns the "vertical align top" glyph (an arrow pointing at a
+ * bar) into the arrow of the vertical filter bar toggle. The bar sits on the
+ * inline-start side of the dashboard, so collapsing it points at that edge
+ * and expanding it points away from it: both arrows turn around in a
+ * right-to-left layout. Rotations are not mirrored with the rest of the
+ * styles, hence the explicit direction.
+ */
+export const getFilterBarToggleRotation = (
+  action: 'collapse' | 'expand',
+  isRtl: boolean,
+): string =>
+  (action === 'expand') !== isRtl ? 'rotate(90deg)' : 'rotate(-90deg)';
+
 export const getOnlyExtraFormData = (
   data: DataMaskStateWithId,
   filterIds?: Set<string>,

@@ -60,6 +60,13 @@ export interface ChartMetadataConfig {
   // opts out — used by time grain/column filters, whose extraFormData is
   // not safe to merge across datasets.
   supportsCascadeDependencies?: boolean;
+  // Layout direction of the chart in a right-to-left interface.
+  // 'ltr' keeps the chart left-to-right, which preserves axis semantics for
+  // canvas and SVG plots. 'inherit' follows the interface, for charts that
+  // are documents rather than plots (tables, pivot tables, KPI text).
+  // Unset: native filters and chart customizations inherit, everything else
+  // stays left-to-right.
+  direction?: 'ltr' | 'inherit';
 }
 
 export default class ChartMetadata {
@@ -105,6 +112,8 @@ export default class ChartMetadata {
 
   suppressContextMenu?: boolean;
 
+  direction?: 'ltr' | 'inherit';
+
   supportsCascadeDependencies?: boolean;
 
   constructor(config: ChartMetadataConfig) {
@@ -130,6 +139,7 @@ export default class ChartMetadata {
       parseMethod = 'json-bigint',
       suppressContextMenu = false,
       supportsCascadeDependencies,
+      direction,
     } = config;
 
     this.name = name;
@@ -162,6 +172,7 @@ export default class ChartMetadata {
     this.parseMethod = parseMethod;
     this.suppressContextMenu = suppressContextMenu;
     this.supportsCascadeDependencies = supportsCascadeDependencies;
+    this.direction = direction;
   }
 
   canBeAnnotationType(type: string): boolean {

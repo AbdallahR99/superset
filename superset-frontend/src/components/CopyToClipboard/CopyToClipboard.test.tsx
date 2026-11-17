@@ -153,3 +153,9 @@ test('renders unwrapped', () => {
   });
   expect(screen.queryByText(text)).not.toBeInTheDocument();
 });
+
+test('lets the copyable text decide its own direction', () => {
+  const text = 'http://localhost:8088/superset/dashboard/p/abc/';
+  render(<CopyToClipboard text={text} />, { useRedux: true });
+  expect(screen.getByText(text)).toHaveAttribute('dir', 'auto');
+});

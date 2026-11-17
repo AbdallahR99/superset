@@ -317,7 +317,7 @@ test('cellStyle derives readable text color from dark background formatting', ()
     backgroundColor: '#111111',
     color: '',
     '--ag-cell-value-color': 'rgb(255, 255, 255)',
-    textAlign: 'right',
+    textAlign: 'end',
   });
 });
 
@@ -367,7 +367,7 @@ test('cellStyle keeps explicit text color over adaptive contrast', () => {
     backgroundColor: '#111111',
     color: '',
     '--ag-cell-value-color': 'rgb(172, 225, 196)',
-    textAlign: 'right',
+    textAlign: 'end',
   });
 });
 
@@ -410,7 +410,7 @@ test('cellStyle treats legacy toTextColor formatters as text color', () => {
     backgroundColor: '#111111',
     color: '',
     '--ag-cell-value-color': 'rgb(172, 225, 196)',
-    textAlign: 'right',
+    textAlign: 'end',
   });
 });
 
@@ -709,7 +709,7 @@ test('cellStyle resets inline text color variables when no formatter matches', (
     color: '',
     '--ag-cell-value-color': '',
     '--ag-cell-value-hover-color': '',
-    textAlign: 'right',
+    textAlign: 'end',
   });
 });
 
@@ -909,7 +909,7 @@ test('cellStyle defaults non-numeric columns to left alignment', () => {
       node: {},
     } as never),
   ).toMatchObject({
-    textAlign: 'left',
+    textAlign: 'start',
   });
 });
 

@@ -18,7 +18,7 @@
 -->
 
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
@@ -84,6 +84,24 @@
       img {
         width: 540px;
       }
+      /* Narrow screens: stack the text and the picture, both within the viewport */
+      @media (max-width: 900px) {
+        .error-page-content {
+          flex-direction: column;
+          align-items: flex-start;
+          box-sizing: border-box;
+          padding: 24px;
+        }
+        h1 {
+          font-size: 48px;
+        }
+        p,
+        img {
+          width: 100%;
+          max-width: 490px;
+          height: auto;
+        }
+      }
     </style>
 
     <title>404: Not found | Superset</title>
@@ -91,7 +109,10 @@
 
   <body>
     <div class="error-page-content">
-      <section>
+      <!-- The copy below is English whatever the document language is: it keeps
+           its own language and reading direction while the server sets the
+           lang and dir of the html element from the session locale. -->
+      <section lang="en" dir="auto">
         <h1>Page not found</h1>
         <p>
           Sorry, we cannot find the page you are looking for. You may have

@@ -129,6 +129,23 @@ const SliceContainer = styled.div`
   display: flex;
   flex-direction: column;
   max-height: 100%;
+
+  /* A chart description is markdown written by users, in any language. Each
+     block takes its direction and alignment from its own text, as dir='auto'
+     would, so left-to-right text reads correctly in a right-to-left interface
+     and vice versa. */
+  .slice_description,
+  .slice_description p,
+  .slice_description li,
+  .slice_description h1,
+  .slice_description h2,
+  .slice_description h3,
+  .slice_description h4,
+  .slice_description h5,
+  .slice_description h6,
+  .slice_description blockquote {
+    unicode-bidi: plaintext;
+  }
 `;
 
 const EMPTY_OBJECT: Record<string, never> = {};

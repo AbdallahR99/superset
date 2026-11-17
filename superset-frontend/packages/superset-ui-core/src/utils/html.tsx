@@ -45,11 +45,17 @@ const allowedCssProperties = {
   'padding-right': true,
   'padding-bottom': true,
   'padding-left': true,
+  // Logical counterparts of the physical spacing above, so that generated
+  // markup (e.g. chart tooltips) reads correctly in right-to-left layouts.
+  'padding-inline-start': true,
+  'padding-inline-end': true,
   margin: true,
   'margin-top': true,
   'margin-right': true,
   'margin-bottom': true,
   'margin-left': true,
+  'margin-inline-start': true,
+  'margin-inline-end': true,
   border: true,
   'border-color': true,
   'border-style': true,

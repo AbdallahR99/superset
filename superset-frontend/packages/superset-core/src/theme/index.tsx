@@ -40,6 +40,23 @@ export {
   withTheme,
 } from '@emotion/react';
 export { default as createEmotionCache } from '@emotion/cache';
+export {
+  RTL_LANGUAGES,
+  flipPlacement,
+  getDirectionForLocale,
+  getDocumentDirection,
+  getEmotionCache,
+  noFlip,
+  useDirection,
+  useIsRtl,
+  type Direction,
+} from './direction';
+export {
+  DirectionProvider,
+  DirectionRestore,
+  LtrIsolate,
+  type DirectionIsolateProps,
+} from './LtrIsolate';
 export { default as exampleThemes } from './exampleThemes';
 
 declare module '@emotion/react' {
