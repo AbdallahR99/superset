@@ -55,9 +55,21 @@ import {
 import { availableDropSpan } from 'src/core/dashboard/gridPacking';
 import type { PackedRect } from 'src/core/dashboard/gridPacking';
 import WidgetView from 'src/core/dashboard/WidgetView';
+import { NodeErrorsContext } from 'src/core/dashboard/nodeErrors';
+import { registerBuiltInWidgetsIfEnabled } from 'src/core/dashboard/registerBuiltInWidgets';
 import DashboardHeader from './DashboardHeader';
 import EditorPanel from './EditorPanel';
 import { useSaveDashboard } from './useSaveDashboard';
+
+// The built-in widget types are registered by the page that draws them, and
+// by nothing the rest of the application loads: this module is the route's
+// own chunk, and the route exists only where Dashboard v2 is turned on (see
+// `routes.tsx`). With the feature off, no widget view is registered and
+// none of what they are made of (the grid engine, the widgets package's
+// renderers) is fetched. Registered here rather than in an effect so every
+// type is known before the first node is rendered, and only where the
+// feature is on, so reaching this module some other way registers nothing.
+registerBuiltInWidgetsIfEnabled();
 
 const PageContainer = styled(Flex)`
   ${({ theme }) => css`
@@ -511,7 +523,9 @@ export default function DashboardBuilderV2() {
                   </CanvasPlaceholder>
                 </EmptyCanvasWrapper>
               ) : (
-                <WidgetView nodeId={root.id} />
+                <NodeErrorsContext.Provider value={session.nodeErrors}>
+                  <WidgetView nodeId={root.id} />
+                </NodeErrorsContext.Provider>
               )}
             </Canvas>
           </Workspace>

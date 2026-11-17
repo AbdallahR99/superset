@@ -27,10 +27,9 @@ import { resolveExplicitCollisions } from './gridPacking';
 import { HOST_SOURCE_PREFIX } from '@apache-superset/core/widgets';
 import type { WidgetBus } from '@apache-superset/core/widgets';
 import {
-  MAX_DOCUMENT_DEPTH,
-  MAX_DOCUMENT_NODES,
   collectSubtreeIds,
   depthOf,
+  getDocumentLimits,
   isInSubtree,
   sanitizeDocument,
   subtreeHeight,
@@ -96,18 +95,53 @@ function createBlankNodes(): Record<string, StoredNode> {
   };
 }
 
-let nextNodeId = 0;
-function generateNodeId(): string {
-  nextNodeId += 1;
-  return `node_${nextNodeId}`;
+/**
+ * The highest counter a stored id may push the generator to. Far below 2^53,
+ * where `n + 1 === n` and a counter stops counting; an id whose number is
+ * larger is not one the generator needs to stay clear of, since it never
+ * counts that far.
+ */
+const MAX_RESERVED_NODE_COUNTER = 2 ** 31;
+
+const NODE_ID_SUFFIX_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const NODE_ID_SUFFIX_LENGTH = 6;
+
+/**
+ * A short random tail for a generated node id. A counter alone repeats
+ * between two people editing the same dashboard (both start from the same
+ * loaded document), and two different widgets under one id is what makes a
+ * filter's `scope.targets` point at the wrong one after a deliberate
+ * overwrite. Not a secret: only unlikely to repeat.
+ */
+function randomIdSuffix(): string {
+  const values = new Uint32Array(NODE_ID_SUFFIX_LENGTH);
+  const source = globalThis.crypto;
+  if (source?.getRandomValues) {
+    source.getRandomValues(values);
+  } else {
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = Math.floor(Math.random() * 0xffffffff);
+    }
+  }
+  let suffix = '';
+  values.forEach(value => {
+    suffix += NODE_ID_SUFFIX_ALPHABET[value % NODE_ID_SUFFIX_ALPHABET.length];
+  });
+  return suffix;
 }
 
-/** Keeps generated ids clear of the ids a loaded document already uses. */
-function reserveNodeIds(ids: string[]): void {
-  ids.forEach(id => {
-    const match = /^node_(\d+)$/.exec(id);
-    if (match) nextNodeId = Math.max(nextNodeId, Number(match[1]));
-  });
+/**
+ * The counter a stored id occupies: `node_12` and `node_12_k3x9qa` both
+ * occupy 12. `undefined` for an id of any other shape, and for one whose
+ * number the generator could never reach.
+ */
+export function reservedCounterOf(id: string): number | undefined {
+  const match = /^node_(\d{1,16})(?:_[A-Za-z0-9]+)?$/.exec(id);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value <= MAX_RESERVED_NODE_COUNTER
+    ? value
+    : undefined;
 }
 
 export { HOST_SOURCE_PREFIX };
@@ -134,6 +168,35 @@ class DashboardProvider implements WidgetBus {
   private nodes: Record<string, StoredNode> = createBlankNodes();
 
   private revision = 0;
+
+  /**
+   * The counter behind generated node ids. Held per store, so one document
+   * (or one store on a page that renders several) cannot move the ids
+   * another one hands out.
+   */
+  private nextNodeId = 0;
+
+  /** Counts the source ids handed out by {@link createSourceId}. */
+  private allocatedSourceIds = 0;
+
+  /**
+   * The source ids handed out and not yet forgotten. They name widgets that
+   * are on the page without being nodes of the tree, so the tree cannot say
+   * whether one of them still counts as a source; this does.
+   */
+  private allocatedSources = new Set<string>();
+
+  /**
+   * Which document the tree is. Ticks whenever the whole tree is replaced
+   * (`loadDocument`, `newDocument`), and at no other time.
+   *
+   * Node ids repeat between documents, and a reloaded copy of one dashboard
+   * has the very ids its previous copy had, so "a node with this id still
+   * exists" does not say that it is the node an asynchronous write was
+   * started for. Anything that writes after an `await` reads this before the
+   * wait and writes only if it has not moved.
+   */
+  private documentGeneration = 0;
 
   /**
    * Counts changes to the document alone. `revision` also ticks for a
@@ -193,6 +256,9 @@ class DashboardProvider implements WidgetBus {
 
   /** Host-internal. Ticks once per change to the document; see `documentVersion`. */
   public getDocumentVersion = (): number => this.documentVersion;
+
+  /** Host-internal. Ticks when the whole tree is replaced; see `documentGeneration`. */
+  public getDocumentGeneration = (): number => this.documentGeneration;
 
   public getSelection = (): string | undefined => this.selection;
 
@@ -266,15 +332,16 @@ class DashboardProvider implements WidgetBus {
     addedNodes: number,
     addedHeight: number,
   ): void {
-    if (Object.keys(this.nodes).length + addedNodes > MAX_DOCUMENT_NODES) {
+    const { maxNodes, maxDepth } = getDocumentLimits();
+    if (Object.keys(this.nodes).length + addedNodes > maxNodes) {
       throw new Error(
-        `[dashboard] A dashboard may hold at most ${MAX_DOCUMENT_NODES} widgets`,
+        `[dashboard] A dashboard may hold at most ${maxNodes} widgets`,
       );
     }
     const parentDepth = depthOf(this.nodes, ROOT_ID, parentId) ?? 0;
-    if (parentDepth + 1 + addedHeight > MAX_DOCUMENT_DEPTH) {
+    if (parentDepth + 1 + addedHeight > maxDepth) {
       throw new Error(
-        `[dashboard] Widgets may nest at most ${MAX_DOCUMENT_DEPTH} levels deep`,
+        `[dashboard] Widgets may nest at most ${maxDepth} levels deep`,
       );
     }
   }
@@ -327,6 +394,30 @@ class DashboardProvider implements WidgetBus {
     return result;
   }
 
+  /**
+   * An id no node in the tree has. The counter keeps ids readable and in
+   * creation order, the random tail keeps two editors of one dashboard from
+   * minting the same one, and the loop is what guarantees the id is free
+   * here whatever the counter and the tail came to.
+   */
+  private generateNodeId(): string {
+    for (;;) {
+      this.nextNodeId += 1;
+      const id = `node_${this.nextNodeId}_${randomIdSuffix()}`;
+      if (this.nodes[id] === undefined) return id;
+    }
+  }
+
+  /** Keeps the counter clear of the ids a loaded document already uses. */
+  private reserveNodeIds(ids: string[]): void {
+    ids.forEach(id => {
+      const counter = reservedCounterOf(id);
+      if (counter !== undefined && counter > this.nextNodeId) {
+        this.nextNodeId = counter;
+      }
+    });
+  }
+
   public addWidget(parentId: string, index: number, spec: WidgetSpec): string {
     if (spec.type === GRID_TYPE) {
       throw new Error(
@@ -346,7 +437,7 @@ class DashboardProvider implements WidgetBus {
 
     this.assertWithinLimits(parentId, 1, 0);
 
-    const id = generateNodeId();
+    const id = this.generateNodeId();
     const node: StoredNode = {
       type: spec.type,
       layout: spec.layout,
@@ -542,7 +633,11 @@ class DashboardProvider implements WidgetBus {
     if (!Array.isArray(root.children)) {
       tree[ROOT_ID] = { ...root, children: [] };
     }
-    reserveNodeIds(Object.keys(tree));
+    // Counted from this document alone: what an earlier one reserved says
+    // nothing about which ids are free in this one.
+    this.nextNodeId = 0;
+    this.reserveNodeIds(Object.keys(tree));
+    this.documentGeneration += 1;
     this.selection = undefined;
     this.eventValues = {};
     this.eventSources.clear();
@@ -567,10 +662,18 @@ class DashboardProvider implements WidgetBus {
     return document;
   }
 
-  /** Every id that emitted `eventType` and is still a node in the tree, plus host sources. */
+  /**
+   * Every id that emitted `eventType` and still counts as a source: a node
+   * that is still in the tree, a host source, or an identity this store
+   * handed out itself (see {@link createSourceId}) and has not been told to
+   * forget.
+   */
   public getSourceIds = (eventType: string): string[] =>
     [...(this.eventSources.get(eventType) ?? [])].filter(
-      id => id.startsWith(HOST_SOURCE_PREFIX) || this.nodes[id] !== undefined,
+      id =>
+        id.startsWith(HOST_SOURCE_PREFIX) ||
+        this.nodes[id] !== undefined ||
+        this.allocatedSources.has(id),
     );
 
   /** A node's authored `props.scope.targets`; host sources carry theirs in the payload. */
@@ -618,12 +721,53 @@ class DashboardProvider implements WidgetBus {
     listener: (e: WidgetEvent) => void,
   ): core.Disposable => this.emitterFor(eventType).subscribe(listener);
 
+  /**
+   * Drops everything `sourceId` has emitted, so a widget that left the page
+   * stops narrowing the others. A node of the tree is forgotten the same
+   * way: the node stays, what it last emitted does not.
+   */
+  public forget = (sourceId: string): void => {
+    // The widget behind a handed-out identity is gone; the id is not reused.
+    this.allocatedSources.delete(sourceId);
+    let changed = false;
+    this.eventSources.forEach((sources, eventType) => {
+      if (!sources.delete(sourceId)) return;
+      delete this.eventValues[eventValueKey(sourceId, eventType)];
+      if (sources.size === 0) this.eventSources.delete(eventType);
+      changed = true;
+    });
+    if (!changed) return;
+    this.revision += 1;
+    this.stateSubscribers.forEach(fn => fn());
+  };
+
+  /**
+   * A bus identity for a widget that is not a node of the tree (one an
+   * extension renders on its own, say). Never a node id and never a host
+   * source: neither of those namespaces starts with this prefix, and an id a
+   * stored document happens to use is skipped.
+   */
+  public createSourceId = (): string => {
+    for (;;) {
+      this.allocatedSourceIds += 1;
+      const id = `widget-${this.allocatedSourceIds}`;
+      if (this.nodes[id] === undefined) {
+        this.allocatedSources.add(id);
+        return id;
+      }
+    }
+  };
+
   /** Test/demo helper — discards all nodes back to a blank canvas. */
   public reset(): void {
     this.nodes = createBlankNodes();
     this.selection = undefined;
     this.revision = 0;
     this.documentVersion = 0;
+    this.documentGeneration = 0;
+    this.nextNodeId = 0;
+    this.allocatedSourceIds = 0;
+    this.allocatedSources.clear();
     this.layoutChangeEmitter = createEventEmitter<void>();
     this.stateSubscribers.clear();
     this.eventValues = {};

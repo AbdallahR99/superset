@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { FeatureFlag, isFeatureEnabled } from '@superset-ui/core';
 import { views } from 'src/core/views';
 import { DASHBOARD_WIDGETS_LOCATION } from './resolveWidgetView';
 import { registerContainerType } from './DashboardProvider';
@@ -153,4 +154,21 @@ export function registerBuiltInWidgets(): void {
   // also registered as a view (WidgetView renders it like any other
   // widget when placed directly).
   registerContainerType('filter.bar');
+}
+
+/**
+ * Registers the built-in widget types where Dashboard v2 is turned on, and
+ * does nothing where it is not.
+ *
+ * What the application itself calls. The Dashboard v2 page is the only thing
+ * that draws these widgets and it lives in a route that is not registered
+ * with the feature off, so this is not what keeps the code from loading: it
+ * is what keeps a build that reaches the page some other way from filling
+ * the shared view registry (which extensions and other pages read) with
+ * widget types of a feature the deployment has not enabled.
+ */
+export function registerBuiltInWidgetsIfEnabled(): boolean {
+  if (!isFeatureEnabled(FeatureFlag.DashboardV2)) return false;
+  registerBuiltInWidgets();
+  return true;
 }

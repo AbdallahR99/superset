@@ -37,15 +37,18 @@
 import { dashboard as dashboardApi } from '@apache-superset/core';
 import { store } from 'src/views/store';
 import { provider, useDashboardRevision } from './store';
-import { fetchQueryData } from '@apache-superset/widgets/chartData';
-import { registerBuiltInWidgets } from './registerBuiltInWidgets';
+import { fetchQueryData as fetchUnfilteredQueryData } from '@apache-superset/widgets/chartData';
+import { getActiveAdhocFilters } from '@apache-superset/widgets/activeFilters';
 import { navigation } from '../navigation';
 
-// Built-in widget types (canvas/markdown/echarts) are registered the same
-// way an extension registers its own — see registerBuiltInWidgets.
-// Doing this here guarantees it happens before anything imports `dashboard`
-// to render a node, regardless of which page or bridge triggers the import.
-registerBuiltInWidgets();
+// This module is part of the application's main bundle: `src/core` re-exports
+// it, and the extension bridge hands `dashboard` to extensions from there.
+// It therefore imports the store and the query path and nothing that draws:
+// the built-in widget views are registered by the Dashboard v2 page's own
+// chunk (see `registerBuiltInWidgets` and `src/pages/DashboardBuilderV2`),
+// which is only ever loaded where the feature is turned on. Importing them
+// from here would put the grid engine and every widget renderer in front of
+// every page of the application, flag or no flag.
 
 export { useDashboardRevision };
 
@@ -57,14 +60,50 @@ export { useDashboardRevision };
 // (no full reload) would leave this returning the *previous* dashboard's id
 // instead of "no dashboard active."
 function getDashboardId(): number | undefined {
+  // A Dashboard v2 page is its own page (`dashboard_v2`), saved or not, so
+  // the classic dashboard's id in Redux (whichever classic dashboard was
+  // open before it) is never reported for one.
   if (navigation.getPage() !== 'dashboard') return undefined;
-  // A saved Dashboard v2 lives under the classic dashboard's own path prefix
-  // (`/dashboard/v2/<id>/`), which the page mapping reads as the classic
-  // page. It is not one, and the classic dashboard's id in Redux is then
-  // whichever classic dashboard was open before it.
+  // The page is derived from the router's location, which trails the
+  // address bar by a render; the address itself is the last word.
   if (window.location.pathname.includes('/dashboard/v2/')) return undefined;
   return store.getState().dashboardInfo?.id;
 }
+
+/**
+ * `dashboard.fetchQueryData` for the builder's own tree.
+ *
+ * With `options.nodeId` the query is the one that widget would be shown:
+ * narrowed by every filter on the dashboard that applies to it, and never by
+ * the widget's own selection (a chart that cross-filters is not filtered by
+ * the slice it was clicked on). That is what the same call does for an
+ * extension widget under `SupersetProvider`, so a widget behaves alike in
+ * the builder and embedded.
+ *
+ * Without a node id nobody is asking in particular, and the query is run as
+ * given: what a caller checking a binding before placing a widget wants.
+ *
+ * `options.signal` cancels the request either way.
+ */
+const fetchQueryData: typeof dashboardApi.fetchQueryData = (
+  binding,
+  options = {},
+) => {
+  const { nodeId, signal } = options;
+  if (nodeId === undefined) {
+    return fetchUnfilteredQueryData(binding, { signal });
+  }
+  return fetchUnfilteredQueryData(
+    {
+      ...binding,
+      filters: [
+        ...(binding.filters ?? []),
+        ...getActiveAdhocFilters(provider, binding.datasetId, nodeId),
+      ],
+    },
+    { signal },
+  );
+};
 
 export const dashboard: typeof dashboardApi = {
   getDashboardId,

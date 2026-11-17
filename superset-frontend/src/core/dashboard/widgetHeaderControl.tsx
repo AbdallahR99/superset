@@ -129,7 +129,10 @@ function CollapsibleToggle({ nodeId }: { nodeId: string }): ReactElement {
       onClick={toggle}
       icon={
         collapsed ? (
-          <Icons.CaretRightOutlined iconSize="s" />
+          // A collapsed widget's caret points along the reading direction,
+          // so it points left where text runs right to left. The expanded
+          // caret points down in either.
+          <Icons.CaretRightOutlined iconSize="s" mirrorInRtl />
         ) : (
           <Icons.CaretDownOutlined iconSize="s" />
         )

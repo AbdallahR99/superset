@@ -19,8 +19,12 @@
 import userEvent from '@testing-library/user-event';
 import { act, fireEvent, render, screen } from 'spec/helpers/testing-library';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
-import 'src/core/dashboard';
+import { registerBuiltInWidgets } from 'src/core/dashboard/registerBuiltInWidgets';
 import EditorPanel from './EditorPanel';
+
+// The page registers the built-in widget types (see its own module); a test
+// that renders a part of the page without the page does it itself.
+registerBuiltInWidgets();
 
 const provider = DashboardProvider.getInstance();
 

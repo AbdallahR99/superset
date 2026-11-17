@@ -21,10 +21,10 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from 'spec/helpers/testing-library';
 import type { Direction } from '@apache-superset/core/theme';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
-import 'src/core/dashboard';
 import EditorPanel, { resizedWidth } from './EditorPanel';
 
 const provider = DashboardProvider.getInstance();
@@ -86,6 +86,28 @@ test('right-to-left, dragging the edge right makes the panel narrower', () => {
   dragHandle(800, 840);
 
   expect(widthOf()).toBe(360);
+});
+
+const MIRRORED = { transform: 'scaleX(-1)' };
+
+/** The glyph inside one of the panel's two show/hide buttons. */
+const glyphOf = (testId: string): HTMLElement =>
+  within(screen.getByTestId(testId)).getByRole('img');
+
+test('left-to-right, the hide and show glyphs are drawn as they are', () => {
+  mount('ltr');
+
+  expect(glyphOf('panel-collapse')).not.toHaveStyle(MIRRORED);
+  fireEvent.click(screen.getByTestId('panel-collapse'));
+  expect(glyphOf('panel-expand')).not.toHaveStyle(MIRRORED);
+});
+
+test('right-to-left, the hide and show glyphs point the other way, as the rail is on the other side', () => {
+  mount('rtl');
+
+  expect(glyphOf('panel-collapse')).toHaveStyle(MIRRORED);
+  fireEvent.click(screen.getByTestId('panel-collapse'));
+  expect(glyphOf('panel-expand')).toHaveStyle(MIRRORED);
 });
 
 test('right-to-left, the arrow pointing away from the panel is the one that grows it', () => {

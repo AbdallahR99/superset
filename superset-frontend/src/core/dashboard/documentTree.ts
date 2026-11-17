@@ -34,19 +34,76 @@
  * renderer must not depend on every writer having been careful.
  */
 
+import getBootstrapData from 'src/utils/getBootstrapData';
+
 /**
- * The most nodes one dashboard document may hold, the root included. The
- * server's default for the same limit (`DocumentLimits.max_nodes` in
- * `superset/dashboard_v2/document.py`); a deployment that raises it there
- * still gets a document the builder refuses to grow past this.
+ * The most nodes one dashboard document may hold, the root included, when
+ * the deployment does not say otherwise. The server's default for the same
+ * limit (`DocumentLimits.max_nodes` in `superset/dashboard_v2/document.py`).
  */
 export const MAX_DOCUMENT_NODES = 500;
 
 /**
- * The deepest a node may sit below the root: the root is at 0 and its
- * children at 1. The server's default `DocumentLimits.max_depth`.
+ * The deepest a node may sit below the root, when the deployment does not
+ * say otherwise: the root is at 0 and its children at 1. The server's
+ * default `DocumentLimits.max_depth`.
  */
 export const MAX_DOCUMENT_DEPTH = 16;
+
+/**
+ * The most a deployment's own setting is taken at its word for. The limits
+ * are what bound every walk in this module, so a configured value is itself
+ * bounded: no setting can turn "a bounded walk" back into an unbounded one,
+ * or a render recursion into a stack overflow.
+ */
+const HARD_MAX_DOCUMENT_NODES = 20_000;
+const HARD_MAX_DOCUMENT_DEPTH = 64;
+
+/** The config keys the server reads the same two limits from. */
+export const MAX_NODES_CONF_KEY = 'DASHBOARD_V2_MAX_NODES';
+export const MAX_DEPTH_CONF_KEY = 'DASHBOARD_V2_MAX_DEPTH';
+
+export interface DocumentLimits {
+  maxNodes: number;
+  maxDepth: number;
+}
+
+const limitFrom = (value: unknown, fallback: number, hardMax: number): number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
+    ? Math.min(value, hardMax)
+    : fallback;
+
+/**
+ * The limits a document is held to on this deployment.
+ *
+ * Read from the page's bootstrap config where the server publishes them
+ * (`common.conf.DASHBOARD_V2_MAX_NODES` / `DASHBOARD_V2_MAX_DEPTH`), so a
+ * deployment that raised or lowered them on the server gets a builder that
+ * agrees with what the server will accept. Where they are not published, or
+ * are not positive integers, the server's defaults stand.
+ */
+export function getDocumentLimits(): DocumentLimits {
+  let conf: Record<string, unknown> | undefined;
+  try {
+    conf = getBootstrapData()?.common?.conf as
+      | Record<string, unknown>
+      | undefined;
+  } catch {
+    conf = undefined;
+  }
+  return {
+    maxNodes: limitFrom(
+      conf?.[MAX_NODES_CONF_KEY],
+      MAX_DOCUMENT_NODES,
+      HARD_MAX_DOCUMENT_NODES,
+    ),
+    maxDepth: limitFrom(
+      conf?.[MAX_DEPTH_CONF_KEY],
+      MAX_DOCUMENT_DEPTH,
+      HARD_MAX_DOCUMENT_DEPTH,
+    ),
+  };
+}
 
 /** The only part of a node these walks read. */
 export interface TreeNode {
@@ -100,7 +157,7 @@ const childrenOf = <T extends TreeNode>(
 export function collectSubtreeIds<T extends TreeNode>(
   nodes: NodeMap<T>,
   startId: string,
-  limit: number = MAX_DOCUMENT_NODES + 1,
+  limit: number = getDocumentLimits().maxNodes + 1,
 ): string[] {
   if (nodes[startId] === undefined) return [];
   const seen = new Set<string>([startId]);
@@ -134,16 +191,17 @@ export function isInSubtree<T extends TreeNode>(
 
 /**
  * How many levels of descendants sit under `id`: 0 for a leaf, 1 for a node
- * whose children are all leaves. Counting stops at `MAX_DOCUMENT_DEPTH + 1`.
+ * whose children are all leaves. Counting stops one past the depth limit.
  */
 export function subtreeHeight<T extends TreeNode>(
   nodes: NodeMap<T>,
   id: string,
 ): number {
+  const { maxDepth } = getDocumentLimits();
   const seen = new Set<string>([id]);
   let level: string[] = [id];
   let height = 0;
-  while (height <= MAX_DOCUMENT_DEPTH) {
+  while (height <= maxDepth) {
     const next: string[] = [];
     level.forEach(nodeId => {
       childrenOf(nodes, nodeId).forEach(childId => {
@@ -170,10 +228,11 @@ export function depthOf<T extends TreeNode>(
   id: string,
 ): number | undefined {
   if (nodes[rootId] === undefined) return undefined;
+  const { maxDepth } = getDocumentLimits();
   const seen = new Set<string>([rootId]);
   let level: string[] = [rootId];
   let depth = 0;
-  while (level.length > 0 && depth <= MAX_DOCUMENT_DEPTH + 1) {
+  while (level.length > 0 && depth <= maxDepth + 1) {
     if (level.includes(id)) return depth;
     const next: string[] = [];
     level.forEach(nodeId => {
@@ -212,10 +271,11 @@ export function sanitizeDocument<T extends TreeNode>(
   if (nodes[rootId] == null) {
     throw new Error(`[dashboard] A document must contain a "${rootId}" node`);
   }
+  const { maxNodes, maxDepth } = getDocumentLimits();
   const total = Object.keys(nodes).length;
-  if (total > MAX_DOCUMENT_NODES) {
+  if (total > maxNodes) {
     throw new DocumentLimitError(
-      `[dashboard] A document may hold at most ${MAX_DOCUMENT_NODES} nodes (found ${total})`,
+      `[dashboard] A document may hold at most ${maxNodes} nodes (found ${total})`,
     );
   }
 
@@ -237,9 +297,9 @@ export function sanitizeDocument<T extends TreeNode>(
   let level: string[] = [rootId];
   let depth = 0;
   while (level.length > 0) {
-    if (depth > MAX_DOCUMENT_DEPTH) {
+    if (depth > maxDepth) {
       throw new DocumentLimitError(
-        `[dashboard] A document may nest at most ${MAX_DOCUMENT_DEPTH} levels deep`,
+        `[dashboard] A document may nest at most ${maxDepth} levels deep`,
       );
     }
     const next: string[] = [];

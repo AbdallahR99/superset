@@ -45,12 +45,16 @@
  */
 
 import { useSyncExternalStore } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { t } from '@apache-superset/core/translation';
 import type DashboardProvider from './DashboardProvider';
 import type { DocumentNode } from './DashboardProvider';
 import {
   DashboardV2ConflictError,
   fetchDashboardV2,
+  isAmbiguousSaveFailure,
+  readNodeErrors,
+  sameDocumentNodes,
   saveDashboardV2,
 } from './persistence';
 import type { DashboardV2 } from './persistence';
@@ -86,13 +90,31 @@ export interface DashboardSessionState {
   loadFailure: LoadFailure | undefined;
   /** How many structural repairs the last load made (see `sanitizeDocument`). */
   repairs: number;
+  /**
+   * What the last refused save said about particular widgets, by node id.
+   * Drawn on those widgets (see `WidgetView`); emptied when a save starts
+   * and when the session turns to another dashboard.
+   */
+  nodeErrors: Readonly<Record<string, readonly string[]>>;
+}
+
+/**
+ * Set on an outcome that is not `saved` when the run nevertheless created
+ * the dashboard before it ended: a first save that went through, followed by
+ * a second request (edits made meanwhile) that did not. The row exists under
+ * `id`, and whoever reports the outcome has to move the page to it, or the
+ * address stays the one of a dashboard that was never saved.
+ */
+interface CreationMade {
+  created?: true;
+  id?: number;
 }
 
 export type SaveOutcome =
   | { status: 'saved'; id: number; created: boolean }
   /** The server holds a newer copy; `state.conflict` says which. */
-  | { status: 'conflict' }
-  | { status: 'error'; error: unknown }
+  | ({ status: 'conflict' } & CreationMade)
+  | ({ status: 'error'; error: unknown } & CreationMade)
   /** Nothing was sent: the session is not in a state that can be saved. */
   | { status: 'skipped' }
   /** The session turned to another dashboard before the answer came back. */
@@ -106,7 +128,12 @@ export interface SessionApi {
 
 const ROOT_ID = 'root';
 
+/** One object for "none", so a state that still has none is the same state. */
+const NO_NODE_ERRORS: Readonly<Record<string, readonly string[]>> =
+  Object.freeze({});
+
 const BLANK_STATE: DashboardSessionState = {
+  nodeErrors: NO_NODE_ERRORS,
   status: 'ready',
   ref: undefined,
   dashboardId: undefined,
@@ -177,6 +204,28 @@ export class DashboardSession {
   /** Set when a loaded copy was discarded in favour of edits made meanwhile. */
   private loadDiscarded = false;
 
+  /**
+   * The uuid the unsaved document will be created under. Made up once per
+   * unsaved document and sent with every attempt to create it, so an attempt
+   * whose answer was lost and the retry that follows are one create.
+   */
+  private createUuid: string | undefined;
+
+  /**
+   * An update that got no answer, when the server could not be asked whether
+   * it took it either. Kept until the next answer about this dashboard, so a
+   * refusal of the retry can be told apart from someone else's save.
+   */
+  private unconfirmedSave:
+    | {
+        id: number;
+        uuid: string | undefined;
+        nodes: Record<string, DocumentNode>;
+        baseRevision: number | undefined;
+        version: number;
+      }
+    | undefined;
+
   constructor(
     private readonly store: DashboardProvider,
     private readonly api: SessionApi = {
@@ -211,6 +260,7 @@ export class DashboardSession {
     this.loadController = undefined;
     this.inFlightSave = undefined;
     this.resaveRequested = false;
+    this.unconfirmedSave = undefined;
   }
 
   /**
@@ -230,6 +280,8 @@ export class DashboardSession {
     }
     this.adoptRef = undefined;
     this.supersede();
+    // Another document, saved or not, is not the one the uuid was made for.
+    this.createUuid = undefined;
     if (ref === undefined) {
       this.loadDiscarded = false;
       this.store.newDocument();
@@ -374,11 +426,66 @@ export class DashboardSession {
     return running;
   }
 
+  /**
+   * Asks the server what it holds after a save that got no usable answer.
+   *
+   * `stored`: the server holds exactly what was sent, so the save went
+   * through and only its acknowledgement was lost. `conflict`: it holds
+   * something else, newer than the base. `not-stored`: it holds the base, or
+   * (for a create) nothing under the uuid that was sent. `unknown`: it could
+   * not be asked either.
+   */
+  private async reconcile(sent: {
+    id: number | undefined;
+    uuid: string | undefined;
+    nodes: Record<string, DocumentNode>;
+    baseRevision: number | undefined;
+  }): Promise<
+    | { kind: 'stored'; dashboard: DashboardV2 }
+    | { kind: 'conflict'; revision: number | undefined }
+    | { kind: 'not-stored' }
+    | { kind: 'unknown' }
+  > {
+    const ref = sent.id ?? sent.uuid;
+    if (ref === undefined) return { kind: 'unknown' };
+    let current: DashboardV2;
+    try {
+      current = await this.api.fetch(ref);
+    } catch (error) {
+      // Nothing under a uuid only this client knows means the create never
+      // landed. Any other failure says nothing about what is stored.
+      return sent.id === undefined &&
+        error instanceof Response &&
+        error.status === 404
+        ? { kind: 'not-stored' }
+        : { kind: 'unknown' };
+    }
+    if (sent.id === undefined) {
+      // The row exists. Whether it holds this tree or an earlier one is for
+      // the caller to tell, exactly as with a create the server replayed.
+      return { kind: 'stored', dashboard: { ...current, replayed: true } };
+    }
+    if (current.revision === sent.baseRevision) return { kind: 'not-stored' };
+    if (
+      sent.baseRevision !== undefined &&
+      current.revision === sent.baseRevision + 1 &&
+      sameDocumentNodes(current.document?.nodes, sent.nodes)
+    ) {
+      return { kind: 'stored', dashboard: current };
+    }
+    return { kind: 'conflict', revision: current.revision };
+  }
+
   private async runSave(): Promise<SaveOutcome> {
     const { epoch } = this;
     let created = false;
     let savedId = 0;
-    this.setState({ saving: true });
+    // What a first save did, said with every way this can end: the row a
+    // create made exists whatever happened to the requests after it, and the
+    // page has to be moved to it.
+    const creation = (): { created?: true; id?: number } =>
+      created ? { created: true, id: savedId } : {};
+    this.setState({ saving: true, nodeErrors: NO_NODE_ERRORS });
 
     for (;;) {
       this.resaveRequested = false;
@@ -387,7 +494,16 @@ export class DashboardSession {
       const title =
         typeof root.props?.title === 'string' ? root.props.title : '';
       const id = this.state.dashboardId;
-      let saved: DashboardV2;
+      const { baseRevision } = this.state;
+      const nodes = this.store.getDocument();
+      if (id === undefined && this.createUuid === undefined) {
+        // One per unsaved document, and the same one on every retry of its
+        // create: that is what lets the server recognise a repeat instead of
+        // creating a second dashboard.
+        this.createUuid = uuidv4();
+      }
+      const uuid = id === undefined ? this.createUuid : undefined;
+      let saved: DashboardV2 | undefined;
       try {
         // Sequential on purpose: the next request is only decided once this
         // one has answered.
@@ -395,36 +511,122 @@ export class DashboardSession {
         saved = await this.api.save({
           id,
           title: title || t('Untitled dashboard'),
-          nodes: this.store.getDocument(),
-          baseRevision: this.state.baseRevision,
+          nodes,
+          baseRevision,
+          uuid,
         });
       } catch (error) {
         if (epoch !== this.epoch) return { status: 'superseded' };
-        if (error instanceof DashboardV2ConflictError) {
-          this.setState({
-            saving: false,
-            conflict: { revision: error.revision, source: 'save' },
+        let failure = error;
+        const unconfirmed = this.unconfirmedSave;
+        if (
+          failure instanceof DashboardV2ConflictError &&
+          id !== undefined &&
+          unconfirmed !== undefined &&
+          unconfirmed.id === id
+        ) {
+          // An earlier save of this dashboard never got an answer and the
+          // server could not be asked about it then. A refusal that follows
+          // may be about that very save: the server took it, and the
+          // revision this one named is the one before it.
+          // eslint-disable-next-line no-await-in-loop
+          const verdict = await this.reconcile(unconfirmed);
+          if (epoch !== this.epoch) return { status: 'superseded' };
+          this.unconfirmedSave = undefined;
+          if (verdict.kind === 'stored') {
+            this.setState({
+              baseRevision: verdict.dashboard.revision,
+              changedOn: verdict.dashboard.changed_on,
+            });
+            if (this.store.getDocumentVersion() === unconfirmed.version) {
+              saved = verdict.dashboard;
+            } else {
+              // The author's own save, with edits made since: sent again on
+              // the revision that save produced.
+              continue;
+            }
+          }
+        } else if (isAmbiguousSaveFailure(failure)) {
+          // eslint-disable-next-line no-await-in-loop
+          const verdict = await this.reconcile({
+            id,
+            uuid,
+            nodes,
+            baseRevision,
           });
-          return { status: 'conflict' };
+          if (epoch !== this.epoch) return { status: 'superseded' };
+          if (verdict.kind === 'stored') {
+            saved = verdict.dashboard;
+          } else if (verdict.kind === 'conflict') {
+            failure = new DashboardV2ConflictError(verdict.revision);
+          } else if (verdict.kind === 'unknown' && id !== undefined) {
+            this.unconfirmedSave = { id, uuid, nodes, baseRevision, version };
+          }
         }
-        this.setState({ saving: false });
-        return { status: 'error', error };
+        if (saved === undefined) {
+          if (failure instanceof DashboardV2ConflictError) {
+            this.setState({
+              saving: false,
+              conflict: { revision: failure.revision, source: 'save' },
+            });
+            return { status: 'conflict', ...creation() };
+          }
+          // eslint-disable-next-line no-await-in-loop
+          const nodeErrors = await readNodeErrors(failure);
+          if (epoch !== this.epoch) return { status: 'superseded' };
+          this.setState({ saving: false, nodeErrors });
+          return { status: 'error', error: failure, ...creation() };
+        }
       }
       if (epoch !== this.epoch) return { status: 'superseded' };
+      this.unconfirmedSave = undefined;
 
-      this.savedVersion = version;
-      savedId = saved.id;
       if (id === undefined) {
         created = true;
+        savedId = saved.id;
         this.adoptRef = String(saved.id);
+        this.createUuid = undefined;
+        this.setState({
+          dashboardId: saved.id,
+          uuid: saved.uuid,
+          changedOn: saved.changed_on,
+          baseRevision: saved.revision,
+          conflict: undefined,
+        });
+        if (
+          saved.replayed === true &&
+          !sameDocumentNodes(saved.document?.nodes, nodes)
+        ) {
+          // The dashboard was created by an earlier attempt whose answer was
+          // lost, and what it holds is the tree as it was then. This tree is
+          // written to it as an update, on the revision it is at.
+          continue;
+        }
+      } else if (
+        baseRevision !== undefined &&
+        saved.revision !== undefined &&
+        saved.revision !== baseRevision + 1
+      ) {
+        // An accepted update is the base plus one, by contract. Any other
+        // number means the revision in the answer is not the one this save
+        // produced, so adopting it would base the next save on a document
+        // that is not the one on screen.
+        this.setState({
+          saving: false,
+          conflict: { revision: saved.revision, source: 'save' },
+        });
+        return { status: 'conflict', ...creation() };
+      } else {
+        savedId = saved.id;
+        this.setState({
+          dashboardId: saved.id,
+          uuid: saved.uuid,
+          changedOn: saved.changed_on,
+          baseRevision: saved.revision,
+          conflict: undefined,
+        });
       }
-      this.setState({
-        dashboardId: saved.id,
-        uuid: saved.uuid,
-        changedOn: saved.changed_on,
-        baseRevision: saved.revision,
-        conflict: undefined,
-      });
+      this.savedVersion = version;
 
       if (
         !this.resaveRequested ||
@@ -490,6 +692,7 @@ export class DashboardSession {
   public reset(): void {
     this.supersede();
     this.adoptRef = undefined;
+    this.createUuid = undefined;
     this.loadDiscarded = false;
     this.listeners.clear();
     this.state = BLANK_STATE;

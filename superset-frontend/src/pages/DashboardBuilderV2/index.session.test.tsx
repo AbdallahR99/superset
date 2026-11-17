@@ -23,7 +23,12 @@ import { act, render, screen, waitFor } from 'spec/helpers/testing-library';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
 import type { DocumentNode } from 'src/core/dashboard/DashboardProvider';
 import { dashboardSession } from 'src/core/dashboard/session';
+import { registerBuiltInWidgets } from 'src/core/dashboard/registerBuiltInWidgets';
 import DashboardBuilderV2 from '.';
+
+// The page registers the built-in widgets itself, but only where the
+// feature flag is on (see its own module), and no flag is set here.
+registerBuiltInWidgets();
 
 const provider = DashboardProvider.getInstance();
 
@@ -48,6 +53,16 @@ const row = (
   revision,
   document: { version: 1, nodes },
   embedded: null,
+});
+
+/**
+ * The answer to a create that made the row: `201`, as the API gives it. A
+ * `200` to a create means something else (a repeat of one the server already
+ * has), so the status is part of what is being answered here.
+ */
+const created = (id: number) => ({
+  status: 201,
+  body: { id, result: row(id, 1) },
 });
 
 type RouterHistory = ReturnType<typeof useHistory>;
@@ -205,7 +220,7 @@ test('going from one saved dashboard to another never shows or saves the first u
 });
 
 test('the first save creates once, moves to the new id, and keeps the tree instead of reloading it', async () => {
-  fetchMock.post('glob:*/api/v1/dashboard_v2/', { id: 7, result: row(7, 1) });
+  fetchMock.post('glob:*/api/v1/dashboard_v2/', created(7));
   const history = renderAt(NEW);
   await userEvent.click(await screen.findByTestId('palette-markdown'));
   const [placed] = provider.getRoot().children ?? [];
@@ -232,7 +247,7 @@ test('the first save creates once, moves to the new id, and keeps the tree inste
 });
 
 test('the save after the first one is an update based on the revision the create returned', async () => {
-  fetchMock.post('glob:*/api/v1/dashboard_v2/', { id: 7, result: row(7, 1) });
+  fetchMock.post('glob:*/api/v1/dashboard_v2/', created(7));
   fetchMock.put('glob:*/api/v1/dashboard_v2/7', { id: 7, result: row(7, 2) });
   const history = renderAt(NEW);
   await userEvent.click(await screen.findByTestId('palette-markdown'));
@@ -427,4 +442,51 @@ test('a save refused for one widget selects that widget and keeps the edits', as
   expect(dashboardSession.getState().dashboardId).toBeUndefined();
   expect(screen.getByTestId('header-unsaved')).toBeInTheDocument();
   await waitFor(() => expect(screen.getByTestId('header-save')).toBeEnabled());
+  // The reason is on the widget it is about, and on no other.
+  expect(
+    await screen.findByTestId(`widget-save-error-${second}`),
+  ).toHaveTextContent('content: Required');
+  expect(
+    screen.queryByTestId(`widget-save-error-${first}`),
+  ).not.toBeInTheDocument();
+});
+
+test('a first save that went through is moved to its route even when the save that follows it is refused', async () => {
+  let answerCreate: (value: unknown) => void = () => {};
+  fetchMock.post(
+    'glob:*/api/v1/dashboard_v2/',
+    new Promise(resolve => {
+      answerCreate = resolve;
+    }),
+  );
+  fetchMock.put('glob:*/api/v1/dashboard_v2/7', {
+    status: 422,
+    body: { message: 'Widget props failed validation.' },
+  });
+  const history = renderAt(NEW);
+  await userEvent.click(await screen.findByTestId('palette-markdown'));
+
+  // Save, edit while the create is away, and save again: the second click
+  // is folded into the first save as a follow-up update.
+  await userEvent.click(screen.getByTestId('header-save'));
+  act(() => {
+    provider.addWidget('root', 1, { type: 'markdown' });
+  });
+  act(() => {
+    dashboardSession.save();
+  });
+  await act(async () => {
+    answerCreate(created(7));
+  });
+
+  // The update was refused, but the dashboard exists: the page is at its
+  // address, not at the one a refresh would open a blank dashboard from.
+  await waitFor(() => expect(history.location.pathname).toBe(pathOf(7)));
+  expect(requestsTo('POST')).toBe(1);
+  expect(requestsTo('PUT')).toBe(1);
+  expect(dashboardSession.getState()).toMatchObject({
+    dashboardId: 7,
+    baseRevision: 1,
+  });
+  expect(screen.getByTestId('header-unsaved')).toBeInTheDocument();
 });

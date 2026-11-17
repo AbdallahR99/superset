@@ -166,6 +166,16 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
   // later one — e.g. two edits typed close together — and overwriting the
   // more recent result with a stale one.
   const validateSeqRef = useRef(0);
+  // A panel that is gone has nobody to report a validation to and no form
+  // whose value a late commit would be. Moving the sequence on is what makes
+  // a round-trip still in flight find itself superseded (see
+  // `onBeforeCommit` below) instead of writing after the panel was closed.
+  useEffect(
+    () => () => {
+      validateSeqRef.current += 1;
+    },
+    [],
+  );
   // A validation error belongs to the widget it was raised for; selecting a
   // different one shouldn't leave a stale message on screen.
   useEffect(() => setValidationErrors([]), [nodeId]);

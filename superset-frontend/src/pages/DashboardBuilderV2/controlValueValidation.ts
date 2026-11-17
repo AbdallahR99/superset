@@ -24,15 +24,15 @@
  *
  * Both representations edit the same `node.props`, but neither may write to
  * it directly: a candidate is merged, sent to the backend's
- * `Widget.validate_control_values` gate — the same gate the
- * `set_widget_control_values` MCP tool commits through, reached here via its
- * REST wrapper rather than a second, frontend-authored copy of its rules —
- * and only committed to the store once that gate accepts it. A rejected
- * candidate returns its errors and touches nothing: `node.props` is read
- * here, never written to, until validation has already succeeded. What
- * finally lands in the store is the endpoint's own normalized dump of the
- * candidate, not the raw one this sent — the same value the MCP write path
- * stores, so the two routes into `node.props` can't quietly disagree.
+ * `Widget.validate_control_values` gate — the same gate a save of the
+ * dashboard runs every widget through, reached here via its REST wrapper
+ * rather than a second, frontend-authored copy of its rules — and only
+ * committed to the store once that gate accepts it. A rejected candidate
+ * returns its errors and touches nothing: `node.props` is read here, never
+ * written to, until validation has already succeeded. What finally lands in
+ * the store is the endpoint's own normalized dump of the candidate, not the
+ * raw one this sent, so what is edited and what the server would store
+ * can't quietly disagree.
  */
 import { SupersetClient } from '@superset-ui/core';
 import { provider } from 'src/core/dashboard/store';
@@ -115,7 +115,18 @@ export async function commitWidgetProps(
 ): Promise<CommitPropsResult> {
   const snapshot = provider.getNode(nodeId)?.props ?? {};
   const candidate = { ...snapshot, ...delta };
+  // Which document the edit was made on. A node id says nothing about that:
+  // ids repeat between dashboards, and a reloaded copy of this one has the
+  // very ids the copy before it had.
+  const generation = provider.getDocumentGeneration();
   const { errors, values } = await validateControlValues(widgetType, candidate);
+  // The tree was replaced while the round-trip was away (another dashboard
+  // was opened, or this one was reloaded to discard the author's edits).
+  // Whatever node carries this id is not the one the edit was made on, so
+  // neither the values nor the errors are about anything on screen.
+  if (provider.getDocumentGeneration() !== generation) {
+    return { ok: false, errors: [] };
+  }
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -128,9 +139,9 @@ export async function commitWidgetProps(
   }
   // The backend's own Pydantic-normalized candidate (coerced types,
   // alias-keyed) — not the raw one just sent for validation — so this
-  // commits exactly what `set_widget_control_values` (the MCP write path
-  // through the very same gate) would store, rather than something that can
-  // quietly disagree with it (e.g. a numeric field a `Select` stores as a
+  // commits exactly what the server's own control model holds, rather than
+  // something that can quietly disagree with it (e.g. a numeric field a
+  // `Select` stores as a
   // string, which Pydantic accepts by coercion but a later reader would not
   // recognize as the same value). Falls back to the raw candidate only if
   // the backend genuinely had nothing to normalize (`control_values` itself

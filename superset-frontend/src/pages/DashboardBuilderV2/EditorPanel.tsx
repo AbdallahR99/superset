@@ -306,7 +306,9 @@ export default function EditorPanel({
           placement={flipPlacement('right', direction)}
           onClick={() => setClosed(false)}
         >
-          <Icons.MenuUnfoldOutlined iconSize="m" />
+          {/* The glyph points the way the panel opens, which is the other
+              way in a right-to-left page, where the rail is on the right. */}
+          <Icons.MenuUnfoldOutlined iconSize="m" mirrorInRtl />
         </Button>
       </ClosedRail>
     );
@@ -346,7 +348,7 @@ export default function EditorPanel({
               placement="bottom"
               onClick={() => setClosed(true)}
             >
-              <Icons.MenuFoldOutlined iconSize="m" />
+              <Icons.MenuFoldOutlined iconSize="m" mirrorInRtl />
             </Button>
           ),
         }}

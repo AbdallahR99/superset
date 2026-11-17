@@ -171,6 +171,45 @@ test('a field edit round-trips through the backend /validate endpoint before it 
   await waitFor(() => expect(provider.getNode(id)?.props?.prefix).toBe('$'));
 });
 
+test('an edit still being validated when the panel is closed is not committed afterwards', async () => {
+  const id = provider.addWidget(provider.getRoot().id, 0, {
+    type: 'metric-tile',
+    props: { dataBinding: { datasetId: 1, metrics: ['count'] }, prefix: '' },
+  });
+  const { unmount } = render(<SchemaControlPanel nodeId={id} />);
+  const input = await screen.findByRole('textbox');
+  // From here on a validation answers only when the test says so.
+  let answer: () => void = () => {};
+  postSpy.mockImplementation(({ endpoint }: { endpoint: string }) => {
+    if (endpoint.endsWith('/validate')) {
+      return new Promise(resolve => {
+        answer = () =>
+          resolve({ json: { result: { errors: [], values: null } } } as never);
+      }) as never;
+    }
+    return Promise.resolve({ json: { result: SCHEMA } } as never);
+  });
+
+  await userEvent.type(input, '$');
+  await waitFor(() =>
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: '/api/v1/widgets/type/metric-tile/validate',
+      }),
+    ),
+  );
+  const versionBefore = provider.getDocumentVersion();
+  unmount();
+  answer();
+  // Let the commit's continuation run.
+  await new Promise(resolve => {
+    setTimeout(resolve, 0);
+  });
+
+  expect(provider.getNode(id)?.props?.prefix).toBe('');
+  expect(provider.getDocumentVersion()).toBe(versionBefore);
+});
+
 test('a field edit rejected by backend validation is not committed, and its error is shown', async () => {
   const id = mount('metric-tile', {
     dataBinding: { datasetId: 1, metrics: ['count'] },

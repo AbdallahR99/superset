@@ -591,18 +591,430 @@ test('a save answered after navigating away is not applied to the dashboard open
   });
 });
 
+/** A refusal the server wrote itself, as `SupersetClient` rejects with one. */
+const refusal = (status: number, body: unknown = {}): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+/** The server could not be reached, or did not answer. */
+const networkFailure = (): Error => new TypeError('Failed to fetch');
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 test('a failed save says so and leaves the dashboard dirty', async () => {
-  const { session, saves } = setup();
+  const { session, saves, fetches } = setup();
   session.open(undefined);
   addMarkdown();
-  const error = new Error('boom');
+  const error = refusal(400, { message: 'no' });
 
   const running = session.save();
   saves[0].reject(error);
 
   await expect(running).resolves.toEqual({ status: 'error', error });
+  // The server answered, so there is nothing to ask it about.
+  expect(fetches).toHaveLength(0);
   expect(session.getState().saving).toBe(false);
   expect(session.isDirty()).toBe(true);
+});
+
+test('a create carries a uuid, and every retry of that create carries the same one', async () => {
+  const { session, saves } = setup();
+  session.open(undefined);
+  addMarkdown();
+
+  const first = session.save();
+  saves[0].reject(refusal(400));
+  await first;
+  const second = session.save();
+  saves[1].reject(refusal(400));
+  await second;
+
+  expect(saves[0].args.uuid).toMatch(UUID);
+  expect(saves[1].args.uuid).toBe(saves[0].args.uuid);
+});
+
+test('another unsaved document gets a uuid of its own, and an update carries none', async () => {
+  const { session, saves } = setup();
+  session.open(undefined);
+  addMarkdown();
+  const first = session.save();
+  saves[0].reject(refusal(400));
+  await first;
+
+  session.open(undefined);
+  addMarkdown();
+  const second = session.save();
+  saves[1].resolve(saved(7, 1));
+  await second;
+  addMarkdown();
+  const third = session.save();
+  saves[2].resolve(saved(7, 2));
+  await third;
+
+  expect(saves[1].args.uuid).toMatch(UUID);
+  expect(saves[1].args.uuid).not.toBe(saves[0].args.uuid);
+  expect(saves[2].args).toMatchObject({ id: 7, uuid: undefined });
+});
+
+test('a create whose answer was lost is found by its uuid instead of being created twice', async () => {
+  const { session, saves, fetches } = setup();
+  session.open(undefined);
+  addMarkdown();
+
+  const running = session.save();
+  const sent = saves[0].args;
+  saves[0].reject(networkFailure());
+  await flush();
+
+  // The server is asked what it holds under the uuid the create carried.
+  expect(fetches).toHaveLength(1);
+  expect(fetches[0].ref).toBe(sent.uuid);
+  fetches[0].resolve(saved(7, 1, sent.nodes));
+
+  await expect(running).resolves.toEqual({
+    status: 'saved',
+    id: 7,
+    created: true,
+  });
+  expect(saves).toHaveLength(1);
+  expect(session.getState()).toMatchObject({
+    dashboardId: 7,
+    baseRevision: 1,
+    saving: false,
+  });
+  expect(session.isDirty()).toBe(false);
+});
+
+test('a create that never reached the server is reported as failed and can be retried as the same create', async () => {
+  const { session, saves, fetches } = setup();
+  session.open(undefined);
+  addMarkdown();
+  const error = networkFailure();
+
+  const running = session.save();
+  saves[0].reject(error);
+  await flush();
+  fetches[0].reject(refusal(404));
+
+  await expect(running).resolves.toEqual({ status: 'error', error });
+  expect(session.getState().dashboardId).toBeUndefined();
+  expect(session.isDirty()).toBe(true);
+
+  const retry = session.save();
+  expect(saves[1].args).toMatchObject({ id: undefined });
+  expect(saves[1].args.uuid).toBe(saves[0].args.uuid);
+  saves[1].resolve(saved(7, 1));
+  await expect(retry).resolves.toEqual({
+    status: 'saved',
+    id: 7,
+    created: true,
+  });
+});
+
+test('a create the server recognises as a repeat adopts the stored dashboard and writes later edits as an update', async () => {
+  const { session, saves, fetches } = setup();
+  session.open(undefined);
+  addMarkdown();
+  const first = session.save();
+  const original = saves[0].args.nodes;
+  saves[0].reject(networkFailure());
+  await flush();
+  // Neither the create nor the question about it got through.
+  fetches[0].reject(networkFailure());
+  await first;
+
+  // The author carries on editing and saves again. The server did take the
+  // first create, and answers the repeat with what it stored then.
+  addMarkdown();
+  const second = session.save();
+  saves[1].resolve({ ...saved(7, 1, original), replayed: true });
+  await flush();
+
+  // The row exists but holds the earlier tree: this one goes in as an
+  // update on the revision the row is at, not as a second create.
+  expect(saves).toHaveLength(3);
+  expect(saves[2].args).toMatchObject({ id: 7, baseRevision: 1 });
+  expect(saves[2].args.nodes).toEqual(provider.getDocument());
+  saves[2].resolve(saved(7, 2));
+
+  await expect(second).resolves.toEqual({
+    status: 'saved',
+    id: 7,
+    created: true,
+  });
+  expect(session.getState()).toMatchObject({
+    dashboardId: 7,
+    baseRevision: 2,
+  });
+  expect(session.isDirty()).toBe(false);
+});
+
+test('a repeat the server answers with exactly this tree is a finished save', async () => {
+  const { session, saves } = setup();
+  session.open(undefined);
+  addMarkdown();
+
+  const running = session.save();
+  saves[0].resolve({
+    ...saved(7, 1, saves[0].args.nodes),
+    replayed: true,
+  });
+
+  await expect(running).resolves.toEqual({
+    status: 'saved',
+    id: 7,
+    created: true,
+  });
+  expect(saves).toHaveLength(1);
+  expect(session.isDirty()).toBe(false);
+});
+
+/** A session on dashboard 5 at `revision`, with one unsaved edit. */
+const editedSession = async (revision: number) => {
+  const context = setup();
+  context.session.open('5');
+  context.fetches[0].resolve(saved(5, revision, documentOf('a')));
+  await flush();
+  addMarkdown();
+  return context;
+};
+
+test('an update answered with anything but the base plus one is a conflict, not a new base', async () => {
+  const { session, saves } = await editedSession(3);
+
+  const running = session.save();
+  saves[0].resolve(saved(5, 5));
+
+  await expect(running).resolves.toEqual({ status: 'conflict' });
+  expect(session.getState()).toMatchObject({
+    baseRevision: 3,
+    conflict: { revision: 5, source: 'save' },
+    saving: false,
+  });
+  expect(session.isDirty()).toBe(true);
+});
+
+test('an update whose answer was lost but which the server took is a finished save', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+
+  const running = session.save();
+  const sent = saves[0].args;
+  saves[0].reject(networkFailure());
+  await flush();
+
+  expect(fetches).toHaveLength(2);
+  expect(fetches[1].ref).toBe(5);
+  // Key order and absent values differ between what was sent and what a
+  // server hands back; neither makes it a different document.
+  const stored = JSON.parse(JSON.stringify(sent.nodes)) as typeof sent.nodes;
+  fetches[1].resolve(
+    saved(5, 4, Object.fromEntries(Object.entries(stored).reverse())),
+  );
+
+  await expect(running).resolves.toEqual({
+    status: 'saved',
+    id: 5,
+    created: false,
+  });
+  expect(saves).toHaveLength(1);
+  expect(session.getState()).toMatchObject({ baseRevision: 4, saving: false });
+  expect(session.getState().conflict).toBeUndefined();
+  expect(session.isDirty()).toBe(false);
+});
+
+test('an update that never reached the server is reported as failed, on the same base', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+  const error = networkFailure();
+
+  const running = session.save();
+  saves[0].reject(error);
+  await flush();
+  fetches[1].resolve(saved(5, 3, documentOf('a')));
+
+  await expect(running).resolves.toEqual({ status: 'error', error });
+  expect(session.getState()).toMatchObject({ baseRevision: 3 });
+  expect(session.getState().conflict).toBeUndefined();
+  expect(session.isDirty()).toBe(true);
+});
+
+test('an update whose answer was lost while someone else saved is a conflict', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+
+  const running = session.save();
+  saves[0].reject(networkFailure());
+  await flush();
+  // One revision on, but not the document that was sent.
+  fetches[1].resolve(saved(5, 4, documentOf('theirs')));
+
+  await expect(running).resolves.toEqual({ status: 'conflict' });
+  expect(session.getState().conflict).toEqual({ revision: 4, source: 'save' });
+  expect(session.isDirty()).toBe(true);
+});
+
+test('a gateway error is treated like a lost answer, a refusal is not', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+
+  const first = session.save();
+  const sent = saves[0].args;
+  saves[0].reject(refusal(504));
+  await flush();
+  expect(fetches).toHaveLength(2);
+  fetches[1].resolve(saved(5, 4, sent.nodes));
+  await expect(first).resolves.toMatchObject({ status: 'saved' });
+
+  addMarkdown();
+  const second = session.save();
+  saves[1].reject(refusal(422, { message: 'invalid' }));
+  await expect(second).resolves.toMatchObject({ status: 'error' });
+  expect(fetches).toHaveLength(2);
+});
+
+test('a refusal that follows an unanswered save is recognised as the author’s own save', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+  const first = session.save();
+  const sent = saves[0].args;
+  saves[0].reject(networkFailure());
+  await flush();
+  // The server took the save, but could not be asked about it either.
+  fetches[1].reject(networkFailure());
+  await expect(first).resolves.toMatchObject({ status: 'error' });
+
+  const retry = session.save();
+  expect(saves[1].args).toMatchObject({ id: 5, baseRevision: 3 });
+  saves[1].reject(new DashboardV2ConflictError(4));
+  await flush();
+  expect(fetches).toHaveLength(3);
+  fetches[2].resolve(saved(5, 4, sent.nodes));
+
+  // Nobody else saved: the copy on the server is the one on screen.
+  await expect(retry).resolves.toEqual({
+    status: 'saved',
+    id: 5,
+    created: false,
+  });
+  expect(session.getState()).toMatchObject({ baseRevision: 4 });
+  expect(session.getState().conflict).toBeUndefined();
+  expect(session.isDirty()).toBe(false);
+});
+
+test('edits made after an unanswered save are sent again on the revision that save produced', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+  const first = session.save();
+  const sent = saves[0].args;
+  saves[0].reject(networkFailure());
+  await flush();
+  fetches[1].reject(networkFailure());
+  await first;
+
+  addMarkdown();
+  const retry = session.save();
+  saves[1].reject(new DashboardV2ConflictError(4));
+  await flush();
+  fetches[2].resolve(saved(5, 4, sent.nodes));
+  await flush();
+
+  expect(saves).toHaveLength(3);
+  expect(saves[2].args).toMatchObject({ id: 5, baseRevision: 4 });
+  saves[2].resolve(saved(5, 5));
+  await expect(retry).resolves.toMatchObject({ status: 'saved', id: 5 });
+  expect(session.getState()).toMatchObject({ baseRevision: 5 });
+});
+
+test('a refusal after an unanswered save is still a conflict when the server holds someone else’s copy', async () => {
+  const { session, saves, fetches } = await editedSession(3);
+  const first = session.save();
+  saves[0].reject(networkFailure());
+  await flush();
+  fetches[1].reject(networkFailure());
+  await first;
+
+  const retry = session.save();
+  saves[1].reject(new DashboardV2ConflictError(4));
+  await flush();
+  fetches[2].resolve(saved(5, 4, documentOf('theirs')));
+
+  await expect(retry).resolves.toEqual({ status: 'conflict' });
+  expect(session.getState().conflict).toEqual({ revision: 4, source: 'save' });
+});
+
+test('a create followed by a refused update still reports the dashboard it created', async () => {
+  const { session, saves } = setup();
+  session.open(undefined);
+  addMarkdown();
+
+  const first = session.save();
+  addMarkdown();
+  const second = session.save();
+  saves[0].resolve(saved(7, 1));
+  await flush();
+  const error = refusal(422, {
+    message: 'Widget props failed validation.',
+    errors: { node_x: [{ loc: ['content'], message: 'Required' }] },
+  });
+  saves[1].reject(error);
+
+  await expect(first).resolves.toEqual({
+    status: 'error',
+    error,
+    created: true,
+    id: 7,
+  });
+  expect(await second).toBe(await first);
+  expect(session.getState()).toMatchObject({
+    dashboardId: 7,
+    baseRevision: 1,
+    nodeErrors: { node_x: ['content: Required'] },
+  });
+});
+
+test('a create followed by a conflicting update reports both', async () => {
+  const { session, saves } = setup();
+  session.open(undefined);
+  addMarkdown();
+
+  const running = session.save();
+  addMarkdown();
+  session.save();
+  saves[0].resolve(saved(7, 1));
+  await flush();
+  saves[1].reject(new DashboardV2ConflictError(2));
+
+  await expect(running).resolves.toEqual({
+    status: 'conflict',
+    created: true,
+    id: 7,
+  });
+});
+
+test('what a refusal said about widgets is kept until the next save starts', async () => {
+  const { session, saves } = await editedSession(3);
+
+  const first = session.save();
+  saves[0].reject(
+    refusal(422, {
+      message: 'invalid',
+      errors: {
+        a: [
+          { loc: ['dataBinding', 'rowLimit'], message: 'Must be positive' },
+          { loc: [], message: 'Unknown column' },
+        ],
+      },
+    }),
+  );
+  await first;
+
+  expect(session.getState().nodeErrors).toEqual({
+    a: ['dataBinding.rowLimit: Must be positive', 'Unknown column'],
+  });
+
+  const second = session.save();
+  expect(session.getState().nodeErrors).toEqual({});
+  saves[1].resolve(saved(5, 4));
+  await second;
+  expect(session.getState().nodeErrors).toEqual({});
 });
 
 test('closing the page keeps anything in flight from landing later', async () => {

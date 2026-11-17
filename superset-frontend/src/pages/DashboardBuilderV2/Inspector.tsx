@@ -313,19 +313,30 @@ const PropsJsonEditor = ({
               ...parsed,
               ...Object.fromEntries(removed.map(key => [key, undefined])),
             };
+            // The tree this Apply was pressed on. Every write below happens
+            // after a round-trip, and is dropped if the tree was replaced
+            // (reloaded, or another dashboard opened) while it was away.
+            const generation = provider.getDocumentGeneration();
+            const sameDocument = () =>
+              provider.getDocumentGeneration() === generation;
             setSubmitting(true);
             try {
               const result = await commitWidgetProps(nodeId, widgetType, delta);
+              if (!sameDocument()) return;
               setValidationErrors(result.ok ? [] : result.errors);
             } catch (e) {
+              if (!sameDocument()) return;
               if (
                 typeof Response !== 'undefined' &&
                 e instanceof Response &&
                 e.status === 404
               ) {
                 // No backend schema registered for this widget type —
-                // nothing to validate against, so commit directly.
-                provider.updateProps(nodeId, delta);
+                // nothing to validate against, so commit directly. The node
+                // may have been removed while the request was away.
+                if (provider.getNode(nodeId) !== undefined) {
+                  provider.updateProps(nodeId, delta);
+                }
                 setValidationErrors([]);
               } else {
                 const message = await describeError(e);

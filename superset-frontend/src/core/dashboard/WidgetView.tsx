@@ -40,6 +40,29 @@ import StaticGrid from './StaticGrid';
 import { useDashboardViewMode } from './viewMode';
 import EmbedWidgetModal from './EmbedWidgetModal';
 import { NodePathContext, isUnrenderable } from './nodePath';
+import { NodeErrorsContext } from './nodeErrors';
+
+/**
+ * A refused save's reason, drawn on the widget it was about. Logical
+ * properties throughout, so it sits the same way in a right-to-left page.
+ */
+const SaveErrorNote = styled.div`
+  ${({ theme }) => css`
+    position: absolute;
+    inset-inline: 0;
+    inset-block-end: 0;
+    z-index: 2;
+    max-height: 50%;
+    overflow-y: auto;
+    padding: ${theme.paddingXXS}px ${theme.paddingXS}px;
+    font-size: ${theme.fontSizeSM}px;
+    line-height: ${theme.lineHeightSM};
+    color: ${theme.colorErrorText};
+    background-color: ${theme.colorErrorBg};
+    border-block-start: 1px solid ${theme.colorErrorBorder};
+    text-align: start;
+  `}
+`;
 
 /**
  * The overflow menu's contents — the same items, order and grouping as the
@@ -276,6 +299,7 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     const [embedOpen, setEmbedOpen] = useState(false);
     const path = useContext(NodePathContext);
     const pathWithSelf = useMemo(() => [...path, nodeId], [path, nodeId]);
+    const saveErrors = useContext(NodeErrorsContext)[nodeId];
     const node = store.getNode(nodeId);
     if (!node) return null;
     // A node that is its own ancestor, or one nested past the depth a
@@ -601,6 +625,23 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
             </NodePathContext.Provider>
           </ErrorBoundary>
         </div>
+        {/* What the last save was refused for, when it was this widget: said
+            on the widget rather than only in a toast that names an id. Laid
+            over the foot of the card instead of taking a row from it, so a
+            chart is not re-measured because a message arrived. */}
+        {chrome && saveErrors !== undefined && saveErrors.length > 0 && (
+          <SaveErrorNote role="alert" data-test={`widget-save-error-${nodeId}`}>
+            <strong>{t('Not saved:')}</strong>{' '}
+            {saveErrors.map((line, index) => (
+              // The lines are a fixed list for one refusal and may repeat.
+              // eslint-disable-next-line react/no-array-index-key
+              <span key={index} dir="auto">
+                {line}
+                {index < saveErrors.length - 1 ? '; ' : ''}
+              </span>
+            ))}
+          </SaveErrorNote>
+        )}
         {children}
       </div>
     );

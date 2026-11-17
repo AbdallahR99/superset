@@ -92,14 +92,22 @@ export function useSaveOutcome(): (outcome: SaveOutcome) => Promise<void> {
   return useCallback(
     async (outcome: SaveOutcome): Promise<void> => {
       if (!mounted.current) return;
+      // A dashboard that was created is moved to whatever else the run came
+      // to: a first save that went through and a follow-up that was refused
+      // still leave a saved dashboard behind, and an address that goes on
+      // naming the unsaved page would open a blank one on the next refresh.
+      // Replaced rather than pushed: the unsaved page it came from is not
+      // somewhere Back should return to, since it would be a second blank
+      // dashboard rather than the one just saved.
+      if (
+        'created' in outcome &&
+        outcome.created === true &&
+        outcome.id !== undefined
+      ) {
+        history?.replace(dashboardV2Path(outcome.id));
+      }
       if (outcome.status === 'saved') {
         addSuccessToast(t('Dashboard saved'));
-        if (outcome.created) {
-          // Replaced rather than pushed: the unsaved page it came from is
-          // not somewhere Back should return to, since it would be a second
-          // blank dashboard rather than the one just saved.
-          history?.replace(dashboardV2Path(outcome.id));
-        }
       } else if (outcome.status === 'error') {
         const { message, nodeIds } = await describeSaveError(outcome.error);
         if (!mounted.current) return;

@@ -19,7 +19,12 @@
 import userEvent from '@testing-library/user-event';
 import { act, fireEvent, render, screen } from 'spec/helpers/testing-library';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
+import { registerBuiltInWidgets } from 'src/core/dashboard/registerBuiltInWidgets';
 import DashboardBuilderV2 from '.';
+
+// The page registers the built-in widgets itself, but only where the
+// feature flag is on (see its own module), and no flag is set here.
+registerBuiltInWidgets();
 
 const provider = DashboardProvider.getInstance();
 

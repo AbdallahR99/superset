@@ -17,7 +17,7 @@
  * under the License.
  */
 import { createContext } from 'react';
-import { MAX_DOCUMENT_DEPTH } from './documentTree';
+import { getDocumentLimits } from './documentTree';
 
 /**
  * The ids of the nodes a render has already passed through on its way down
@@ -37,4 +37,5 @@ export const NodePathContext = createContext<readonly string[]>([]);
 export const isUnrenderable = (
   path: readonly string[],
   nodeId: string,
-): boolean => path.length > MAX_DOCUMENT_DEPTH || path.includes(nodeId);
+): boolean =>
+  path.length > getDocumentLimits().maxDepth || path.includes(nodeId);

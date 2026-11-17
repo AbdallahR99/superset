@@ -18,7 +18,6 @@
  */
 import { SupersetClient } from '@superset-ui/core';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
-import 'src/core/dashboard';
 import { commitWidgetProps } from './controlValueValidation';
 
 const provider = DashboardProvider.getInstance();
@@ -92,6 +91,88 @@ test('the key the commit is about wins over a concurrent write to the same key',
   await committing;
 
   expect(provider.getNode(id)?.props?.label).toBe('Mine');
+});
+
+test('a commit started before the dashboard was reloaded does not write into the reloaded copy', async () => {
+  // The same ids before and after, as a reload of one dashboard gives.
+  const stored = {
+    root: { type: 'grid', children: ['node_3'] },
+    node_3: { type: 'metric-tile', props: { label: 'Saved' } },
+  };
+  provider.loadDocument(stored);
+  const answer = pendingValidation();
+
+  const committing = commitWidgetProps('node_3', 'metric-tile', {
+    label: 'Discarded edit',
+  });
+  // The author chooses to discard their edits and reload.
+  provider.loadDocument(stored);
+  const versionAfterReload = provider.getDocumentVersion();
+  answer({ label: 'Discarded edit' });
+
+  await expect(committing).resolves.toEqual({ ok: false, errors: [] });
+  expect(provider.getNode('node_3')?.props).toEqual({ label: 'Saved' });
+  // Nothing was written, so the reloaded dashboard is not dirty.
+  expect(provider.getDocumentVersion()).toBe(versionAfterReload);
+});
+
+test('a commit started on one dashboard does not write into a node of the same id on another', async () => {
+  provider.loadDocument({
+    root: { type: 'grid', children: ['node_1'] },
+    node_1: { type: 'metric-tile', props: { label: 'On dashboard A' } },
+  });
+  const answer = pendingValidation();
+
+  const committing = commitWidgetProps('node_1', 'metric-tile', {
+    label: 'Edit made on A',
+  });
+  provider.loadDocument({
+    root: { type: 'grid', children: ['node_1'] },
+    node_1: { type: 'markdown', props: { content: 'On dashboard B' } },
+  });
+  answer({ label: 'Edit made on A' });
+
+  await expect(committing).resolves.toEqual({ ok: false, errors: [] });
+  expect(provider.getNode('node_1')).toMatchObject({
+    type: 'markdown',
+    props: { content: 'On dashboard B' },
+  });
+});
+
+test('validation errors about a dashboard that is no longer on screen are not reported', async () => {
+  provider.loadDocument({
+    root: { type: 'grid', children: ['node_1'] },
+    node_1: { type: 'metric-tile', props: {} },
+  });
+  let reject: (
+    errors: { loc: (string | number)[]; message: string }[],
+  ) => void = () => {};
+  postSpy.mockReturnValue(
+    new Promise<ValidationResponse>(resolve => {
+      reject = errors =>
+        resolve({
+          json: { result: { errors, values: null } },
+        } as unknown as ValidationResponse);
+    }),
+  );
+
+  const committing = commitWidgetProps('node_1', 'metric-tile', { label: 1 });
+  provider.newDocument();
+  reject([{ loc: ['label'], message: 'Must be text' }]);
+
+  await expect(committing).resolves.toEqual({ ok: false, errors: [] });
+});
+
+test('a commit on a blank dashboard that was replaced by another blank one is dropped too', async () => {
+  const id = mount({ label: 'Before' });
+  const answer = pendingValidation();
+
+  const committing = commitWidgetProps(id, 'metric-tile', { label: 'After' });
+  provider.newDocument();
+  answer({ label: 'After' });
+
+  await expect(committing).resolves.toEqual({ ok: false, errors: [] });
+  expect(provider.getNode(id)).toBeUndefined();
 });
 
 test('a node removed while validation was in flight is not written to, and nothing throws', async () => {

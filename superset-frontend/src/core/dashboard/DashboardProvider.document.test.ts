@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import DashboardProvider from './DashboardProvider';
+import DashboardProvider, { reservedCounterOf } from './DashboardProvider';
 
 const savedDocument = () => ({
   root: {
@@ -82,7 +82,151 @@ test('addWidget after loadDocument never reuses a loaded id', () => {
   const id = provider.addWidget(provider.getRoot().id, 0, { type: 'text' });
 
   expect(['node_50', 'node_7']).not.toContain(id);
-  expect(Number(id.replace('node_', ''))).toBeGreaterThan(50);
+  expect(reservedCounterOf(id)).toBeGreaterThan(50);
+});
+
+test('a generated id is a counter and a random tail the server accepts', () => {
+  provider.newDocument();
+
+  const id = provider.addWidget(provider.getRoot().id, 0, { type: 'text' });
+
+  expect(id).toMatch(/^node_1_[a-z0-9]{6}$/);
+  // The server's own rule for a node id.
+  expect(id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+});
+
+test('two stores starting from one document do not mint the same id', () => {
+  const editorA = new DashboardProvider();
+  const editorB = new DashboardProvider();
+  editorA.loadDocument(savedDocument());
+  editorB.loadDocument(savedDocument());
+
+  const fromA = editorA.addWidget('root', 0, { type: 'text' });
+  const fromB = editorB.addWidget('root', 0, { type: 'text' });
+
+  // Same counter, since both count from the same document; the tail is what
+  // tells the two widgets apart once both documents meet on the server.
+  expect(reservedCounterOf(fromA)).toBe(reservedCounterOf(fromB));
+  expect(fromA).not.toBe(fromB);
+});
+
+test('the id counter belongs to the store, so one document does not move another', () => {
+  provider.loadDocument(savedDocument());
+  provider.addWidget('root', 0, { type: 'text' });
+
+  provider.newDocument();
+  const id = provider.addWidget('root', 0, { type: 'text' });
+
+  expect(reservedCounterOf(id)).toBe(1);
+});
+
+test('a stored id too large to count from is ignored, and ids stay distinct', () => {
+  provider.loadDocument({
+    root: { type: 'grid', children: ['node_9007199254740993', 'node_12'] },
+    // 2^53 + 1: a counter raised to it would stop changing when incremented.
+    node_9007199254740993: { type: 'markdown' },
+    node_12: { type: 'markdown' },
+  });
+
+  const first = provider.addWidget('root', 0, { type: 'text' });
+  const second = provider.addWidget('root', 0, { type: 'text' });
+
+  expect(reservedCounterOf(first)).toBe(13);
+  expect(reservedCounterOf(second)).toBe(14);
+  expect(provider.getRoot().children).toHaveLength(4);
+  expect(new Set(provider.getRoot().children).size).toBe(4);
+  expect(provider.getNode('node_9007199254740993')).toBeDefined();
+});
+
+test('stored ids of the earlier shape and of the generated shape are both counted from', () => {
+  expect(reservedCounterOf('node_12')).toBe(12);
+  expect(reservedCounterOf('node_12_k3x9qa')).toBe(12);
+  expect(reservedCounterOf('node_')).toBeUndefined();
+  expect(reservedCounterOf('elsewhere_3')).toBeUndefined();
+  expect(reservedCounterOf('node_9007199254740993')).toBeUndefined();
+  expect(reservedCounterOf(`node_${'9'.repeat(40)}`)).toBeUndefined();
+});
+
+test('addWidget never returns an id the tree already holds', () => {
+  const values = jest
+    .spyOn(globalThis.crypto, 'getRandomValues')
+    // A generator that keeps producing the same tail.
+    .mockImplementation(array => {
+      (array as Uint32Array).fill(0);
+      return array;
+    });
+  try {
+    provider.loadDocument({
+      root: { type: 'grid', children: ['node_1_aaaaaa'] },
+      node_1_aaaaaa: { type: 'markdown' },
+    });
+    // Put the counter back so the next id would be the one already taken.
+    (provider as unknown as { nextNodeId: number }).nextNodeId = 0;
+
+    const id = provider.addWidget('root', 0, { type: 'text' });
+
+    expect(id).toBe('node_2_aaaaaa');
+    expect(provider.getNode('node_1_aaaaaa')?.type).toBe('markdown');
+  } finally {
+    values.mockRestore();
+  }
+});
+
+test('the document generation moves when the tree is replaced and at no other time', () => {
+  const start = provider.getDocumentGeneration();
+
+  const id = provider.addWidget('root', 0, { type: 'text' });
+  provider.updateProps(id, { content: 'x' });
+  provider.setSelection(id);
+  provider.emit(id, 'valueChanged', {});
+  expect(provider.getDocumentGeneration()).toBe(start);
+
+  provider.loadDocument(savedDocument());
+  expect(provider.getDocumentGeneration()).toBe(start + 1);
+  provider.newDocument();
+  expect(provider.getDocumentGeneration()).toBe(start + 2);
+});
+
+test('forget drops what a source emitted and tells subscribers', () => {
+  provider.loadDocument(savedDocument());
+  provider.emit('node_7', 'valueChanged', { selection: 'x' });
+  provider.emit('node_7', 'filterBarApply', {});
+  provider.emit('node_50', 'valueChanged', { selection: 'y' });
+  const listener = jest.fn();
+  const unsubscribe = provider.subscribe(listener);
+
+  provider.forget('node_7');
+
+  expect(provider.getSourceIds('valueChanged')).toEqual(['node_50']);
+  expect(provider.getSourceIds('filterBarApply')).toEqual([]);
+  expect(provider.getValue('node_7', 'valueChanged')).toBeUndefined();
+  expect(provider.getValue('node_50', 'valueChanged')).toEqual({
+    selection: 'y',
+  });
+  // The node itself is untouched: only what it emitted is gone.
+  expect(provider.getNode('node_7')).toBeDefined();
+  expect(listener).toHaveBeenCalledTimes(1);
+
+  // Nothing left to forget, so nobody is told anything.
+  provider.forget('node_7');
+  provider.forget('never-emitted');
+  expect(listener).toHaveBeenCalledTimes(1);
+  unsubscribe();
+});
+
+test('createSourceId hands out ids that are neither node ids nor host sources', () => {
+  provider.loadDocument({
+    root: { type: 'grid', children: ['widget-1'] },
+    'widget-1': { type: 'markdown' },
+  });
+
+  const first = provider.createSourceId();
+  const second = provider.createSourceId();
+
+  expect(first).toBe('widget-2');
+  expect(second).toBe('widget-3');
+  expect(reservedCounterOf(first)).toBeUndefined();
+  expect(first.startsWith('host:')).toBe(false);
 });
 
 test('getSourceIds lists emitting nodes still in the tree and host sources', () => {

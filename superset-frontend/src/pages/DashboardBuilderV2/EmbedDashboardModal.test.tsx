@@ -23,7 +23,7 @@ import { render, screen } from 'spec/helpers/testing-library';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
 import { EMBED_WIDGET_ID_PROP } from 'src/core/dashboard/EmbedWidgetModal';
 import { dashboardSession } from 'src/core/dashboard/session';
-import 'src/core/dashboard';
+import { registerBuiltInWidgets } from 'src/core/dashboard/registerBuiltInWidgets';
 import DashboardHeader from './DashboardHeader';
 import EmbedDashboardModal, {
   buildEmbedSnippet,
@@ -38,6 +38,10 @@ jest.mock('@superset-ui/core', () => ({
 const mockIsFeatureEnabled = isFeatureEnabled as jest.MockedFunction<
   typeof isFeatureEnabled
 >;
+
+// The page registers the built-in widget types (see its own module); a test
+// that renders a part of the page without the page does it itself.
+registerBuiltInWidgets();
 
 const provider = DashboardProvider.getInstance();
 

@@ -16,9 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { SupersetClient } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
+import { Alert } from '@apache-superset/core/components';
 import { Button, Flex, Modal, Typography } from '@superset-ui/core/components';
 import { describeFetchError } from '@apache-superset/widgets/chartData';
 import { isExtensionWidgetType } from '@apache-superset/widgets/embed/extensionLoader';
@@ -48,6 +49,15 @@ export default function EmbedWidgetModal({
   const { addDangerToast, addSuccessToast } = useToasts();
   const node = store.getNode(nodeId);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   if (!node) return null;
 
@@ -56,7 +66,18 @@ export default function EmbedWidgetModal({
   const datasetId = datasetIdOf(props);
 
   const save = async () => {
+    // A ref rather than the `saving` state: two clicks in one tick both see
+    // the state as it was rendered, and the second would create a second
+    // saved widget for the same node.
+    if (savingRef.current) return;
+    savingRef.current = true;
+    // The tree the widget was saved from. Its id is written back after the
+    // request, and by then the tree may be another dashboard's, or a
+    // reloaded copy of this one, in which a node of the same id is not the
+    // widget that was saved.
+    const generation = store.getDocumentGeneration();
     setSaving(true);
+    setSaveError(undefined);
     try {
       const title = widgetLabel(node.type, props) || undefined;
       const { json } = widgetId
@@ -69,12 +90,23 @@ export default function EmbedWidgetModal({
             jsonPayload: { widget_type: node.type, props, title },
           });
       const saved = json.result as SavedWidget;
-      store.updateProps(nodeId, { [EMBED_WIDGET_ID_PROP]: saved.uuid });
+      if (
+        store.getDocumentGeneration() === generation &&
+        store.getNode(nodeId) !== undefined
+      ) {
+        store.updateProps(nodeId, { [EMBED_WIDGET_ID_PROP]: saved.uuid });
+      }
       addSuccessToast(t('Widget saved for embedding'));
     } catch (error) {
-      addDangerToast(await describeFetchError(error));
+      const message = await describeFetchError(error);
+      // A refusal (403: not allowed to author this query; 422: the widget's
+      // properties are invalid) is about this widget, so it is said here,
+      // beside it, and stays until the next attempt.
+      if (mountedRef.current) setSaveError(message);
+      addDangerToast(message);
     } finally {
-      setSaving(false);
+      savingRef.current = false;
+      if (mountedRef.current) setSaving(false);
     }
   };
 
@@ -106,6 +138,17 @@ export default function EmbedWidgetModal({
       }
     >
       <Flex vertical gap="middle">
+        {saveError !== undefined && (
+          <Alert
+            type="error"
+            showIcon
+            closable={false}
+            data-test="embed-widget-save-error"
+            description={saveError}
+          >
+            {t('This widget could not be saved for embedding')}
+          </Alert>
+        )}
         <Typography.Text>
           {t(
             'Render this widget in any React app with @apache-superset/widgets, inside a SupersetProvider.',

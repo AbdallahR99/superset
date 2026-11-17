@@ -40,6 +40,13 @@ export interface DashboardV2 {
   revision?: number;
   document: DashboardV2Document;
   embedded: { uuid: string; allowed_domains: string[] } | null;
+  /**
+   * Client-side only, never sent by the server as a field: set on the answer
+   * to a create that the server recognised as a repeat (it answered `200`
+   * rather than `201`). The dashboard is then returned as it is stored, which
+   * is not necessarily what the repeated request carried.
+   */
+  replayed?: boolean;
 }
 
 /**
@@ -111,6 +118,100 @@ async function toConflictError(
   );
 }
 
+/**
+ * Whether a save that failed may nevertheless have been stored.
+ *
+ * A refusal the server wrote itself (4xx) is an answer: nothing was stored.
+ * A request that never got an answer (the connection dropped, the client
+ * timed out) or got one from something in between (a 5xx from a gateway) is
+ * not: the server may have committed the save and only the acknowledgement
+ * was lost. Retrying such a save blindly is how one dashboard is created
+ * twice, or how an author is told that "someone else" saved over them when
+ * it was their own save.
+ */
+export function isAmbiguousSaveFailure(error: unknown): boolean {
+  if (error instanceof DashboardV2ConflictError) return false;
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { name?: unknown }).name === 'AbortError'
+  ) {
+    return false;
+  }
+  if (error instanceof Response) return error.status >= 500;
+  return true;
+}
+
+const canonical = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    Object.keys(record)
+      .sort()
+      .forEach(key => {
+        if (record[key] !== undefined) sorted[key] = canonical(record[key]);
+      });
+    return sorted;
+  }
+  return value;
+};
+
+/**
+ * Whether two documents are the same document: the same nodes with the same
+ * content, whatever order their keys are in and whether an absent value is
+ * spelled `undefined` or left out (JSON does not carry the difference).
+ */
+export function sameDocumentNodes(
+  left: Record<string, DocumentNode> | undefined,
+  right: Record<string, DocumentNode> | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
+/**
+ * What a refused save said about particular widgets: the body's `errors`
+ * object, keyed by node id, as one line per problem. Empty when the refusal
+ * was not about widgets, or was not a readable response at all.
+ */
+export async function readNodeErrors(
+  error: unknown,
+): Promise<Record<string, string[]>> {
+  if (!(error instanceof Response)) return {};
+  let body: unknown;
+  try {
+    body = await error.clone().json();
+  } catch {
+    return {};
+  }
+  if (typeof body !== 'object' || body === null) return {};
+  const { errors } = body as { errors?: unknown };
+  if (typeof errors !== 'object' || errors === null || Array.isArray(errors)) {
+    return {};
+  }
+  const result: Record<string, string[]> = {};
+  Object.entries(errors as Record<string, unknown>).forEach(
+    ([nodeId, problems]) => {
+      const lines = (Array.isArray(problems) ? problems : [problems])
+        .map(problem => {
+          if (typeof problem === 'string') return problem;
+          if (typeof problem !== 'object' || problem === null) return '';
+          const { loc, message } = problem as {
+            loc?: unknown;
+            message?: unknown;
+          };
+          const text = typeof message === 'string' ? message : '';
+          const where = Array.isArray(loc) ? loc.join('.') : '';
+          return where !== '' && text !== '' ? `${where}: ${text}` : text;
+        })
+        .filter(line => line !== '');
+      if (lines.length > 0) result[nodeId] = lines;
+    },
+  );
+  return result;
+}
+
 export async function fetchDashboardV2(
   ref: string | number,
   { signal }: { signal?: AbortSignal } = {},
@@ -128,6 +229,12 @@ export async function fetchDashboardV2(
  * An update names the revision it was based on, in the body
  * (`base_revision`) and as `If-Match`, and rejects with a
  * {@link DashboardV2ConflictError} when the server holds a different one.
+ *
+ * A create may carry a `uuid` the client made up for the unsaved document.
+ * It becomes the dashboard's uuid, and a create repeated with the same one
+ * writes nothing: the server answers `200` with the dashboard as stored,
+ * which is returned here marked `replayed`.
+ *
  * The contract is `nxtbi/docs/widgets/05-dashboard-v2-api-contract.md`.
  */
 export async function saveDashboardV2({
@@ -135,12 +242,14 @@ export async function saveDashboardV2({
   title,
   nodes,
   baseRevision,
+  uuid,
   signal,
 }: {
   id?: number;
   title: string;
   nodes: Record<string, DocumentNode>;
   baseRevision?: number;
+  uuid?: string;
   signal?: AbortSignal;
 }): Promise<DashboardV2> {
   const jsonPayload = {
@@ -148,25 +257,30 @@ export async function saveDashboardV2({
     document: { version: DOCUMENT_VERSION, nodes },
   };
   try {
-    const { json } =
-      id === undefined
-        ? await SupersetClient.post({
-            endpoint: '/api/v1/dashboard_v2/',
-            jsonPayload,
-            signal,
-          })
-        : await SupersetClient.put({
-            endpoint: `/api/v1/dashboard_v2/${id}`,
-            jsonPayload:
-              baseRevision === undefined
-                ? jsonPayload
-                : { ...jsonPayload, base_revision: baseRevision },
-            headers:
-              baseRevision === undefined
-                ? undefined
-                : { 'If-Match': toETag(baseRevision) },
-            signal,
-          });
+    if (id === undefined) {
+      const { json, response } = await SupersetClient.post({
+        endpoint: '/api/v1/dashboard_v2/',
+        jsonPayload:
+          uuid === undefined ? jsonPayload : { ...jsonPayload, uuid },
+        signal,
+      });
+      const created = json.result as DashboardV2;
+      return response?.status === 200
+        ? { ...created, replayed: true }
+        : created;
+    }
+    const { json } = await SupersetClient.put({
+      endpoint: `/api/v1/dashboard_v2/${id}`,
+      jsonPayload:
+        baseRevision === undefined
+          ? jsonPayload
+          : { ...jsonPayload, base_revision: baseRevision },
+      headers:
+        baseRevision === undefined
+          ? undefined
+          : { 'If-Match': toETag(baseRevision) },
+      signal,
+    });
     return json.result as DashboardV2;
   } catch (error) {
     throw (await toConflictError(error)) ?? error;

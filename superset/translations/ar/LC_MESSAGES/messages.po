@@ -22674,3 +22674,403 @@ msgstr[5] "…و%s مخطط آخر"
 
 msgid "№"
 msgstr "№"
+
+#, python-format
+msgid "%s color"
+msgstr "لون %s"
+
+#, python-format
+msgid "%s series · %s customized"
+msgstr "%s سلسلة · %s مخصصة"
+
+msgid ""
+"A dashboard is embedded widget by widget: your application renders each "
+"saved widget with @apache-superset/widgets, inside a SupersetProvider."
+msgstr ""
+"يتم تضمين لوحة المعلومات عنصر واجهة تلو الآخر: يعرض تطبيقك كل عنصر واجهة "
+"محفوظ باستخدام @apache-superset/widgets داخل SupersetProvider."
+
+msgid ""
+"A saved widget is a copy taken when it was saved. After editing a widget "
+"here, update its saved copy from the widget menu, and save the dashboard "
+"so it remembers the ids."
+msgstr ""
+"عنصر الواجهة المحفوظ هو نسخة أُخذت وقت حفظه. بعد تعديل عنصر واجهة هنا، "
+"حدِّث نسخته المحفوظة من قائمة عنصر الواجهة، واحفظ لوحة المعلومات لتتذكر "
+"المعرّفات."
+
+msgid "Access & ownership"
+msgstr "الوصول والملكية"
+
+#, python-format
+msgid "Add %s"
+msgstr "إضافة %s"
+
+#, python-format
+msgid "Add %s override"
+msgstr "إضافة تجاوز لـ %s"
+
+msgid "Add a series override…"
+msgstr "إضافة تجاوز لسلسلة…"
+
+msgid "Add field"
+msgstr "إضافة حقل"
+
+msgid "Add slide"
+msgstr "إضافة شريحة"
+
+msgid "Add tab"
+msgstr "إضافة تبويب"
+
+msgid "Building Blocks"
+msgstr "عناصر البناء"
+
+msgid "By saved id"
+msgstr "بالمعرّف المحفوظ"
+
+msgid "Carousel slides"
+msgstr "شرائح العرض الدوّار"
+
+msgid ""
+"Changes were made here before this dashboard had finished loading, so the "
+"saved version was not loaded over them."
+msgstr ""
+"أُجريت تغييرات هنا قبل اكتمال تحميل لوحة المعلومات هذه، لذلك لم تُحمَّل "
+"النسخة المحفوظة فوقها."
+
+#, python-format
+msgid "Click to clear this widget's own selection: %s."
+msgstr "انقر لمسح التحديد الخاص بعنصر الواجهة هذا: %s."
+
+msgid "Collapse widget"
+msgstr "طي عنصر الواجهة"
+
+msgid "Content"
+msgstr "المحتوى"
+
+msgid "Copy properties as JSON"
+msgstr "نسخ الخصائص بصيغة JSON"
+
+msgid "Custom metric…"
+msgstr "مقياس مخصص…"
+
+msgid "Dashboard outline"
+msgstr "المخطط الهيكلي للوحة المعلومات"
+
+msgid "Dashboard saved"
+msgstr "تم حفظ لوحة المعلومات"
+
+msgid "Dashboard v2"
+msgstr "لوحة المعلومات v2"
+
+msgid "Discard my changes and reload"
+msgstr "تجاهل تغييراتي وإعادة تحميل"
+
+msgid "Drag a Filter widget in from the panel."
+msgstr "اسحب عنصر واجهة تصفية من اللوحة الجانبية."
+
+msgid "Drag a widget from the panel, or click one to place it."
+msgstr "اسحب عنصر واجهة من اللوحة الجانبية، أو انقر على أحدها لوضعه."
+
+msgid "Drag a widget here from the panel."
+msgstr "اسحب عنصر واجهة إلى هنا من اللوحة الجانبية."
+
+msgid "Drag a widget here to start the first slide."
+msgstr "اسحب عنصر واجهة إلى هنا لبدء الشريحة الأولى."
+
+msgid "Editor panel"
+msgstr "لوحة المحرر"
+
+msgid "Editor panel views"
+msgstr "طرق عرض لوحة المحرر"
+
+msgid "Embed this dashboard"
+msgstr "تضمين لوحة المعلومات هذه"
+
+msgid "Embed widget"
+msgstr "تضمين عنصر الواجهة"
+
+msgid "Expand widget"
+msgstr "توسيع عنصر الواجهة"
+
+#, python-format
+msgid "Filtered by another widget: %s"
+msgstr "تمت التصفية بواسطة عنصر واجهة آخر: %s"
+
+#, python-format
+msgid ""
+"Filtered by another widget: %s. Click to clear this widget's own "
+"selection: %s."
+msgstr ""
+"تمت التصفية بواسطة عنصر واجهة آخر: %s. انقر لمسح التحديد الخاص بعنصر "
+"الواجهة هذا: %s."
+
+msgid "Form"
+msgstr "نموذج"
+
+msgid "Group a dimension first"
+msgstr "جمِّع حسب بُعد أولًا"
+
+msgid "Hide the editor panel"
+msgstr "إخفاء لوحة المحرر"
+
+msgid "History"
+msgstr "السجل"
+
+msgid "Inline"
+msgstr "مضمَّن مباشرة"
+
+#, python-format
+msgid "Move %s down"
+msgstr "تحريك %s للأسفل"
+
+#, python-format
+msgid "Move %s up"
+msgstr "تحريك %s للأعلى"
+
+#, python-format
+msgid "Move metric %s down"
+msgstr "تحريك المقياس %s للأسفل"
+
+#, python-format
+msgid "Move metric %s up"
+msgstr "تحريك المقياس %s للأعلى"
+
+msgid "No filters yet"
+msgstr "لا توجد عوامل تصفية بعد"
+
+msgid "No matching datasets"
+msgstr "لا توجد مجموعات بيانات مطابقة"
+
+msgid "No matching widgets"
+msgstr "لا توجد عناصر واجهة مطابقة"
+
+msgid "No series available to customize yet."
+msgstr "لا توجد سلاسل متاحة للتخصيص بعد."
+
+msgid "Not available yet"
+msgstr "غير متاح بعد"
+
+msgid "Not saved yet"
+msgstr "لم يتم الحفظ بعد"
+
+msgid "Not saved:"
+msgstr "لم يتم الحفظ:"
+
+#, python-format
+msgid "Nothing here is called “%s”."
+msgstr "لا يوجد هنا ما يحمل الاسم «%s»."
+
+msgid "Nothing in this carousel yet"
+msgstr "لا يوجد شيء في هذا العرض الدوّار بعد"
+
+msgid "Nothing in this tab yet"
+msgstr "لا يوجد شيء في هذا التبويب بعد"
+
+msgid "Nothing on the dashboard yet"
+msgstr "لا يوجد شيء في لوحة المعلومات بعد"
+
+msgid "Nothing on this slide yet"
+msgstr "لا يوجد شيء في هذه الشريحة بعد"
+
+msgid "Nothing selected"
+msgstr "لم يتم تحديد شيء"
+
+msgid ""
+"Nothing was changed, and nothing can be saved from here until the "
+"dashboard has loaded."
+msgstr ""
+"لم يتغير شيء، ولا يمكن حفظ أي شيء من هنا حتى يكتمل تحميل لوحة المعلومات."
+
+#, python-format
+msgid "Only editable as JSON, having no value to take a type from: %s"
+msgstr "قابل للتعديل بصيغة JSON فقط، لعدم وجود قيمة يُستدل منها على النوع: %s"
+
+msgid "Outline"
+msgstr "المخطط الهيكلي"
+
+msgid "Overwrite with my version"
+msgstr "الكتابة فوقها بنسختي"
+
+msgid "Pick a widget on the canvas, or a row in the Outline, to edit it here."
+msgstr ""
+"اختر عنصر واجهة من مساحة العمل، أو صفًا من المخطط الهيكلي، لتعديله هنا."
+
+msgid "Properties"
+msgstr "الخصائص"
+
+msgid "Properties must be a JSON object."
+msgstr "يجب أن تكون الخصائص كائن JSON."
+
+msgid "Redo"
+msgstr "إعادة"
+
+msgid ""
+"Reloading replaces what is on screen with the saved version. Overwriting "
+"replaces the saved version with what is on screen. Keep editing to decide "
+"later; saving will ask again."
+msgstr ""
+"إعادة التحميل تستبدل ما على الشاشة بالنسخة المحفوظة. الكتابة فوقها تستبدل "
+"النسخة المحفوظة بما على الشاشة. تابع التعديل لتقرر لاحقًا؛ وسيُطرح السؤال "
+"مجددًا عند الحفظ."
+
+#, python-format
+msgid "Remove %s"
+msgstr "إزالة %s"
+
+#, python-format
+msgid "Remove metric %s"
+msgstr "إزالة المقياس %s"
+
+msgid "Remove tab"
+msgstr "إزالة التبويب"
+
+msgid "Remove widget"
+msgstr "إزالة عنصر الواجهة"
+
+msgid ""
+"Render this widget in any React app with @apache-superset/widgets, inside "
+"a SupersetProvider."
+msgstr ""
+"اعرض عنصر الواجهة هذا في أي تطبيق React باستخدام @apache-superset/widgets "
+"داخل SupersetProvider."
+
+#, python-format
+msgid "Reset %s to default"
+msgstr "إعادة تعيين %s إلى الافتراضي"
+
+msgid "Resize the editor panel"
+msgstr "تغيير حجم لوحة المحرر"
+
+msgid "Resize widget"
+msgstr "تغيير حجم عنصر الواجهة"
+
+msgid "Revert"
+msgstr "التراجع عن التغييرات"
+
+msgid "Save changes to this dashboard?"
+msgstr "هل تريد حفظ التغييرات في لوحة المعلومات هذه؟"
+
+msgid "Save for embedding"
+msgstr "حفظ للتضمين"
+
+msgid ""
+"Save the widget to get an id. The server then runs the saved definition "
+"and the host cannot change it."
+msgstr ""
+"احفظ عنصر الواجهة للحصول على معرّف. عندها يشغّل الخادم التعريف المحفوظ ولا "
+"يستطيع التطبيق المستضيف تغييره."
+
+msgid "Save widget"
+msgstr "حفظ عنصر الواجهة"
+
+msgid "Search components"
+msgstr "البحث في المكونات"
+
+msgid "Search components…"
+msgstr "البحث في المكونات…"
+
+msgid "Search datasets"
+msgstr "البحث في مجموعات البيانات"
+
+msgid "Search datasets…"
+msgstr "البحث في مجموعات البيانات…"
+
+msgid "Show the editor panel"
+msgstr "إظهار لوحة المحرر"
+
+#, python-format
+msgid "Slide %s"
+msgstr "الشريحة %s"
+
+msgid ""
+"Someone saved this dashboard after you opened it. Your changes have not "
+"been saved."
+msgstr ""
+"حفظ شخص آخر لوحة المعلومات هذه بعد أن فتحتها. لم يتم حفظ تغييراتك."
+
+msgid "Sorry, there was an error saving this dashboard"
+msgstr "عذرًا، حدث خطأ أثناء حفظ لوحة المعلومات هذه"
+
+msgid "Start building"
+msgstr "ابدأ البناء"
+
+msgid "Structure"
+msgstr "البنية"
+
+#, python-format
+msgid "Tab %s"
+msgstr "التبويب %s"
+
+msgid "Templates"
+msgstr "القوالب"
+
+msgid "There are no widgets on this dashboard to embed yet."
+msgstr "لا توجد في لوحة المعلومات هذه عناصر واجهة للتضمين بعد."
+
+msgid ""
+"These belong to the dashboard rather than to its contents. Nothing here is "
+"saved yet — the builder holds them in memory."
+msgstr ""
+"هذه الإعدادات تخص لوحة المعلومات نفسها لا محتوياتها. لا يُحفظ شيء منها بعد "
+"— يحتفظ بها المنشئ في الذاكرة."
+
+msgid "This dashboard could not be loaded."
+msgstr "تعذّر تحميل لوحة المعلومات هذه."
+
+#, python-format
+msgid "This dashboard could not be saved: %s"
+msgstr "تعذّر حفظ لوحة المعلومات هذه: %s"
+
+msgid "This dashboard does not exist."
+msgstr "لوحة المعلومات هذه غير موجودة."
+
+msgid ""
+"This dashboard had structural problems that were repaired on load. Saving "
+"will keep the repaired version."
+msgstr ""
+"كانت في لوحة المعلومات هذه مشكلات في البنية تم إصلاحها عند التحميل. سيُبقي "
+"الحفظ على النسخة التي تم إصلاحها."
+
+msgid "This dashboard is too large or too deeply nested to be opened here."
+msgstr "لوحة المعلومات هذه كبيرة جدًا أو متداخلة بعمق يتعذّر معه فتحها هنا."
+
+msgid "This dashboard was changed elsewhere"
+msgstr "تعارض: تم تغيير لوحة المعلومات هذه من مكان آخر"
+
+msgid ""
+"This widget comes from an extension. The host page loads that extension "
+"from Superset as it renders; with guest tokens the deployment also needs "
+"EMBEDDED_EXTENSION_ASSETS_PUBLIC."
+msgstr ""
+"عنصر الواجهة هذا مصدره إضافة. تحمّل الصفحة المستضيفة تلك الإضافة من "
+"Superset عند العرض؛ ومع رموز الضيف يحتاج النشر أيضًا إلى "
+"EMBEDDED_EXTENSION_ASSETS_PUBLIC."
+
+msgid "This widget could not be saved for embedding"
+msgstr "تعذّر حفظ عنصر الواجهة هذا للتضمين"
+
+msgid ""
+"This widget has no properties yet. Add them on the JSON tab, and they "
+"become fields here."
+msgstr ""
+"ليس لعنصر الواجهة هذا خصائص بعد. أضفها في تبويب JSON لتصبح حقولًا هنا."
+
+msgid "Unsaved changes"
+msgstr "تغييرات غير محفوظة"
+
+msgid "Unsupported widget type:"
+msgstr "نوع عنصر واجهة غير مدعوم:"
+
+msgid "Update saved widget"
+msgstr "تحديث عنصر الواجهة المحفوظ"
+
+msgid "Widget saved for embedding"
+msgstr "تم حفظ عنصر الواجهة للتضمين"
+
+msgid "Widgets you place show up here, in the order they sit on the canvas."
+msgstr ""
+"تظهر هنا عناصر الواجهة التي تضعها، بالترتيب الذي تأخذه في مساحة العمل."
+
+msgid "You do not have access to this dashboard."
+msgstr "ليس لديك صلاحية الوصول إلى لوحة المعلومات هذه."

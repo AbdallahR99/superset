@@ -19186,3 +19186,346 @@ msgstr[1] ""
 
 msgid "№"
 msgstr ""
+
+#, python-format
+msgid "%s color"
+msgstr ""
+
+#, python-format
+msgid "%s series · %s customized"
+msgstr ""
+
+msgid "A dashboard is embedded widget by widget: your application renders each saved widget with @apache-superset/widgets, inside a SupersetProvider."
+msgstr ""
+
+msgid "A saved widget is a copy taken when it was saved. After editing a widget here, update its saved copy from the widget menu, and save the dashboard so it remembers the ids."
+msgstr ""
+
+msgid "Access & ownership"
+msgstr ""
+
+#, python-format
+msgid "Add %s"
+msgstr ""
+
+#, python-format
+msgid "Add %s override"
+msgstr ""
+
+msgid "Add a series override…"
+msgstr ""
+
+msgid "Add field"
+msgstr ""
+
+msgid "Add slide"
+msgstr ""
+
+msgid "Add tab"
+msgstr ""
+
+msgid "Building Blocks"
+msgstr ""
+
+msgid "By saved id"
+msgstr ""
+
+msgid "Carousel slides"
+msgstr ""
+
+msgid "Changes were made here before this dashboard had finished loading, so the saved version was not loaded over them."
+msgstr ""
+
+#, python-format
+msgid "Click to clear this widget's own selection: %s."
+msgstr ""
+
+msgid "Collapse widget"
+msgstr ""
+
+msgid "Content"
+msgstr ""
+
+msgid "Copy properties as JSON"
+msgstr ""
+
+msgid "Custom metric…"
+msgstr ""
+
+msgid "Dashboard outline"
+msgstr ""
+
+msgid "Dashboard saved"
+msgstr ""
+
+msgid "Dashboard v2"
+msgstr ""
+
+msgid "Discard my changes and reload"
+msgstr ""
+
+msgid "Drag a Filter widget in from the panel."
+msgstr ""
+
+msgid "Drag a widget from the panel, or click one to place it."
+msgstr ""
+
+msgid "Drag a widget here from the panel."
+msgstr ""
+
+msgid "Drag a widget here to start the first slide."
+msgstr ""
+
+msgid "Editor panel"
+msgstr ""
+
+msgid "Editor panel views"
+msgstr ""
+
+msgid "Embed this dashboard"
+msgstr ""
+
+msgid "Embed widget"
+msgstr ""
+
+msgid "Expand widget"
+msgstr ""
+
+#, python-format
+msgid "Filtered by another widget: %s"
+msgstr ""
+
+#, python-format
+msgid "Filtered by another widget: %s. Click to clear this widget's own selection: %s."
+msgstr ""
+
+msgid "Form"
+msgstr ""
+
+msgid "Group a dimension first"
+msgstr ""
+
+msgid "Hide the editor panel"
+msgstr ""
+
+msgid "History"
+msgstr ""
+
+msgid "Inline"
+msgstr ""
+
+#, python-format
+msgid "Move %s down"
+msgstr ""
+
+#, python-format
+msgid "Move %s up"
+msgstr ""
+
+#, python-format
+msgid "Move metric %s down"
+msgstr ""
+
+#, python-format
+msgid "Move metric %s up"
+msgstr ""
+
+msgid "No filters yet"
+msgstr ""
+
+msgid "No matching datasets"
+msgstr ""
+
+msgid "No matching widgets"
+msgstr ""
+
+msgid "No series available to customize yet."
+msgstr ""
+
+msgid "Not available yet"
+msgstr ""
+
+msgid "Not saved yet"
+msgstr ""
+
+msgid "Not saved:"
+msgstr ""
+
+#, python-format
+msgid "Nothing here is called “%s”."
+msgstr ""
+
+msgid "Nothing in this carousel yet"
+msgstr ""
+
+msgid "Nothing in this tab yet"
+msgstr ""
+
+msgid "Nothing on the dashboard yet"
+msgstr ""
+
+msgid "Nothing on this slide yet"
+msgstr ""
+
+msgid "Nothing selected"
+msgstr ""
+
+msgid "Nothing was changed, and nothing can be saved from here until the dashboard has loaded."
+msgstr ""
+
+#, python-format
+msgid "Only editable as JSON, having no value to take a type from: %s"
+msgstr ""
+
+msgid "Outline"
+msgstr ""
+
+msgid "Overwrite with my version"
+msgstr ""
+
+msgid "Pick a widget on the canvas, or a row in the Outline, to edit it here."
+msgstr ""
+
+msgid "Properties"
+msgstr ""
+
+msgid "Properties must be a JSON object."
+msgstr ""
+
+msgid "Redo"
+msgstr ""
+
+msgid "Reloading replaces what is on screen with the saved version. Overwriting replaces the saved version with what is on screen. Keep editing to decide later; saving will ask again."
+msgstr ""
+
+#, python-format
+msgid "Remove %s"
+msgstr ""
+
+#, python-format
+msgid "Remove metric %s"
+msgstr ""
+
+msgid "Remove tab"
+msgstr ""
+
+msgid "Remove widget"
+msgstr ""
+
+msgid "Render this widget in any React app with @apache-superset/widgets, inside a SupersetProvider."
+msgstr ""
+
+#, python-format
+msgid "Reset %s to default"
+msgstr ""
+
+msgid "Resize the editor panel"
+msgstr ""
+
+msgid "Resize widget"
+msgstr ""
+
+msgid "Revert"
+msgstr ""
+
+msgid "Save changes to this dashboard?"
+msgstr ""
+
+msgid "Save for embedding"
+msgstr ""
+
+msgid "Save the widget to get an id. The server then runs the saved definition and the host cannot change it."
+msgstr ""
+
+msgid "Save widget"
+msgstr ""
+
+msgid "Search components"
+msgstr ""
+
+msgid "Search components…"
+msgstr ""
+
+msgid "Search datasets"
+msgstr ""
+
+msgid "Search datasets…"
+msgstr ""
+
+msgid "Show the editor panel"
+msgstr ""
+
+#, python-format
+msgid "Slide %s"
+msgstr ""
+
+msgid "Someone saved this dashboard after you opened it. Your changes have not been saved."
+msgstr ""
+
+msgid "Sorry, there was an error saving this dashboard"
+msgstr ""
+
+msgid "Start building"
+msgstr ""
+
+msgid "Structure"
+msgstr ""
+
+#, python-format
+msgid "Tab %s"
+msgstr ""
+
+msgid "Templates"
+msgstr ""
+
+msgid "There are no widgets on this dashboard to embed yet."
+msgstr ""
+
+msgid "These belong to the dashboard rather than to its contents. Nothing here is saved yet — the builder holds them in memory."
+msgstr ""
+
+msgid "This dashboard could not be loaded."
+msgstr ""
+
+#, python-format
+msgid "This dashboard could not be saved: %s"
+msgstr ""
+
+msgid "This dashboard does not exist."
+msgstr ""
+
+msgid "This dashboard had structural problems that were repaired on load. Saving will keep the repaired version."
+msgstr ""
+
+msgid "This dashboard is too large or too deeply nested to be opened here."
+msgstr ""
+
+msgid "This dashboard was changed elsewhere"
+msgstr ""
+
+msgid "This widget comes from an extension. The host page loads that extension from Superset as it renders; with guest tokens the deployment also needs EMBEDDED_EXTENSION_ASSETS_PUBLIC."
+msgstr ""
+
+msgid "This widget could not be saved for embedding"
+msgstr ""
+
+msgid "This widget has no properties yet. Add them on the JSON tab, and they become fields here."
+msgstr ""
+
+msgid "Unsaved changes"
+msgstr ""
+
+msgid "Unsupported widget type:"
+msgstr ""
+
+msgid "Update saved widget"
+msgstr ""
+
+msgid "Widget saved for embedding"
+msgstr ""
+
+msgid "Widgets you place show up here, in the order they sit on the canvas."
+msgstr ""
+
+msgid "You do not have access to this dashboard."
+msgstr ""

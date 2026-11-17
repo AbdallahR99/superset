@@ -18,6 +18,7 @@
  */
 import userEvent from '@testing-library/user-event';
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -25,9 +26,13 @@ import {
 } from 'spec/helpers/testing-library';
 import { SupersetClient } from '@superset-ui/core';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
-import 'src/core/dashboard';
+import { registerBuiltInWidgets } from 'src/core/dashboard/registerBuiltInWidgets';
 import Inspector from './Inspector';
 import { resetSchemaControlledWidgetTypesForTests } from './schemaControlledWidgets';
+
+// The page registers the built-in widget types (see its own module); a test
+// that renders a part of the page without the page does it itself.
+registerBuiltInWidgets();
 
 const provider = DashboardProvider.getInstance();
 
@@ -550,6 +555,46 @@ test('a widget type the backend confirms has no schema (a 404 from /validate) ke
       endpoint: expect.stringContaining('/validate'),
     }),
   );
+});
+
+test('an Apply answered after the dashboard was reloaded writes nothing into the reloaded copy', async () => {
+  // A widget type with no schema: the 404 path, which commits to the store
+  // directly rather than through `commitWidgetProps`, and so has to check
+  // for itself that the tree is still the one Apply was pressed on.
+  const stored = {
+    root: { type: 'grid', children: ['node_1'] },
+    node_1: { type: 'echarts', props: { title: 'Saved' } },
+  };
+  act(() => {
+    provider.loadDocument(stored);
+    provider.setSelection('node_1');
+  });
+  render(<Inspector />);
+  await openJson();
+  let refuse: () => void = () => {};
+  postSpy.mockImplementation(({ endpoint }: { endpoint: string }) =>
+    endpoint.endsWith('/validate')
+      ? (new Promise((_, reject) => {
+          refuse = () => reject(new Response(null, { status: 404 }));
+        }) as never)
+      : Promise.resolve({ json: { result: METRIC_TILE_SCHEMA } } as never),
+  );
+
+  fireEvent.change(screen.getByTestId('inspector-props'), {
+    target: { value: '{"title":"Discarded edit"}' },
+  });
+  await userEvent.click(screen.getByTestId('inspector-props-apply'));
+  // The author discards their edits and reloads: same ids, another tree.
+  act(() => {
+    provider.loadDocument(stored);
+  });
+  const versionAfterReload = provider.getDocumentVersion();
+  await act(async () => {
+    refuse();
+  });
+
+  expect(provider.getNode('node_1')?.props).toEqual({ title: 'Saved' });
+  expect(provider.getDocumentVersion()).toBe(versionAfterReload);
 });
 
 test('a non-404 failure from /validate leaves node.props unchanged and surfaces the error, even for a widget type the cached list has not resolved for', async () => {
