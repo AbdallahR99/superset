@@ -23,7 +23,7 @@ sync_sources() {
       -o -type f "${newer[@]}" -print0 | tar --null -T - -cf - ) | tar -xf - -C "$DST"
   # translation catalogues live outside superset-frontend
   mkdir -p /app/superset/translations
-  ( cd /host/superset/translations && find . -type f \( -name '*.po' -o -name '*.pot' -o -name '*.py' -o -name '*.txt' -o -name '*.cfg' \) "${newer[@]}" -print0 \
+  ( cd /host/superset/translations && find . -type f \( -name '*.po' -o -name '*.pot' -o -name '*.py' -o -name '*.txt' -o -name '*.cfg' \) -print0 \
       | tar --null -T - -cf - ) | tar -xf - -C /app/superset/translations
   mv /tmp/sync-start "$STAMP"
   echo "[fe-build] sources synced in $((SECONDS - started))s"
@@ -73,7 +73,9 @@ case "$MODE" in
     ;;
   type)
     deps_if_needed
-    npm run type
+    # Build mode: the packages are TypeScript project references, so their
+    # declarations must exist before the application is checked.
+    NODE_OPTIONS=--max-old-space-size=8192 npx tsc --build
     ;;
   *)
     echo "usage: fe-build.sh [dev|prod|translations|test <jest args>|type]" >&2

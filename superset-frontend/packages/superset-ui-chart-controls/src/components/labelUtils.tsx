@@ -46,6 +46,8 @@ const TooltipSectionLabel = styled.span`
   `}
 `;
 
+// `dir="auto"`: names, types and descriptions keep their own reading order
+// whatever the direction of the interface.
 const TooltipSection = ({
   label,
   text,
@@ -54,7 +56,8 @@ const TooltipSection = ({
   text: ReactNode;
 }) => (
   <TooltipSectionWrapper>
-    <TooltipSectionLabel>{label}</TooltipSectionLabel>: <span>{text}</span>
+    <TooltipSectionLabel>{label}</TooltipSectionLabel>:{' '}
+    <span dir="auto">{text}</span>
   </TooltipSectionWrapper>
 );
 

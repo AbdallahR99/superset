@@ -298,3 +298,21 @@ test('renders StyledItem with role=undefined when onClick is not defined', () =>
 
   expect(styledItems.length).toBe(0);
 });
+
+test('lets the text of an item resolve its own direction', () => {
+  render(<MetadataBar items={ITEMS.slice(0, 2)} />);
+
+  // User-authored text may be in another script than the interface, so the
+  // element that truncates it must take its direction from the text.
+  expect(screen.getByText(DESCRIPTION_VALUE)).toHaveAttribute('dir', 'auto');
+  expect(screen.getByText(DASHBOARD_TITLE)).toHaveAttribute('dir', 'auto');
+});
+
+test('isolates the direction of a plain text tooltip', async () => {
+  await runWithBarCollapsed(async () => {
+    render(<MetadataBar items={ITEMS.slice(0, 2)} />);
+    await userEvent.hover(screen.getAllByRole('img')[1]);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(within(tooltip).getByText(DESCRIPTION_VALUE).tagName).toBe('BDI');
+  });
+});

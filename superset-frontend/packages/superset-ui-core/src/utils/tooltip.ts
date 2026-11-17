@@ -100,12 +100,21 @@ export function tooltipMarker(color: unknown, symbol = 'circle'): string {
   // A diamond needs transform, which the sanitizer also strips, so use a glyph
   // sized to match; its ink is a little wider, hence the 1px margin below.
   if (symbol === 'diamond') {
-    return `<span style="color:${color};font-size:15px;line-height:0;margin-right:4px">◆</span>`;
+    return `<span style="color:${color};font-size:15px;line-height:0;margin-inline-end:4px">◆</span>`;
   }
   const shape = MARKER_SHAPES[symbol] ?? MARKER_SHAPES.circle;
-  return `<span style="color:${color};font-size:0;line-height:0;vertical-align:middle;margin:0 5px 0 1px;border:${MARKER_SIZE / 2}px solid currentcolor;${shape}"></span>`;
+  return `<span style="color:${color};font-size:0;line-height:0;vertical-align:middle;margin-inline-start:1px;margin-inline-end:5px;border:${MARKER_SIZE / 2}px solid currentcolor;${shape}"></span>`;
 }
 
+/**
+ * Builds the tooltip table. The markup is direction-agnostic, because the
+ * builder cannot know where it will be mounted (a tooltip appended to the
+ * page body follows the page direction, one rendered inside a chart follows
+ * the chart): spacing and alignment use logical properties, and every piece
+ * of text sits in a `<bdi>` so that a number such as `-5%` or a
+ * left-to-right label keeps its own reading order inside a right-to-left
+ * tooltip.
+ */
 export function tooltipHtml(
   data: string[][],
   title?: string,
@@ -114,7 +123,7 @@ export function tooltipHtml(
 ) {
   const truncationStyle = getTruncationStyle(truncation);
   const titleRow = title
-    ? `<span style="font-weight: 700;${truncationStyle}">${title}</span>`
+    ? `<span style="font-weight: 700;${truncationStyle}"><bdi>${title}</bdi></span>`
     : '';
   return sanitizeHtml(`
     <div>
@@ -127,11 +136,11 @@ export function tooltipHtml(
                 i === focusedRow ? 'font-weight: 700;' : 'opacity: 0.8;';
               const cells = row.map((cell, j) => {
                 const cellStyle = `
-                  text-align: ${j > 0 ? 'right' : 'left'};
-                  padding-left: ${j === 0 ? 0 : 16}px;
+                  text-align: ${j > 0 ? 'end' : 'start'};
+                  padding-inline-start: ${j === 0 ? 0 : 16}px;
                   ${truncationStyle}
                 `;
-                return `<td style="${cellStyle}">${cell}</td>`;
+                return `<td style="${cellStyle}"><bdi>${cell}</bdi></td>`;
               });
               return `<tr style="${rowStyle}">${cells.join('')}</tr>`;
             })

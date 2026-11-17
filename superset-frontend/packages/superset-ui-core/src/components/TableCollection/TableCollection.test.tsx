@@ -181,6 +181,8 @@ test('Should display correct page info when showRowCount is true', () => {
 
   // AntD pagination shows page info
   expect(screen.getByText('1-2 of 3')).toBeInTheDocument();
+  // The range reads in its own direction inside a right-to-left interface.
+  expect(screen.getByText('1-2 of 3')).toHaveAttribute('dir', 'auto');
 });
 
 test('Should not display page info when showRowCount is false', () => {

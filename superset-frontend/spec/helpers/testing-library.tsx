@@ -30,6 +30,7 @@ import {
   ThemeProvider,
   themeObject,
   supersetTheme,
+  type Direction,
 } from '@apache-superset/core/theme';
 import { SupersetThemeProvider } from 'src/theme/ThemeProvider';
 import { ThemeController } from 'src/theme/ThemeController';
@@ -52,12 +53,46 @@ type Options = Omit<RenderOptions, 'queries'> & {
   useQueryParams?: boolean;
   useRouter?: boolean;
   useTheme?: boolean;
+  /**
+   * Renders the tree in the given text direction: `<html dir>` is set for the
+   * duration of the test (and restored afterwards), styled components are
+   * mirrored for `rtl`, and Ant Design components receive the direction.
+   */
+  direction?: Direction;
   initialState?: {};
   reducers?: {};
   store?: Store;
 };
 
 const themeController = new ThemeController({ themeObject });
+
+// `undefined` while no test has overridden the document direction.
+let documentDirBeforeOverride: string | null | undefined;
+
+function overrideDocumentDirection(direction: Direction) {
+  if (documentDirBeforeOverride === undefined) {
+    documentDirBeforeOverride = document.documentElement.getAttribute('dir');
+  }
+  document.documentElement.setAttribute('dir', direction);
+}
+
+function restoreDocumentDirection() {
+  if (documentDirBeforeOverride === undefined) {
+    return;
+  }
+  if (documentDirBeforeOverride === null) {
+    document.documentElement.removeAttribute('dir');
+  } else {
+    document.documentElement.setAttribute('dir', documentDirBeforeOverride);
+  }
+  documentDirBeforeOverride = undefined;
+}
+
+// A direction set through the `direction` option must not leak into the next
+// test of the file.
+if (typeof afterEach === 'function') {
+  afterEach(restoreDocumentDirection);
+}
 
 export const createStore = (initialState: object = {}, reducers: object = {}) =>
   configureStore({
@@ -81,6 +116,7 @@ export function createWrapper(options?: Options) {
     useQueryParams,
     useRouter,
     useTheme,
+    direction,
     initialState,
     reducers,
     store,
@@ -90,6 +126,16 @@ export function createWrapper(options?: Options) {
     let result = (
       <ThemeProvider theme={supersetTheme}>{children}</ThemeProvider>
     );
+
+    if (direction) {
+      // The explicit prop makes the subtree direction independent of the order
+      // in which the document attribute and the providers are set up.
+      result = (
+        <themeObject.SupersetThemeProvider direction={direction}>
+          {result}
+        </themeObject.SupersetThemeProvider>
+      );
+    }
 
     if (useTheme) {
       result = (
@@ -130,8 +176,12 @@ export function createWrapper(options?: Options) {
   };
 }
 
-const customRender = (ui: ReactElement, options?: Options) =>
-  render(ui, { wrapper: createWrapper(options), ...options });
+const customRender = (ui: ReactElement, options?: Options) => {
+  if (options?.direction) {
+    overrideDocumentDirection(options.direction);
+  }
+  return render(ui, { wrapper: createWrapper(options), ...options });
+};
 
 export function sleep(time: number) {
   return new Promise(resolve => {

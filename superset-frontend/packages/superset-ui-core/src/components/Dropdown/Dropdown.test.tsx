@@ -19,7 +19,7 @@
 
 import { createRef } from 'react';
 import { render, fireEvent, screen } from '@superset-ui/core/spec';
-import { MenuDotsDropdown, NoAnimationDropdown } from '.';
+import { Dropdown, MenuDotsDropdown, NoAnimationDropdown } from '.';
 
 const props = {
   overlay: <div>Test Overlay</div>,
@@ -94,4 +94,48 @@ describe('NoAnimationDropdown', () => {
     fireEvent.keyDown(screen.getByText('Test Button'));
     expect(onKeyDown).toHaveBeenCalled();
   });
+});
+
+const placementClass = () =>
+  // eslint-disable-next-line testing-library/no-node-access
+  Array.from(document.querySelector('.ant-dropdown')?.classList ?? []).find(
+    name => name.startsWith('ant-dropdown-placement-'),
+  );
+
+const overlay = () => <div>Test Overlay</div>;
+
+test('Dropdown keeps an explicit placement in a left-to-right layout', () => {
+  render(
+    <Dropdown popupRender={overlay} placement="bottomLeft" open>
+      <button type="button">Test Button</button>
+    </Dropdown>,
+  );
+  expect(placementClass()).toBe('ant-dropdown-placement-bottomLeft');
+});
+
+test('Dropdown mirrors an explicit placement in a right-to-left layout', () => {
+  render(
+    <Dropdown popupRender={overlay} placement="bottomLeft" open>
+      <button type="button">Test Button</button>
+    </Dropdown>,
+    { direction: 'rtl' },
+  );
+  expect(placementClass()).toBe('ant-dropdown-placement-bottomRight');
+});
+
+test('NoAnimationDropdown mirrors an explicit placement in a right-to-left layout', () => {
+  render(
+    <NoAnimationDropdown popupRender={overlay} placement="topRight" open>
+      <button type="button">Test Button</button>
+    </NoAnimationDropdown>,
+    { direction: 'rtl' },
+  );
+  expect(placementClass()).toBe('ant-dropdown-placement-topLeft');
+});
+
+test('MenuDotsDropdown mirrors an explicit placement in a right-to-left layout', () => {
+  render(<MenuDotsDropdown {...props} placement="bottomRight" open />, {
+    direction: 'rtl',
+  });
+  expect(placementClass()).toBe('ant-dropdown-placement-bottomLeft');
 });

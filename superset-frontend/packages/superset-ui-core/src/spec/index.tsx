@@ -20,7 +20,7 @@ import userEvent from '@testing-library/user-event';
 import { ReactElement } from 'react';
 import { render, RenderOptions } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import { themeObject } from '@apache-superset/core/theme';
+import { themeObject, type Direction } from '@apache-superset/core/theme';
 
 // Define the wrapper component outside
 const AllTheProviders = ({ children }: { children: React.ReactNode }) => (
@@ -29,11 +29,32 @@ const AllTheProviders = ({ children }: { children: React.ReactNode }) => (
   </themeObject.SupersetThemeProvider>
 );
 
+const providersWithDirection =
+  (direction: Direction) =>
+  ({ children }: { children: React.ReactNode }) => (
+    <themeObject.SupersetThemeProvider direction={direction}>
+      {children}
+    </themeObject.SupersetThemeProvider>
+  );
+
+type Options = Omit<RenderOptions, 'wrapper'> & {
+  /**
+   * Text direction of the rendered tree. `rtl` mirrors styled components and
+   * hands the direction to Ant Design, as the application does for a
+   * right-to-left locale. The document itself is left untouched, so code
+   * that reads `<html dir>` directly is not affected.
+   */
+  direction?: Direction;
+};
+
 // Follow the exact pattern from RTL docs
-const customRender = (
-  ui: ReactElement,
-  options?: Omit<RenderOptions, 'wrapper'>,
-) => render(ui, { wrapper: AllTheProviders, ...options });
+const customRender = (ui: ReactElement, options?: Options) => {
+  const { direction, ...renderOptions } = options ?? {};
+  return render(ui, {
+    wrapper: direction ? providersWithDirection(direction) : AllTheProviders,
+    ...renderOptions,
+  });
+};
 
 export {
   createEvent,

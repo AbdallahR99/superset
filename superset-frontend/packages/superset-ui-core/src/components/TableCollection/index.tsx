@@ -25,6 +25,7 @@ import {
   TablePropGetter,
 } from 'react-table';
 import { styled } from '@apache-superset/core/theme';
+import { t } from '@apache-superset/core/translation';
 import { Table, TableSize } from '@superset-ui/core/components/Table';
 import {
   ColumnsType,
@@ -242,8 +243,11 @@ function TableCollection<T extends object>({
   );
 
   const showTotalFunc = useCallback(
-    (total: number, range: [number, number]) =>
-      `${range[0]}-${range[1]} of ${total}`,
+    (total: number, range: [number, number]) => (
+      // `auto` keeps the sentence in its own reading order, whether or not it
+      // is translated into the language of a right-to-left interface.
+      <span dir="auto">{t('%s-%s of %s', range[0], range[1], total)}</span>
+    ),
     [],
   );
 

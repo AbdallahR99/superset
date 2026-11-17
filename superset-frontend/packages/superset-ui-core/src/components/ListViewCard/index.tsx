@@ -236,7 +236,10 @@ function ListViewCard({
               {subtitle || null}
               <div className="titleRow">
                 <Tooltip title={title}>
-                  <TitleLink>
+                  {/* A title is user-authored text in any language: with its
+                      own direction, a left-to-right title is truncated at its
+                      end in a right-to-left interface, not at its start. */}
+                  <TitleLink dir="auto">
                     {certifiedBy && (
                       <>
                         <CertifiedBadge

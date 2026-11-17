@@ -740,3 +740,51 @@ test('does not move autocomplete popup if target container is document.body', as
   }
   document.body.removeChild(mockAutocompletePopup);
 });
+
+test('keeps the editor left-to-right and its styles unmirrored in a right-to-left interface', async () => {
+  const ref = createRef<AceEditor>();
+  const { container } = render(<SQLEditor ref={ref as React.Ref<never>} />, {
+    direction: 'rtl',
+  });
+
+  await waitFor(() => {
+    expect(container.querySelector(selector)).toBeInTheDocument();
+  });
+
+  // The editor root carries the attribute, not only Ace's own CSS.
+  expect(container.querySelector(selector)).toHaveAttribute('dir', 'ltr');
+
+  // The Global block that restyles Ace's physically positioned DOM must be
+  // emitted by the left-to-right cache; a mirrored copy would move the
+  // tooltip margin to the other side.
+  const rtlCss = Array.from(
+    document.querySelectorAll('style[data-emotion^="superset-rtl"]'),
+  )
+    .map(tag => tag.textContent ?? '')
+    .join(' ');
+  expect(rtlCss).not.toContain('.ace_tooltip');
+  expect(getInjectedCss()).toMatch(/\.ace_tooltip\s*{\s*margin-left:/);
+});
+
+test('marks the autocomplete popup left-to-right', async () => {
+  const ref = createRef<AceEditor>();
+  const { container } = render(<SQLEditor ref={ref as React.Ref<never>} />);
+
+  await waitFor(() => {
+    expect(container.querySelector(selector)).toBeInTheDocument();
+  });
+
+  const editorInstance = ref.current?.editor;
+  expect(editorInstance).toBeDefined();
+  if (!editorInstance) return;
+
+  const popup = document.createElement('div');
+  popup.className = 'ace_autocomplete';
+  document.body.appendChild(popup);
+
+  editorInstance.commands.exec('insertstring', editorInstance, 'SELECT');
+
+  await waitFor(() => expect(popup).toHaveAttribute('dir', 'ltr'));
+
+  popup.remove();
+});

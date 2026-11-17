@@ -112,7 +112,13 @@ export const DynamicEditableTitle = memo(
         if (inputElement) {
           const { length } = inputElement.value;
           inputElement.setSelectionRange(length, length);
-          inputElement.scrollLeft = inputElement.scrollWidth;
+          // The end of the text is at the left edge of a right-to-left input,
+          // which is the negative end of its scroll range.
+          const endsOnTheLeft =
+            getComputedStyle(inputElement).direction === 'rtl';
+          inputElement.scrollLeft = endsOnTheLeft
+            ? -inputElement.scrollWidth
+            : inputElement.scrollWidth;
         }
       }
     }, [isEditing]);
@@ -233,6 +239,10 @@ export const DynamicEditableTitle = memo(
             variant="borderless"
             aria-label={label ?? t('Title')}
             className="dynamic-title-input"
+            // A title is user-authored text in any language: let its own
+            // content decide its direction. An empty input keeps the
+            // direction of the interface for its placeholder.
+            dir={currentTitle ? 'auto' : undefined}
             value={currentTitle}
             onChange={handleChange}
             onBlur={handleBlur}

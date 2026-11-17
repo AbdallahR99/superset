@@ -70,6 +70,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   highlightActiveLine = true,
   editorProps = { $blockScrolling: true },
   setOptions,
+  onLoad,
   ...rest
 }: CodeEditorProps) => {
   const editorName = name || Math.random().toString(36).substring(7);
@@ -99,6 +100,11 @@ export const CodeEditor: FC<CodeEditorProps> = ({
         fontFamily:
           'Menlo, Consolas, Courier New, Ubuntu Mono, source-code-pro, Lucida Console, monospace',
         ...setOptions,
+      }}
+      onLoad={editor => {
+        // Code is left-to-right regardless of the interface language.
+        editor.container?.setAttribute('dir', 'ltr');
+        onLoad?.(editor);
       }}
       {...rest}
     />

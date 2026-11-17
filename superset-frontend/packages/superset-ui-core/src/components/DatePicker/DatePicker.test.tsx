@@ -29,3 +29,19 @@ test('should render range picker', () => {
   const { container } = render(<RangePicker />);
   expect(container).toBeInTheDocument();
 });
+
+const placementClass = () =>
+  Array.from(
+    // eslint-disable-next-line testing-library/no-node-access
+    document.querySelector('.ant-picker-dropdown')?.classList ?? [],
+  ).find(name => name.startsWith('ant-picker-dropdown-placement-'));
+
+test('keeps an explicit placement in a left-to-right layout', () => {
+  render(<DatePicker open placement="bottomLeft" />);
+  expect(placementClass()).toBe('ant-picker-dropdown-placement-bottomLeft');
+});
+
+test('mirrors an explicit placement in a right-to-left layout', () => {
+  render(<DatePicker open placement="bottomLeft" />, { direction: 'rtl' });
+  expect(placementClass()).toBe('ant-picker-dropdown-placement-bottomRight');
+});

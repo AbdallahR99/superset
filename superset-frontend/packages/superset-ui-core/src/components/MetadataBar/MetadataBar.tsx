@@ -95,6 +95,9 @@ const StyledItem = styled.div<{
       white-space: nowrap;
       text-decoration: ${onClick ? 'underline' : 'none'};
       line-height: 1.4;
+      /* The text resolves its own direction (dir=auto); a text shorter than
+         the minimum width still aligns with the direction of the bar. */
+      text-align: match-parent;
     }
   `}
 `;
@@ -142,7 +145,11 @@ const Item = ({
     >
       <Icon iconSize="l" className="metadata-icon" />
       {!collapsed && (
-        <span ref={ref} className="metadata-text">
+        // Titles are user-authored (descriptions, names, tags) and may be in
+        // a different script than the UI. dir="auto" resolves the direction
+        // from the text itself, so the ellipsis lands at the end of the text
+        // and trailing punctuation is not reordered.
+        <span ref={ref} className="metadata-text" dir="auto">
           {title}
         </span>
       )}
@@ -151,7 +158,11 @@ const Item = ({
   return isTruncated || collapsed || (tooltip && tooltip !== title) ? (
     <Tooltip
       placement={tooltipPlacement}
-      title={<TooltipContent>{tooltip}</TooltipContent>}
+      title={
+        <TooltipContent>
+          {typeof tooltip === 'string' ? <bdi>{tooltip}</bdi> : tooltip}
+        </TooltipContent>
+      }
     >
       {content}
     </Tooltip>

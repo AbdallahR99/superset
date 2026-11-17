@@ -373,3 +373,20 @@ test('fullHeight prop handles empty items array', () => {
 
   expect(container.querySelector('.ant-tabs')).toBeInTheDocument();
 });
+
+test('keeps a physical tab position in a left-to-right layout', () => {
+  const { container } = render(
+    <Tabs items={defaultItems} tabPosition="left" />,
+  );
+
+  expect(container.querySelector('.ant-tabs')).toHaveClass('ant-tabs-left');
+});
+
+test('mirrors a physical tab position in a right-to-left layout', () => {
+  const { container } = render(
+    <Tabs items={defaultItems} tabPosition="left" />,
+    { direction: 'rtl' },
+  );
+
+  expect(container.querySelector('.ant-tabs')).toHaveClass('ant-tabs-right');
+});

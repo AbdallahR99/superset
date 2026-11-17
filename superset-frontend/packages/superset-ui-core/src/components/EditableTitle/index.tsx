@@ -209,6 +209,10 @@ export function EditableTitle({
       data-test="textarea-editable-title-input"
       ref={contentRef}
       value={value}
+      // A title is user-authored text in any language: let its own content
+      // decide its direction. An empty field keeps the direction of the
+      // interface for its placeholder.
+      dir={value ? 'auto' : undefined}
       className={!title ? 'text-muted' : undefined}
       onChange={handleChange}
       onBlur={handleBlur}
@@ -253,7 +257,11 @@ export function EditableTitle({
       // New approach: let caller provide the link component
       titleComponent = renderLink(value || '');
     } else {
-      titleComponent = <span data-test="span-title">{value}</span>;
+      titleComponent = (
+        <span data-test="span-title" dir="auto">
+          {value}
+        </span>
+      );
     }
   }
 

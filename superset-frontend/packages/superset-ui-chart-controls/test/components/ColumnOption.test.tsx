@@ -123,3 +123,13 @@ test('shows a warning with InfoTooltip when it contains warning', () => {
   });
   expect(getByTestId('mock-tooltip')).toBeInTheDocument();
 });
+
+test('lets the column label resolve its own direction', () => {
+  // `SUM(amount)` or `order_date` must not be reordered inside a
+  // right-to-left interface.
+  const { container } = setup();
+  expect(container.querySelector('.option-label')).toHaveAttribute(
+    'dir',
+    'auto',
+  );
+});

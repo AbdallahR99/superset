@@ -113,18 +113,32 @@ export default class InteractiveTableUtils {
     ev.preventDefault();
   };
 
+  /**
+   * Whether the table is laid out right-to-left, read from the nearest `dir`
+   * attribute (the document, or a subtree with its own direction).
+   */
+  isRtl = (): boolean =>
+    this.tableRef?.closest('[dir]')?.getAttribute('dir') === 'rtl';
+
+  /**
+   * The resize zone is the strip along the trailing edge of a header cell:
+   * its right edge, or its left edge in a right-to-left table. `offsetX` is
+   * measured from the left edge of the cell in both cases.
+   */
+  isInResizeZone = (event: MouseEvent, target: HTMLElement): boolean =>
+    this.isRtl()
+      ? withinRange(0, event.offsetX, this.RESIZE_INDICATOR_THRESHOLD)
+      : withinRange(
+          event.offsetX,
+          target.offsetWidth,
+          this.RESIZE_INDICATOR_THRESHOLD,
+        );
+
   handleMouseDown = (event: MouseEvent) => {
     const target = event?.currentTarget as IInteractiveColumn;
     if (target) {
       this.columnRef = target;
-      if (
-        event &&
-        withinRange(
-          event.offsetX,
-          target.offsetWidth,
-          this.RESIZE_INDICATOR_THRESHOLD,
-        )
-      ) {
+      if (event && this.isInResizeZone(event, target)) {
         target.mouseDown = true;
         target.oldX = event.x;
         target.oldWidth = target.offsetWidth;
@@ -138,14 +152,7 @@ export default class InteractiveTableUtils {
   handleMouseMove = (event: MouseEvent) => {
     if (this.resizable === true && !this.isDragging) {
       const target = event.currentTarget as IInteractiveColumn;
-      if (
-        event &&
-        withinRange(
-          event.offsetX,
-          target.offsetWidth,
-          this.RESIZE_INDICATOR_THRESHOLD,
-        )
-      ) {
+      if (event && this.isInResizeZone(event, target)) {
         target.style.cursor = 'col-resize';
       } else {
         target.style.cursor = 'default';
@@ -154,8 +161,10 @@ export default class InteractiveTableUtils {
       const column = this.columnRef;
       if (column?.mouseDown) {
         let width = column.oldWidth;
-        const diff = event.x - column.oldX;
-        if (column.oldWidth + (event.x - column.oldX) > 0) {
+        // Dragging the trailing edge away from the cell widens the column:
+        // towards the right, or towards the left in a right-to-left table.
+        const diff = (event.x - column.oldX) * (this.isRtl() ? -1 : 1);
+        if (column.oldWidth + diff > 0) {
           width = column.oldWidth + diff;
         }
         const colIndex = this.getColumnIndex();

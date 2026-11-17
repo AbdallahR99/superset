@@ -47,3 +47,43 @@ test('renders with icon child', async () => {
   await userEvent.hover(screen.getByRole('img'));
   expect(await screen.findByRole('tooltip')).toBeInTheDocument();
 });
+
+const placementClass = () =>
+  // eslint-disable-next-line testing-library/no-node-access
+  Array.from(document.querySelector('.ant-tooltip')?.classList ?? []).find(
+    name => name.startsWith('ant-tooltip-placement-'),
+  );
+
+test('keeps an explicit placement in a left-to-right layout', () => {
+  render(
+    <Tooltip title="Simple tooltip" placement="topLeft" open>
+      <Button>Hover me</Button>
+    </Tooltip>,
+  );
+  expect(placementClass()).toBe('ant-tooltip-placement-topLeft');
+});
+
+test('mirrors an explicit placement in a right-to-left layout', () => {
+  render(
+    <Tooltip title="Simple tooltip" placement="topLeft" open>
+      <Button>Hover me</Button>
+    </Tooltip>,
+    { direction: 'rtl' },
+  );
+  expect(placementClass()).toBe('ant-tooltip-placement-topRight');
+});
+
+test('keeps a physical placement when mirrorPlacement is false', () => {
+  render(
+    <Tooltip
+      title="Simple tooltip"
+      placement="left"
+      mirrorPlacement={false}
+      open
+    >
+      <Button>Hover me</Button>
+    </Tooltip>,
+    { direction: 'rtl' },
+  );
+  expect(placementClass()).toBe('ant-tooltip-placement-left');
+});

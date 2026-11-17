@@ -61,3 +61,12 @@ describe('ListViewCard', () => {
     expect(screen.getByTestId('image-loader')).toBeVisible();
   });
 });
+
+test('lets the card title decide its own direction', () => {
+  render(<ListViewCard title="Card Title" description="" loading={false} />);
+  // eslint-disable-next-line testing-library/no-node-access
+  expect(screen.getByText('Card Title').closest('[dir]')).toHaveAttribute(
+    'dir',
+    'auto',
+  );
+});

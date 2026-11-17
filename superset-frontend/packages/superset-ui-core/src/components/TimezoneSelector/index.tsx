@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { t } from '@apache-superset/core/translation';
+import { flipPlacement, useDirection } from '@apache-superset/core/theme';
 import { Select } from '@superset-ui/core/components';
 import type { LabeledValue } from '@superset-ui/core/components';
 import { extendedDayjs } from '../../utils/dates';
@@ -74,6 +75,7 @@ export default function TimezoneSelector({
   const [timezoneOptions, setTimezoneOptions] = useState<
     TimezoneOption[] | null
   >(timezoneOptionsCache.getOptions());
+  const direction = useDirection();
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
   const hasSetDefaultRef = useRef(false);
 
@@ -169,7 +171,7 @@ export default function TimezoneSelector({
       }
       loading={isLoadingOptions}
       placeholder={isLoadingOptions ? t('Loading timezones...') : placeholder}
-      {...{ placement: 'topLeft', ...rest }}
+      {...{ placement: flipPlacement('topLeft', direction), ...rest }}
     />
   );
 }

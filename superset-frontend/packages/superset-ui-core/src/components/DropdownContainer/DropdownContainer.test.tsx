@@ -240,6 +240,76 @@ const remeasureWithExtraItem = (style?: CSSProperties) => {
   );
 };
 
+/**
+ * Right-to-left counterpart: a ROW_WIDTH wide row whose items are laid out
+ * from its right edge towards the left, so the items that do not fit stick
+ * out past the left edge of the row.
+ */
+const mockRtlBoundingRects = () => {
+  const ROW_LEFT = 150;
+  const ROW_RIGHT = ROW_LEFT + ROW_WIDTH;
+  const getBoundingClientRect: (this: HTMLElement) => DOMRect = function () {
+    const itemNumber =
+      this.dataset.test === 'container'
+        ? 0
+        : Number(this.textContent?.match(/Element (\d+)/)?.[1]);
+    const right = itemNumber
+      ? ROW_RIGHT - (itemNumber - 1) * ITEM_WIDTH
+      : ROW_RIGHT;
+    const left = itemNumber ? right - ITEM_WIDTH : ROW_LEFT;
+    return {
+      bottom: 0,
+      height: 0,
+      left,
+      right,
+      top: 0,
+      width: right - left,
+      x: left,
+      y: 0,
+      toJSON: () => ({}),
+    };
+  };
+  jest
+    .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockImplementation(getBoundingClientRect);
+};
+
+test('detects items overflowing past the left edge in a right-to-left layout', () => {
+  mockRtlBoundingRects();
+  const onOverflowingStateChange = jest.fn();
+
+  const { rerender } = render(
+    <DropdownContainer
+      items={generateItems(3)}
+      onOverflowingStateChange={onOverflowingStateChange}
+    />,
+    { direction: 'rtl' },
+  );
+  rerender(
+    <DropdownContainer
+      items={generateItems(3)}
+      onOverflowingStateChange={onOverflowingStateChange}
+    />,
+  );
+
+  expect(screen.getByTestId('dropdown-container-btn')).toBeInTheDocument();
+  expect(onOverflowingStateChange).toHaveBeenLastCalledWith({
+    notOverflowed: ['el-1', 'el-2'],
+    overflowed: ['el-3'],
+  });
+});
+
+test('does not treat the right-to-left geometry as overflow in a left-to-right layout', () => {
+  mockRtlBoundingRects();
+
+  const { rerender } = render(<DropdownContainer items={generateItems(3)} />);
+  rerender(<DropdownContainer items={generateItems(3)} />);
+
+  expect(
+    screen.queryByTestId('dropdown-container-btn'),
+  ).not.toBeInTheDocument();
+});
+
 test('clips the item row while remeasuring, then restores it', () => {
   const measured: string[] = [];
   mockBoundingRects(row => {

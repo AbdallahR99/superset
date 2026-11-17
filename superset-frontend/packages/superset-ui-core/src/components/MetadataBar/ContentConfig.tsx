@@ -38,7 +38,11 @@ const Info = ({
     <>
       {header && <Header>{header}</Header>}
       {values.map(value => (
-        <div key={value}>{value}</div>
+        // Values are user data (names, dates, descriptions): isolate them so
+        // their own direction does not reorder against the tooltip's.
+        <div key={value}>
+          <bdi>{value}</bdi>
+        </div>
       ))}
     </>
   );

@@ -71,3 +71,34 @@ test('fires an event when visibility is changed', async () => {
   await userEvent.hover(screen.getByRole('button'));
   await waitFor(() => expect(onOpenChange).toHaveBeenCalledTimes(1));
 });
+
+const placementClass = () =>
+  // eslint-disable-next-line testing-library/no-node-access
+  Array.from(document.querySelector('.ant-popover')?.classList ?? []).find(
+    name => name.startsWith('ant-popover-placement-'),
+  );
+
+test('keeps an explicit placement in a left-to-right layout', () => {
+  render(<Popover content="Content sample" placement="rightTop" open />);
+  expect(placementClass()).toBe('ant-popover-placement-rightTop');
+});
+
+test('mirrors an explicit placement in a right-to-left layout', () => {
+  render(<Popover content="Content sample" placement="rightTop" open />, {
+    direction: 'rtl',
+  });
+  expect(placementClass()).toBe('ant-popover-placement-leftTop');
+});
+
+test('keeps a physical placement when mirrorPlacement is false', () => {
+  render(
+    <Popover
+      content="Content sample"
+      placement="rightTop"
+      mirrorPlacement={false}
+      open
+    />,
+    { direction: 'rtl' },
+  );
+  expect(placementClass()).toBe('ant-popover-placement-rightTop');
+});

@@ -198,6 +198,13 @@ export const ThemedAgGridReact = forwardRef<
         .ag-cell {
           -webkit-font-smoothing: antialiased;
         }
+        /* Cell values are data: in a right-to-left grid each value keeps its
+           own reading order (dates, signed numbers, identifiers) and stays on
+           the leading edge. Written as left; mirrored for right-to-left. */
+        .ag-rtl .ag-cell {
+          unicode-bidi: plaintext;
+          text-align: left;
+        }
       `}
       data-themed-ag-grid="true"
     >

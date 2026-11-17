@@ -17,17 +17,22 @@
  * under the License.
  */
 import { DatePicker as AntdDatePicker } from 'antd';
-import { css } from '@apache-superset/core/theme';
+import { css, flipPlacement, useDirection } from '@apache-superset/core/theme';
 import type { DatePickerProps, RangePickerProps } from './types';
 
-export const DatePicker = (props: DatePickerProps) => (
-  <AntdDatePicker
-    css={css`
-      width: 100%;
-    `}
-    {...props}
-  />
-);
+export const DatePicker = (props: DatePickerProps) => {
+  const direction = useDirection();
+  return (
+    <AntdDatePicker
+      css={css`
+        width: 100%;
+      `}
+      {...props}
+      // antd mirrors only its default placement in right-to-left layouts
+      placement={flipPlacement(props.placement, direction)}
+    />
+  );
+};
 
 export const { RangePicker } = AntdDatePicker;
 

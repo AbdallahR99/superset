@@ -31,6 +31,9 @@ services:
       - ../superset/embedded/view.py:/app/superset/embedded/view.py:ro
       - ../superset/translations/utils.py:/app/superset/translations/utils.py:ro
       - ../superset/config.py:/app/superset/config.py:ro
+      - ../superset/views/error_handling.py:/app/superset/views/error_handling.py:ro
+      # Arabic language pack rebuilt by `fe-build translations`.
+      - ./out/dev/translations/ar/messages.json:/app/superset/translations/ar/LC_MESSAGES/messages.json:ro
 
 volumes:
   fe_work:

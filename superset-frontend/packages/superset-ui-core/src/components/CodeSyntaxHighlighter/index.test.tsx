@@ -193,4 +193,55 @@ describe('CodeSyntaxHighlighter', () => {
       configurable: true,
     });
   });
+
+  test('keeps code left-to-right and unmirrored in a right-to-left interface', () => {
+    const { container } = render(
+      <CodeSyntaxHighlighter language="sql">SELECT 1;</CodeSyntaxHighlighter>,
+      { direction: 'rtl' },
+    );
+
+    const boundary = container.firstElementChild as HTMLElement;
+    expect(boundary).toHaveAttribute('dir', 'ltr');
+    expect(boundary).toContainElement(screen.getByText('SELECT 1;'));
+
+    // Nothing inside the boundary is styled through the mirroring cache, so
+    // the copy button keeps its physical corner of the code block.
+    const copyButton = screen.getByTitle('Copy to clipboard');
+    expect(boundary).toContainElement(copyButton);
+    expect(boundary.className).not.toMatch(/superset-rtl-/);
+    expect(boundary.querySelectorAll('[class*="superset-rtl-"]')).toHaveLength(
+      0,
+    );
+  });
+
+  test('marks the code block left-to-right in a left-to-right interface too', () => {
+    const { container } = render(
+      <CodeSyntaxHighlighter language="sql">SELECT 1;</CodeSyntaxHighlighter>,
+    );
+
+    expect(container.firstElementChild).toHaveAttribute('dir', 'ltr');
+  });
+
+  test('keeps short code left-aligned when a right-to-left ancestor aligns right', () => {
+    const { container, rerender } = render(
+      <CodeSyntaxHighlighter language="sql">SELECT 1;</CodeSyntaxHighlighter>,
+      { direction: 'rtl' },
+    );
+    expect(container.firstElementChild).toHaveStyle({ textAlign: 'left' });
+
+    rerender(
+      <CodeSyntaxHighlighter language="sql">SELECT 2;</CodeSyntaxHighlighter>,
+    );
+    expect(container.firstElementChild).toHaveStyle({ textAlign: 'left' });
+  });
+
+  test('does not set an alignment in a left-to-right interface', () => {
+    const { container } = render(
+      <CodeSyntaxHighlighter language="sql">SELECT 1;</CodeSyntaxHighlighter>,
+    );
+
+    expect((container.firstElementChild as HTMLElement).style.textAlign).toBe(
+      '',
+    );
+  });
 });

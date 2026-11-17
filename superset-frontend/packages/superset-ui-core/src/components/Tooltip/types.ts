@@ -20,6 +20,14 @@ import { Tooltip } from 'antd';
 
 export type TooltipProps = React.ComponentProps<typeof Tooltip> & {
   overlayStyle?: React.CSSProperties;
+  /**
+   * Mirror an explicit `placement` in right-to-left layouts (`left` becomes
+   * `right`, `bottomLeft` becomes `bottomRight`, ...). Set to `false` when the
+   * placement is physical by nature, for example computed from the position
+   * of the trigger in the viewport.
+   * @default true
+   */
+  mirrorPlacement?: boolean;
 };
 
 export type TooltipPlacement =

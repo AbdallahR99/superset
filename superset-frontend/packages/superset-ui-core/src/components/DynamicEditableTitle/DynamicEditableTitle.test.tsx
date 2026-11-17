@@ -182,3 +182,41 @@ test('rounds fractional title measurements up when sizing the input', async () =
     getBoundingClientRect.mockRestore();
   }
 });
+
+test('lets the title text decide its own direction', () => {
+  render(<DynamicEditableTitle {...createProps()} />);
+  expect(screen.getByRole('textbox')).toHaveAttribute('dir', 'auto');
+});
+
+test('keeps the interface direction for the placeholder of an empty title', () => {
+  render(<DynamicEditableTitle {...createProps({ title: '' })} />);
+  expect(screen.getByRole('textbox')).not.toHaveAttribute('dir');
+});
+
+const scrollPositionOnEdit = async (direction: 'ltr' | 'rtl') => {
+  jest
+    .spyOn(window, 'getComputedStyle')
+    .mockReturnValue({ direction } as CSSStyleDeclaration);
+  jest
+    .spyOn(HTMLInputElement.prototype, 'scrollWidth', 'get')
+    .mockReturnValue(500);
+  const scrollLeft = jest.spyOn(
+    HTMLInputElement.prototype,
+    'scrollLeft',
+    'set',
+  );
+  render(<DynamicEditableTitle {...createProps()} />);
+  await userEvent.click(screen.getByRole('textbox'));
+  await waitFor(() => expect(scrollLeft).toHaveBeenCalled());
+  const position = scrollLeft.mock.calls.at(-1)?.[0];
+  jest.restoreAllMocks();
+  return position;
+};
+
+test('scrolls to the right end of a left-to-right title when editing starts', async () => {
+  expect(await scrollPositionOnEdit('ltr')).toBe(500);
+});
+
+test('scrolls to the left end of a right-to-left title when editing starts', async () => {
+  expect(await scrollPositionOnEdit('rtl')).toBe(-500);
+});

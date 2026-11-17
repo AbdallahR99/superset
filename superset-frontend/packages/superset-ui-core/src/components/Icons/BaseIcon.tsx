@@ -18,7 +18,12 @@
  */
 
 import { forwardRef, type ComponentType } from 'react';
-import { css, useTheme, getFontSize } from '@apache-superset/core/theme';
+import {
+  css,
+  useTheme,
+  useIsRtl,
+  getFontSize,
+} from '@apache-superset/core/theme';
 import { AntdIconType, BaseIconProps, CustomIconType, IconType } from './types';
 
 const genAriaLabel = (fileName: string) => {
@@ -48,11 +53,13 @@ export const BaseIconComponent = forwardRef<
       viewBox,
       customIcons,
       fileName,
+      mirrorInRtl,
       ...rest
     },
     ref,
   ) => {
     const theme = useTheme();
+    const isRtl = useIsRtl();
     const whatRole = rest?.onClick ? 'button' : 'img';
     const ariaLabel = genAriaLabel(fileName || '');
     const style = {
@@ -62,6 +69,13 @@ export const BaseIconComponent = forwardRef<
         : `${theme.fontSize}px`,
       cursor: rest?.onClick ? 'pointer' : undefined,
     };
+    // Inline, so that it is applied as written: the mirroring of styled
+    // blocks does not touch inline styles. A caller-provided style replaces
+    // the base one (see the spreads below), so the mirror is merged into it.
+    const mirrored =
+      mirrorInRtl && isRtl
+        ? { style: { ...(rest.style ?? style), transform: 'scaleX(-1)' } }
+        : undefined;
 
     const AntdComponent = Component as ComponentType<
       Record<string, unknown> & {
@@ -97,6 +111,7 @@ export const BaseIconComponent = forwardRef<
               : `${theme.fontSize}px`
           }
           {...(rest as CustomIconType)}
+          {...mirrored}
         />
       </span>
     ) : (
@@ -107,6 +122,7 @@ export const BaseIconComponent = forwardRef<
         aria-label={ariaLabel}
         data-test={ariaLabel}
         {...(rest as AntdIconType)}
+        {...mirrored}
       />
     );
   },

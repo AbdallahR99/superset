@@ -18,7 +18,12 @@
  */
 import { Dropdown } from 'antd';
 import { kebabCase } from 'lodash-es';
-import { css, useTheme } from '@apache-superset/core/theme';
+import {
+  css,
+  flipPlacement,
+  useDirection,
+  useTheme,
+} from '@apache-superset/core/theme';
 import { Tooltip } from '../Tooltip';
 import type { DropdownButtonProps } from './types';
 
@@ -31,6 +36,7 @@ export const DropdownButton = ({
   ...rest
 }: DropdownButtonProps) => {
   const theme = useTheme();
+  const direction = useDirection();
   const { type: buttonType } = rest;
   // divider implementation for default (non-primary) buttons
   const defaultBtnCss = css`
@@ -56,6 +62,11 @@ export const DropdownButton = ({
     <Dropdown.Button
       popupRender={popupRender}
       {...rest}
+      // antd mirrors only its default placement in right-to-left layouts; it
+      // tells the two apart by the presence of the prop, so pass it only then
+      {...('placement' in rest && {
+        placement: flipPlacement(rest.placement, direction),
+      })}
       css={[
         defaultBtnCss,
         css`

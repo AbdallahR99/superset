@@ -80,6 +80,22 @@ const StyledCollapse = styled((props: CollapseProps) => (
           `}
     }
   }
+
+  /* In a right-to-left layout Ant Design turns the arrow element itself by
+     180 degrees, so the inner rotations above have to be reversed for the
+     chevron to keep pointing down when collapsed and up when expanded. */
+  ${({ expandIconPosition }) =>
+    expandIconPosition === 'end' &&
+    `
+      &.ant-collapse-rtl .ant-collapse-item .ant-collapse-header
+        .anticon.anticon-right.ant-collapse-arrow > svg {
+        transform: rotate(-90deg) !important;
+      }
+      &.ant-collapse-rtl .ant-collapse-item-active .ant-collapse-header
+        .anticon.anticon-right.ant-collapse-arrow > svg {
+        transform: rotate(90deg) !important;
+      }
+    `}
 `;
 
 // Type-safe extension to preserve Collapse.Panel

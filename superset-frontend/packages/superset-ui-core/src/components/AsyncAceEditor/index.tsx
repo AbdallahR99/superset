@@ -38,7 +38,12 @@ import {
   AsyncEsmComponent,
   PlaceholderProps,
 } from '@superset-ui/core/components/AsyncEsmComponent';
-import { useTheme, css, type SupersetTheme } from '@apache-superset/core/theme';
+import {
+  useTheme,
+  css,
+  DirectionProvider,
+  type SupersetTheme,
+} from '@apache-superset/core/theme';
 import { Global } from '@emotion/react';
 
 import { patchAceEmojiWidths } from './emojiWidthPatch';
@@ -296,6 +301,10 @@ export function AsyncAceEditor(
                 editorContainer.parentElement;
             }
 
+            // The popup lists code, and Ace positions it with physical
+            // coordinates: keep it left-to-right wherever it is attached.
+            cachedAutocompletePopup?.setAttribute('dir', 'ltr');
+
             if (
               cachedAutocompletePopup &&
               cachedTargetContainer &&
@@ -360,6 +369,8 @@ export function AsyncAceEditor(
               }
             };
             remeasure();
+            // Code is left-to-right regardless of the interface language.
+            editor.container?.setAttribute('dir', 'ltr');
             const { fonts } = document;
             if (fonts) {
               // The size in the shorthand is irrelevant; any value triggers
@@ -380,7 +391,9 @@ export function AsyncAceEditor(
         );
 
         return (
-          <>
+          // Ace lays out its DOM with physical coordinates, so the styles
+          // targeting it must not be mirrored in a right-to-left interface.
+          <DirectionProvider direction="ltr">
             <Global
               key="ace-tooltip-global"
               styles={css`
@@ -569,7 +582,7 @@ export function AsyncAceEditor(
               onLoad={handleLoad}
               {...props}
             />
-          </>
+          </DirectionProvider>
         );
       },
     );

@@ -65,3 +65,69 @@ test('#app has no explicit height, so it flex-grows into the space body leaves i
   expect(appRule).toMatch(/flex:\s*1 1 auto/);
   expect(appRule).not.toMatch(/\bheight:\s*100%/);
 });
+
+// Every declaration that applies to one selector of a (possibly grouped) rule.
+function declarationsFor(
+  selector: string,
+  direction: 'ltr' | 'rtl' = 'rtl',
+): string {
+  const themeObject = Theme.fromConfig();
+  render(
+    <themeObject.SupersetThemeProvider direction={direction}>
+      <GlobalStyles />
+    </themeObject.SupersetThemeProvider>,
+  );
+  const matches: string[] = [];
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue;
+    }
+    for (const rule of Array.from(rules)) {
+      const selectors = ((rule as CSSStyleRule).selectorText ?? '')
+        .split(',')
+        .map(part => part.trim());
+      if (selectors.includes(selector)) {
+        matches.push(rule.cssText);
+      }
+    }
+  }
+  return matches.join('\n');
+}
+
+// Class names of Ant Design 6 (rc-select `OptionList`, `MultipleContent` and
+// `SingleContent`). A single select renders its label as a bare text node of
+// `.ant-select-content-has-value`; `.ant-select-content-value` only exists for
+// options that carry their own className or style.
+test.each([
+  ['option label in the dropdown', '.ant-select-item-option-content'],
+  ['tag label of a multiple select', '.ant-select-selection-item-content'],
+  ['selected label of a single select', '.ant-select-content-has-value'],
+  ['selected label of a styled option', '.ant-select-content-value'],
+])(
+  'the %s takes its own direction and stays on the leading edge',
+  (_, selector) => {
+    const declarations = declarationsFor(selector);
+
+    expect(declarations).toMatch(/unicode-bidi:\s*plaintext/);
+    // Written as left; the right-to-left style cache mirrors it.
+    expect(declarations).toMatch(/text-align:\s*(left|right)/);
+  },
+);
+
+test.each(['pre', 'code'])(
+  '%s takes its own direction without an alignment of its own',
+  selector => {
+    const declarations = declarationsFor(selector);
+
+    expect(declarations).toMatch(/unicode-bidi:\s*plaintext/);
+    expect(declarations).not.toMatch(/text-align/);
+  },
+);
+
+test('a left-to-right interface gets no bidi rules for select labels or code', () => {
+  expect(declarationsFor('.ant-select-item-option-content', 'ltr')).toBe('');
+  expect(declarationsFor('pre', 'ltr')).not.toMatch(/unicode-bidi/);
+});
