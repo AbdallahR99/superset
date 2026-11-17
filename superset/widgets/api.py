@@ -24,6 +24,7 @@ from flask_appbuilder.api import expose, protect, safe
 from flask_babel import gettext as _
 from marshmallow import ValidationError
 
+from superset import security_manager
 from superset.commands.exceptions import CommandException
 from superset.commands.widget.data import WidgetDataCommand, WidgetValuesCommand
 from superset.commands.widget.exceptions import WidgetInvalidError
@@ -38,6 +39,7 @@ from superset.commands.widget.utils import serialize_saved_widget
 from superset.extensions import event_logger
 from superset.utils import json
 from superset.views.base_api import BaseSupersetApi, statsd_metrics
+from superset.widgets.feature import requires_dashboard_v2
 from superset.widgets.registry import registry
 from superset.widgets.schema_tools import get_subtrees, SchemaPathError
 from superset.widgets.schemas import (
@@ -50,6 +52,31 @@ from superset.widgets.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Bounds on the caller-sized lists the control-schema route accepts.
+MAX_SCHEMA_PATHS = 200
+MAX_SCHEMA_SERIES = 500
+
+
+def _is_string_list(value: Any, limit: int) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) <= limit
+        and all(isinstance(item, str) for item in value)
+    )
+
+
+def _control_schema_body_problem(
+    control_values: Any, series: Any, paths: Any
+) -> str | None:
+    """What is wrong with a control-schema request body, if anything."""
+    if paths is not None and not _is_string_list(paths, MAX_SCHEMA_PATHS):
+        return f"'paths' must be an array of at most {MAX_SCHEMA_PATHS} strings."
+    if series is not None and not _is_string_list(series, MAX_SCHEMA_SERIES):
+        return f"'series' must be an array of at most {MAX_SCHEMA_SERIES} strings."
+    if control_values is not None and not isinstance(control_values, dict):
+        return "'control_values' must be an object."
+    return None
 
 
 class WidgetControlsRestApi(BaseSupersetApi):
@@ -76,6 +103,7 @@ class WidgetControlsRestApi(BaseSupersetApi):
     openapi_spec_tag = "Dashboard Controls (experimental)"
 
     @expose("/types", methods=("GET",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -110,6 +138,7 @@ class WidgetControlsRestApi(BaseSupersetApi):
         return self.response(200, result=result)
 
     @expose("/type/<widget_type>/control-schema", methods=("GET", "POST"))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -206,11 +235,12 @@ class WidgetControlsRestApi(BaseSupersetApi):
         control_values = body.get("control_values")
         series = body.get("series")
         paths = body.get("paths")
-        if paths is not None and (
-            not isinstance(paths, list)
-            or not all(isinstance(path, str) for path in paths)
-        ):
-            return self.response_400(message="'paths' must be an array of strings.")
+        if problem := _control_schema_body_problem(control_values, series, paths):
+            return self.response_400(message=problem)
+        if security_manager.is_guest_user():
+            # Enrichment lists datasets and columns for an author's pickers; an
+            # embedded guest renders widgets and never authors them.
+            control_values = series = None
 
         warning: str | None = None
         try:
@@ -247,6 +277,7 @@ class WidgetControlsRestApi(BaseSupersetApi):
         return resp
 
     @expose("/type/<widget_type>/validate", methods=("POST",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -378,6 +409,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
     )
 
     @expose("/", methods=("GET",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -414,6 +446,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(200, result=[_dump(widget) for widget in widgets])
 
     @expose("/", methods=("POST",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -458,6 +491,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(201, result=_dump(widget))
 
     @expose("/<uuid>", methods=("GET",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -497,6 +531,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(200, result=_dump(widget))
 
     @expose("/<uuid>", methods=("PUT",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -548,6 +583,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(200, result=_dump(widget))
 
     @expose("/<uuid>", methods=("DELETE",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -580,6 +616,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return self.response(200, message="OK")
 
     @expose("/data", methods=("POST",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics
@@ -631,6 +668,7 @@ class SavedWidgetRestApi(BaseSupersetApi):
         return _result_response(result)
 
     @expose("/values", methods=("POST",))
+    @requires_dashboard_v2
     @protect()
     @safe
     @statsd_metrics

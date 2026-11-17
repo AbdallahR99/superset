@@ -497,7 +497,8 @@ function useBoundDatasetId(props: ControlProps): number | undefined {
     props.config as { formData?: Record<string, unknown> } | undefined
   )?.formData;
   const dataBinding = formData?.dataBinding as
-    { datasetId?: number } | undefined;
+    | { datasetId?: number }
+    | undefined;
   return dataBinding?.datasetId;
 }
 
@@ -507,7 +508,8 @@ function useBoundDimensions(props: ControlProps): string[] {
     props.config as { formData?: Record<string, unknown> } | undefined
   )?.formData;
   const dataBinding = formData?.dataBinding as
-    { dimensions?: string[] } | undefined;
+    | { dimensions?: string[] }
+    | undefined;
   return dataBinding?.dimensions ?? [];
 }
 

@@ -222,7 +222,6 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         from superset.explore.permalink.api import ExplorePermalinkRestApi
         from superset.extensions.view import ExtensionsView
         from superset.importexport.api import ImportExportRestApi
-        from superset.mcp_oauth.views import MCPOAuthView, MCPOAuthWellKnownView
         from superset.queries.api import QueryRestApi
         from superset.queries.saved_queries.api import SavedQueryRestApi
         from superset.reports.api import ReportScheduleRestApi
@@ -303,6 +302,19 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         appbuilder.add_api(WidgetControlsRestApi)
         appbuilder.add_api(SavedWidgetRestApi)
         appbuilder.add_api(DashboardV2RestApi)
+        # Dashboard V2, saved widgets and the widget control schemas are one
+        # feature: all of their routes answer 404 unless DASHBOARD_V2 is on.
+        from superset.dashboard_v2.feature import register_dashboard_v2_gate
+
+        register_dashboard_v2_gate(
+            self.superset_app,
+            (
+                WidgetControlsRestApi,
+                SavedWidgetRestApi,
+                DashboardV2RestApi,
+                DashboardBuilderV2View,
+            ),
+        )
         appbuilder.add_api(CssTemplateRestApi)
         appbuilder.add_api(ThemeRestApi)
         appbuilder.add_api(CurrentUserRestApi)
@@ -510,8 +522,6 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         appbuilder.add_view_no_menu(Datasource)
         appbuilder.add_view_no_menu(DatasetEditor)
         appbuilder.add_view_no_menu(EmbeddedView)
-        appbuilder.add_view_no_menu(MCPOAuthView)
-        appbuilder.add_view_no_menu(MCPOAuthWellKnownView)
         appbuilder.add_view_no_menu(ExploreView)
         appbuilder.add_view_no_menu(ExplorePermalinkView)
         appbuilder.add_view_no_menu(SavedQueryView)

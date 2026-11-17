@@ -216,15 +216,16 @@ def test_raise_for_access_respects_dataset_allowlist(
 
 
 def test_validate_guest_token_resources_requires_saved_widget(
-    mocker: MockerFixture, app_context: None
+    mocker: MockerFixture, sm: SupersetSecurityManager
 ) -> None:
     find_by_uuid = mocker.patch(
         "superset.daos.saved_widget.SavedWidgetDAO.find_by_uuid", return_value=None
     )
     resources: Any = [{"type": "widget", "id": WIDGET_UUID}]
     with pytest.raises(ValidationError):
-        SupersetSecurityManager.validate_guest_token_resources(resources)
+        sm.validate_guest_token_resources(resources)
 
-    find_by_uuid.return_value = MagicMock()
-    SupersetSecurityManager.validate_guest_token_resources(resources)
-    SupersetSecurityManager.validate_guest_token_resources([])
+    # A widget that binds no dataset grants no data, so existing is enough.
+    find_by_uuid.return_value = MagicMock(props_dict={"content": "# hi"})
+    sm.validate_guest_token_resources(resources)
+    sm.validate_guest_token_resources([])

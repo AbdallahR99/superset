@@ -57,9 +57,48 @@ FILTER_OPERATORS = frozenset(
 
 GUEST_AGGREGATES = frozenset({"AVG", "COUNT", "COUNT_DISTINCT", "MAX", "MIN", "SUM"})
 
+# Comparison operators a SIMPLE authored filter may carry when its author is
+# not allowed to write SQL. None of them is rendered from caller-supplied text.
+SIMPLE_FILTER_OPERATORS = frozenset(
+    {
+        "==",
+        "!=",
+        ">",
+        "<",
+        ">=",
+        "<=",
+        "IN",
+        "NOT IN",
+        "LIKE",
+        "NOT LIKE",
+        "ILIKE",
+        "NOT ILIKE",
+        "IS NULL",
+        "IS NOT NULL",
+        "IS TRUE",
+        "IS FALSE",
+        "TEMPORAL_RANGE",
+    }
+)
+
+# Keys that carry SQL text somewhere in the query pipeline. A definition whose
+# author may not write SQL must not contain them at any depth of its binding.
+SQL_BEARING_KEYS = frozenset(
+    {"sqlExpression", "sql", "where", "having", "extras", "expression"}
+)
+
+JINJA_MARKERS = ("{{", "{%", "{#")
+
+# Upper bound on the rows a guest's inline definition may ask for.
+GUEST_INLINE_ROW_LIMIT = 10000
+
 
 class WidgetDataError(ValueError):
     """The props cannot be executed (no binding, missing dataset, ...)."""
+
+
+class WidgetSqlNotAllowedError(WidgetDataError):
+    """The props carry SQL or template code their author may not write."""
 
 
 class FilterValidationError(ValueError):
@@ -230,10 +269,127 @@ def build_widget_query(
 
 
 def get_table(dataset_id: int) -> BaseDatasource:
+    """The SQL dataset a widget reads; a missing one is the caller's error."""
     try:
         return DatasourceDAO.get_datasource(DatasourceType.TABLE, dataset_id)
     except DatasourceNotFound as ex:
         raise WidgetDataError("The widget's dataset does not exist.") from ex
+
+
+def _scan_for_sql(value: Any, path: str) -> str | None:
+    """Where ``value`` carries SQL-bearing keys or template code, if anywhere."""
+    if isinstance(value, str):
+        if any(marker in value for marker in JINJA_MARKERS):
+            return f"{path} contains template code"
+        return None
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in SQL_BEARING_KEYS and item not in (None, "", [], {}):
+                return f"{path}.{key} carries SQL"
+            if found := _scan_for_sql(item, f"{path}.{key}"):
+                return found
+        return None
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            if found := _scan_for_sql(item, f"{path}[{index}]"):
+                return found
+    return None
+
+
+def _sql_in_metric(metric: Any, path: str) -> str | None:
+    if isinstance(metric, str):
+        return None
+    column = metric.get("column") if isinstance(metric, dict) else None
+    if (
+        not isinstance(metric, dict)
+        or metric.get("expressionType") != "SIMPLE"
+        or not isinstance(metric.get("aggregate"), str)
+        or not isinstance(column, dict)
+        or not isinstance(column.get("column_name", column.get("columnName")), str)
+    ):
+        return f"{path} is not a saved metric name or a SIMPLE aggregate of a column"
+    return None
+
+
+def _sql_in_filter(adhoc: Any, path: str) -> str | None:
+    if (
+        not isinstance(adhoc, dict)
+        or adhoc.get("expressionType") != "SIMPLE"
+        or adhoc.get("clause", "WHERE") != "WHERE"
+        or not isinstance(adhoc.get("subject"), str)
+        or str(adhoc.get("operator", "")).upper() not in SIMPLE_FILTER_OPERATORS
+    ):
+        return f"{path} is not a SIMPLE comparison on a column"
+    return None
+
+
+def _sql_in_binding(binding: dict[str, Any]) -> str | None:
+    for index, metric in enumerate(binding.get("metrics") or []):
+        if found := _sql_in_metric(metric, f"dataBinding.metrics[{index}]"):
+            return found
+    for index, dimension in enumerate(binding.get("dimensions") or []):
+        if not isinstance(dimension, str):
+            return f"dataBinding.dimensions[{index}] is not a column name"
+    for index, adhoc in enumerate(binding.get("filters") or []):
+        if found := _sql_in_filter(adhoc, f"dataBinding.filters[{index}]"):
+            return found
+    return _scan_for_sql(binding, "dataBinding")
+
+
+def find_sql_in_props(props: Any) -> str | None:
+    """
+    Describe the first place a widget definition carries SQL or template code,
+    or return ``None`` when it is SQL-free.
+
+    SQL-free means the query can be built from names alone: metrics are saved
+    metric names or SIMPLE aggregates of a named column, dimensions are column
+    names, authored filters are SIMPLE ``WHERE`` comparisons on a named column
+    with a known operator, and nothing in the binding holds a SQL expression,
+    an ``extras.where`` / ``having`` clause or a Jinja marker.
+    """
+    if not isinstance(props, dict):
+        return None
+    binding = props.get("dataBinding")
+    if isinstance(binding, dict) and (found := _sql_in_binding(binding)):
+        return found
+    column = props.get("column")
+    if column is not None and (
+        not isinstance(column, str) or _scan_for_sql(column, "column")
+    ):
+        return "column is not a column name"
+    return None
+
+
+def user_may_author_widget_sql(datasource: BaseDatasource | None) -> bool:
+    """
+    Whether the caller may put SQL expressions into a widget definition.
+
+    Superset has no dedicated "ad-hoc SQL" permission, so this uses the two
+    capabilities that already let a principal write SQL against the data: SQL
+    Lab execution (``can_execute_sql_query on SQLLab``, the ``sql_lab`` role of
+    SECURITY.md) and editorship of the dataset itself, whose editors define its
+    SQL metrics and calculated columns. Admins hold both; a guest holds neither.
+    """
+    # pylint: disable=import-outside-toplevel
+    from superset import security_manager
+
+    if security_manager.is_guest_user():
+        return False
+    if security_manager.is_admin():
+        return True
+    if security_manager.can_access("can_execute_sql_query", "SQLLab"):
+        return True
+    return datasource is not None and bool(security_manager.is_editor(datasource))
+
+
+def raise_for_widget_sql(props: Any, datasource: BaseDatasource | None) -> None:
+    """Reject a SQL-bearing definition from a caller who may not author SQL."""
+    if (found := find_sql_in_props(props)) and not user_may_author_widget_sql(
+        datasource
+    ):
+        raise WidgetSqlNotAllowedError(
+            f"This widget definition is not allowed for you: {found}."
+        )
 
 
 def _require_guest_metric(
@@ -271,29 +427,45 @@ def validate_guest_inline_props(
         for column in datasource.columns
         if getattr(column, "groupby", True)
     }
-    saved_metrics = {metric.metric_name for metric in datasource.metrics}
+    saved_metrics = {str(metric.metric_name) for metric in datasource.metrics}
 
     binding = props.get("dataBinding")
     if isinstance(binding, dict):
         for metric in binding.get("metrics") or []:
             _require_guest_metric(metric, saved_metrics, columns)
         for dimension in binding.get("dimensions") or []:
-            if dimension not in groupable:
+            if not isinstance(dimension, str) or dimension not in groupable:
                 raise WidgetDataError(f"Unknown dimension {dimension!r}.")
         for adhoc in binding.get("filters") or []:
             if (
                 not isinstance(adhoc, dict)
                 or adhoc.get("expressionType") != "SIMPLE"
                 or adhoc.get("sqlExpression")
+                or not isinstance(adhoc.get("subject"), str)
                 or adhoc.get("subject") not in columns
             ):
                 raise WidgetDataError(
                     "Guest filters must be simple comparisons on dataset columns."
                 )
+        row_limit = binding.get("rowLimit")
+        if row_limit is not None and (
+            _int_or_none(row_limit) is None
+            or not 1 <= row_limit <= GUEST_INLINE_ROW_LIMIT
+        ):
+            raise WidgetDataError(
+                f"Guest row limits must be between 1 and {GUEST_INLINE_ROW_LIMIT}."
+            )
 
     column = props.get("column")
-    if column is not None and column not in columns:
+    if column is not None and (not isinstance(column, str) or column not in columns):
         raise WidgetDataError(f"Unknown column {column!r}.")
+
+    # Membership alone does not rule out an operator the query layer renders
+    # from text or a template marker in a comparator; the structural rule does.
+    if found := find_sql_in_props(props):
+        raise WidgetSqlNotAllowedError(
+            f"Guest widget definitions cannot carry SQL: {found}."
+        )
 
 
 def raise_for_widget_datasource_access(
@@ -308,13 +480,16 @@ def raise_for_widget_datasource_access(
     from superset import security_manager
 
     if security_manager.is_guest_user():
-        if not security_manager.guest_widget_grants_datasource(context, datasource):
+        if not isinstance(
+            context, WidgetContext
+        ) or not security_manager.guest_widget_grants_datasource(context, datasource):
             raise SupersetSecurityException(
                 security_manager.get_datasource_access_error_object(datasource)
             )
+        security_manager.raise_for_unsupported_guest_rls(datasource)
         security_manager.raise_for_guest_dataset_allowlist(datasource)
     else:
-        datasource.raise_for_access()
+        security_manager.raise_for_access(datasource=datasource)
 
 
 def fetch_column_values(dataset_id: int, column: str, context: Any) -> list[Any]:
@@ -349,6 +524,10 @@ class DataBindingWidget(Widget):
         )
         if dataset_id is None:
             raise WidgetDataError("This widget has no data binding.")
+        # Authorization keys on the context, so the dataset queried must be the
+        # one the context was resolved for.
+        if not isinstance(context, WidgetContext) or context.dataset_id != dataset_id:
+            raise WidgetDataError("The widget's dataset does not match its context.")
         datasource = get_table(dataset_id)
         extra_filters = resolved_filters_to_adhoc(filters, set(datasource.column_names))
         _, query, form_data = build_widget_query(props, extra_filters)

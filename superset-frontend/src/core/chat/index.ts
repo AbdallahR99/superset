@@ -79,7 +79,4 @@ export const chat: typeof chatApi = {
   // The host fires this from its panel resizer; until that chrome exists the
   // event is exposed but never fires.
   onDidResizePanel: provider.onDidResizePanel,
-  registerClientTool: provider.registerClientTool.bind(provider),
-  registerClientTools: provider.registerClientTools.bind(provider),
-  getTools: provider.getTools.bind(provider),
 };

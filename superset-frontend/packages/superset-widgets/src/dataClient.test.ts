@@ -22,7 +22,9 @@ const mockFetchQueryData = jest.fn();
 
 jest.mock('./chartData', () => ({
   describeFetchError: async (error: unknown) => String(error),
-  fetchQueryData: (binding: unknown) => mockFetchQueryData(binding),
+  toFetchError: async (error: unknown) => error,
+  fetchQueryData: (binding: unknown, options: unknown) =>
+    mockFetchQueryData(binding, options),
 }));
 
 beforeEach(() => {
@@ -37,25 +39,31 @@ test('the session client queries ad hoc, active filters after the authored ones'
     filters: [{ expressionType: 'SQL', clause: 'WHERE', sqlExpression: '1=1' }],
   };
 
+  const controller = new AbortController();
   await sessionDataClient.fetchData({
     instanceId: 'node_1',
     widget: widgetRef('echarts', { dataBinding }),
     filters: [{ column: 'region', operator: 'IN', value: ['a', 'b'] }],
+    signal: controller.signal,
   });
 
-  expect(mockFetchQueryData).toHaveBeenCalledWith({
-    ...dataBinding,
-    filters: [
-      dataBinding.filters[0],
-      {
-        expressionType: 'SIMPLE',
-        subject: 'region',
-        clause: 'WHERE',
-        operator: 'IN',
-        comparator: ['a', 'b'],
-      },
-    ],
-  });
+  expect(mockFetchQueryData).toHaveBeenCalledWith(
+    {
+      ...dataBinding,
+      filters: [
+        dataBinding.filters[0],
+        {
+          expressionType: 'SIMPLE',
+          subject: 'region',
+          clause: 'WHERE',
+          operator: 'IN',
+          comparator: ['a', 'b'],
+        },
+      ],
+    },
+    // The caller's cancellation reaches the request.
+    { signal: controller.signal },
+  );
 });
 
 test('a widget without a data binding is rejected before querying', async () => {

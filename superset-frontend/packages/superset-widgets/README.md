@@ -21,8 +21,8 @@ under the License.
 
 Superset widgets (charts, metric tiles, tables, filters, markdown) as plain
 React components. The Dashboard v2 builder renders its widgets from this
-package, and any React app or AI-generated artifact can render the same
-widgets in its own tree. Status: POC (initiative 3.13), not published.
+package, and any React app can render the same widgets in its own tree. The
+package is consumed from source and is not published.
 
 ## Usage
 
@@ -32,9 +32,9 @@ import {
   Widget,
   Chart,
   MetricTile,
+  Table,
   FilterSelect,
-  useSupersetFilter,
-  useWidgetEvent,
+  Markdown,
 } from '@apache-superset/widgets';
 
 <SupersetProvider
@@ -42,6 +42,16 @@ import {
   fetchGuestToken={() =>
     fetch('/api/superset-token', { method: 'POST' }).then(r => r.text())
   }
+  filters={{
+    tenant: {
+      datasetId: 17,
+      column: 'tenant',
+      operator: 'EQUALS',
+      value: 'acme',
+    },
+  }}
+  onError={(error, info) => report(error, info)}
+  direction="rtl" // or locale="ar"; omit to follow the page
   themeMode="default" // 'default' | 'dark' | 'system'
 >
   {/* inline: defined in the host, validated and executed by Superset */}
@@ -62,15 +72,24 @@ import {
       yAxis: { type: 'value' },
     }}
   />
+  <Table
+    dataBinding={{
+      datasetId: 17,
+      metrics: ['sum__num'],
+      dimensions: ['state'],
+    }}
+  />
+  <MetricTile
+    dataBinding={{ datasetId: 17, metrics: ['sum__num'] }}
+    label="Births"
+  />
   <FilterSelect datasetId={17} column="gender" />
+  <Markdown content="**Notes** for this page" />
 
   {/* generic form of the same thing */}
   <Widget
     type="metric-tile"
-    props={{
-      dataBinding: { datasetId: 17, metrics: ['sum__num'] },
-      label: 'Births',
-    }}
+    props={{ dataBinding: { datasetId: 17, metrics: ['sum__num'] } }}
   />
 
   {/* saved in Superset (GET /api/v1/widget/) */}
@@ -79,17 +98,120 @@ import {
 ```
 
 - Widgets fill their container; give the parent a size.
-- Widgets under one provider share an event bus and cross-filter each other.
-- Common props on every widget: `instanceId`, `className`, `style`, `fallback`, `renderError`.
-- Typed components: `Chart`, `MetricTile`, `Table`, `FilterSelect`, `Markdown`.
-  Their props mirror the widget's control schema
+- Every built-in type (`echarts`, `ag-grid-table`, `metric-tile`,
+  `filter.select`, `markdown`) renders from an inline definition (`type` +
+  `props`, or the typed component) and from a saved widget (`id`). A saved
+  widget's query is always run from the definition Superset stores.
+- Common props on every widget: `instanceId`, `className`, `style`,
+  `fallback`, `renderError`, `showTitle`.
+- The typed components' props mirror the widget's control schema
   (`GET /api/v1/widgets/type/<type>/control-schema`).
-- `useSupersetFilter(key)` returns a setter for a host-owned filter
-  `{ datasetId, column, operator, value, targets? }` (operators `EQUALS`,
-  `NOT_EQUALS`, `IN`, `NOT_IN`, `RANGE`, `TIME_RANGE`), or `null` to clear.
+
+## `SupersetProvider`
+
+| Prop                                               | Purpose                                                                                                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `supersetDomain`                                   | Origin (and optional path prefix) of the deployment.                                                                                                                                             |
+| `fetchGuestToken`                                  | Returns a guest token from the host's backend. Called again when the token nears expiry or Superset answers 401, so it is also the refresh callback. Omit to use the browser's Superset session. |
+| `guestTokenKey`                                    | Who the token is for. Change it when the user or tenant changes: the cached token is dropped and every widget fetches again.                                                                     |
+| `guestTokenHeaderName`, `guestTokenFetchTimeoutMs` | Header name (default `X-GuestToken`) and broker timeout (default 30 s).                                                                                                                          |
+| `csrf`                                             | Session mode only: send Superset's CSRF token with posts. Default `true`.                                                                                                                        |
+| `client`                                           | A `WidgetDataClient` of your own; replaces `supersetDomain` and the token options.                                                                                                               |
+| `bus`                                              | A `WidgetBus` shared with another provider or React root, so their widgets cross-filter.                                                                                                         |
+| `filters`                                          | Host-controlled filters, by key: `{ datasetId, column, operator, value, targets? }`, or `null`.                                                                                                  |
+| `widgets`                                          | Widget types of the host's own (`{ [type]: Component }`), for this provider only.                                                                                                                |
+| `extensionWidgets`                                 | `false` turns loading of extension widgets off; a loader of your own replaces the default.                                                                                                       |
+| `onError`                                          | `(error, info) => void` for every failure a widget shows.                                                                                                                                        |
+| `direction`, `locale`                              | Text direction (`'ltr'`/`'rtl'`), or a locale to derive it from.                                                                                                                                 |
+| `themeMode`, `themeConfig`                         | `'default'`, `'dark'` or `'system'`, and a Superset theme config.                                                                                                                                |
+
+### Providers are independent
+
+A provider owns its event bus, data client, guest token, CSRF token, host
+filters, theme and extension widgets. Nothing is kept at module level, so two
+providers on one page — different deployments, tokens for different users,
+different filters — do not see each other's requests, events or filters. They
+share only what the host passes to both (`bus`, `client`, a custom extension
+loader). Changing `supersetDomain`, `guestTokenKey` or `client` makes every
+widget under the provider fetch again with the new one; answers still in flight
+for the old one are discarded.
+
+### Authentication
+
+| Mode                            | Request                                                                                                                                                     | Deployment needs                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Guest token (`fetchGuestToken`) | `X-GuestToken` header, `credentials: 'omit'` — the viewer's own Superset cookies are never sent                                                             | CORS for the host origin with `Content-Type` and `X-GuestToken` allowed                                     |
+| Session (no `fetchGuestToken`)  | `credentials: 'include'`; posts carry `X-CSRFToken`, fetched once per provider from `/api/v1/security/csrf_token/` and fetched again if Superset rejects it | Same site, or CORS with `supports_credentials`, `X-CSRFToken` allowed and session cookies usable cross-site |
+
+A guest token Superset answers 401 to is dropped, a new one is requested from
+`fetchGuestToken`, and the request is retried once.
+
+### Errors
+
+Nothing is thrown while rendering. A failure is shown in the widget's own box
+(or through its `renderError`) and passed to `onError`:
+
+```ts
+onError(error: Error, info: {
+  phase: 'config' | 'definition' | 'data' | 'values' | 'extension' | 'render';
+  instanceId?: string;
+  widgetType?: string;
+  savedId?: string;
+});
+```
+
+Failed calls to Superset are `WidgetApiError`s with a `status` and a `kind`:
+
+| `kind`               | When                                                                                          |
+| -------------------- | --------------------------------------------------------------------------------------------- |
+| `unauthorized` (401) | The guest token was refused after one refresh, or the viewer has no Superset session.         |
+| `forbidden` (403)    | The token does not name this saved widget or dataset, or the account lacks access.            |
+| `not_found` (404)    | The saved widget (or what it refers to) no longer exists.                                     |
+| `conflict` (409)     | Superset reported a conflicting state.                                                        |
+| `invalid` (400, 422) | Props the widget type rejects, an unknown filter column, a SQL metric or filter from a guest. |
+| `network`            | Superset could not be reached, or CORS refused the call.                                      |
+| `config`             | The provider has neither `supersetDomain` nor `client`.                                       |
+
+### Filters, events and cancellation
+
+- `filters` on the provider is the declarative form: the widgets follow the
+  prop. The first request of every widget already carries the filters the
+  provider was mounted with; a later change makes the affected widgets fetch
+  again; `null`, a dropped key or unmounting lifts the filter.
+- `useSupersetFilter(key)` is the imperative form: it returns a stable setter
+  that takes a filter or `null`, and clears the filter when the calling
+  component unmounts.
 - `useWidgetEvent('valueChanged', e => …)` receives filter and cross-filter
-  selections from widgets (`e.payload.resolved`).
-- `useWidgetValue(instanceId)` reads a widget's current selection.
+  selections (`e.payload.resolved`) from this provider's widgets, and
+  unsubscribes on unmount. `useWidgetValue(instanceId)` reads a widget's
+  current selection.
+- A widget that unmounts is forgotten by the bus, so it stops filtering the
+  ones that stay.
+- Every request carries an `AbortSignal`. When a widget's binding, filters,
+  saved id or client change, or it unmounts, the request in flight is aborted
+  and whatever still arrives for it is ignored: a slow earlier answer never
+  replaces a newer one.
+
+### Right-to-left
+
+`direction` (or `locale`) is handed to Superset's theme provider; without
+either, the widgets follow an enclosing Superset theme or `<html dir>`. In a
+right-to-left provider the widgets, controls and the AG Grid table are
+mirrored, while chart canvases stay left to right as they do in Superset.
+
+## Content is treated as data
+
+A widget definition is written by one person and rendered in another's page.
+
+- Markdown is always sanitised: scripts, event handlers, frames and
+  script-capable links in the source do not reach the DOM.
+- Table `columnDefs` keep declarative settings only (`field`, `headerName`,
+  widths, `pinned`, `hide`, `sort`, …). Anything AG Grid would evaluate or call
+  (`valueGetter`, `valueFormatter`, `cellRenderer`, `cellClassRules`, …) is
+  dropped.
+- In `echartsOptions`, a tooltip's HTML `formatter` template is sanitised and
+  `link`/`sublink` values that could run script are removed. The option is
+  walked with a depth limit and cycle detection.
 
 ## Extension widgets
 
@@ -104,23 +226,29 @@ and loads its frontend the first time one of its widgets renders:
 
 The extension's module runs in the host page with the host's React, and gets a
 `@apache-superset/core` whose `views` and `dashboard` namespaces are backed by
-the embedded widget: `dashboard.getNode(nodeId)` returns the props the host
-passed, `emit`/`on`/`getValue` are this provider's bus (so it cross-filters
-with the built-in widgets), and `fetchQueryData` runs through the widget data
-API under the page's own credentials. Contributions to anything other than
-`dashboard.widgets`, and calls the embedded host cannot answer (placing nodes,
-opening editors), are no-ops or throw rather than being silently wrong.
+the provider that loaded it: `dashboard.getNode(nodeId)` returns the props the
+host passed, `emit`/`on`/`getValue` are that provider's bus (so it
+cross-filters with the built-in widgets), and
+`fetchQueryData(binding, { nodeId, signal })` runs through the widget data API
+under that provider's credentials. Pass `nodeId`: it tells the host which
+widget is asking, so that widget is not narrowed by its own selection. Without
+it the query is attributed to no widget in particular. Contributions to
+anything other than `dashboard.widgets`, and calls the embedded host cannot
+answer (placing nodes, opening editors), are no-ops or throw rather than being
+silently wrong.
 
+- Each provider loads and evaluates an extension for itself, into an
+  `ExtensionHost` of its own, so the same extension under two providers is two
+  independent copies.
 - `extensionWidgets={false}` turns loading off; a
   `createExtensionWidgetLoader({ supersetDomain, getGuestToken })` of your own
-  replaces it (`createSession` takes one under the same name).
+  replaces it. Give a loader to one provider only, unless the providers also
+  share a `bus` and a `client`.
 - The deployment needs `EMBEDDED_EXTENSION_ASSETS_PUBLIC = True` for guest
   tokens: extension chunks load as plain `<script>` tags, which cannot carry
   the token. With the browser's Superset session (same-site) it is not needed.
 - Extensions built before the CLI's `publicPath: "auto"` default can only be
   embedded same-origin; their chunk URLs are pinned to the page's own origin.
-- Claude artifacts cannot load extensions at all: there is no network to fetch
-  the bundle from.
 
 ## Tokens
 
@@ -135,7 +263,8 @@ authenticating your own user. Never mint them in the browser.
 Add `rls` rules scoped to your user; without them the widget sees every row the
 dataset returns. For guests, inline specs may only use saved metrics or simple
 aggregates on existing columns: SQL metrics and SQL filters are rejected.
-Filters from the host are always ANDed onto the widget's query.
+Filters from the host are always ANDed onto the widget's query; they narrow
+what is shown and are not an access control.
 
 ## Superset configuration
 
@@ -150,13 +279,49 @@ CORS_OPTIONS = {
 }
 ```
 
-Without `fetchGuestToken` the provider uses the browser's Superset session
-(cookies); cross-origin that also needs `"supports_credentials": True`.
+For session mode across origins add `"X-CSRFToken"` to `allow_headers` and
+`"supports_credentials": True`.
+
+## Public API
+
+| Area                                           | Exports                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Embedding                                      | `SupersetProvider`, `Widget`, `Chart`, `Table`, `MetricTile`, `FilterSelect`, `Markdown`                                                                                                                                                                                 |
+| Hooks                                          | `useSupersetFilter`, `useWidgetEvent`, `useWidgetValue`, `useWidgetData`, `useWidgetBus`, `useWidgetBusRevision`, `useWidgetDataClient`, `useWidgetApplySource`, `useWidgetErrorReporter`, `useExtensionWidget`                                                          |
+| Clients and tokens                             | `createHttpWidgetClient`, `createApiFetch`, `createGuestTokenSource`, `guestTokenExpiry`, `sessionDataClient`, `widgetRef`, `fetchQueryData`, `describeFetchError`                                                                                                       |
+| Errors                                         | `WidgetApiError`, `isAbortError`, types `WidgetErrorInfo`, `WidgetErrorKind`, `WidgetErrorPhase`                                                                                                                                                                         |
+| Bus and filters                                | `createWidgetBus`, `hostFilterPayload`, `getActiveResolvedFilters`, `getActiveAdhocFilters`, `toAdhocFilters`, `FILTER_BAR_APPLY_EVENT`                                                                                                                                  |
+| Contexts (for a host that is its own provider) | `WidgetBusContext`, `WidgetDataClientContext`, `WidgetErrorContext`, `WidgetComponentsContext`, `WidgetApplySourceContext`, `ExtensionWidgetLoaderContext`                                                                                                               |
+| Widget types                                   | `builtInWidgetComponents`, `getWidgetComponent`, `registerWidgetComponent`, `unregisterWidgetComponent` (page-wide; use the provider's `widgets` for one provider)                                                                                                       |
+| Extensions                                     | `createExtensionWidgetLoader`, `createExtensionHost`, `isExtensionWidgetType`, `parseExtensionWidgetType`                                                                                                                                                                |
+| Content safety                                 | `resolveBindings`, `sanitizeEchartsOption`, `sanitizeColumnDefs`                                                                                                                                                                                                         |
+| Layout documents                               | `walkTree`, `validateTree`, `sanitizeTree`, `collectSubtreeIds`, `isNodeOrDescendant`, `findParentId`, `getAncestorIds`, `subtreeDepth`                                                                                                                                  |
+| Types                                          | `WidgetProps`, `WidgetComponent`, `WidgetBus`, `WidgetDataClient`, `WidgetDataRequest`, `WidgetValuesRequest`, `WidgetRequestOptions`, `WidgetRef`, `SavedWidget`, `HostFilter`, `ResolvedFilter`, `FilterOperator`, `DataBindingSpec`, `QueryDataResult`, `WidgetEvent` |
+
+### Layout document utilities
+
+A layout document is a flat map of nodes that name their children by id.
+Nothing in that shape prevents a cycle, a node with two parents or a missing
+child, and a document can arrive that way from storage. The tree helpers walk
+iteratively with a visited set, a depth cap (64) and a node cap (10 000), and
+report what they had to skip:
+
+```ts
+import { validateTree, sanitizeTree, walkTree } from '@apache-superset/widgets';
+
+const issues = validateTree(document.nodes, 'root');
+// [{ kind: 'cycle' | 'multiple-parents' | 'missing-child' | 'max-depth'
+//          | 'max-nodes' | 'unreachable' | 'missing-root', id, parentId? }]
+const { nodes } = sanitizeTree(document.nodes, 'root'); // a tree, always
+walkTree(nodes, 'root', ({ id, node, depth }) => {
+  /* each node once */
+});
+```
 
 ## Consuming from source
 
-The package is not built for publishing yet. A host bundler must compile it and
-its Superset dependencies from `src`:
+A host bundler must compile the package and its Superset dependencies from
+`src`:
 
 - alias `@apache-superset/widgets`, `@apache-superset/core(/*)` and
   `@superset-ui/core(/*)` to `packages/<name>/src`;
@@ -175,95 +340,6 @@ and an XSS in the host can read the guest token and any rows it grants. Keep
 tokens short-lived and narrowly scoped. For third-party or untrusted hosts use
 the iframe embed (`@superset-ui/embedded-sdk`).
 
-## Embedding in Claude artifacts
-
-Claude artifacts cannot make network requests or use browser storage, so the
-REST client (and a token broker) cannot work there. Instead, data comes from
-the **viewer's own Superset connector** in Claude: the page calls MCP tools
-through the artifact runtime and never sees a token. Queries run with the
-viewer's Superset permissions and row-level security.
-
-Artifacts cannot install npm packages either, so they load the single-file
-bundle (`superset-widgets.min.js`: React, the widgets and their CSS; sets
-`window.SupersetWidgets`) from a CDN the artifact host allows, and drive it
-through a session:
-
-```js
-const loadSupersetWidgets = url =>
-  window.SupersetWidgets
-    ? Promise.resolve(window.SupersetWidgets)
-    : new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = url;
-        script.onload = () => resolve(window.SupersetWidgets);
-        script.onerror = () => reject(new Error(`Could not load ${url}`));
-        document.head.appendChild(script);
-      });
-
-const W = await loadSupersetWidgets(BUNDLE_URL);
-const session = W.createSession({
-  server: 'Superset',
-  strategy: 'query-dataset',
-});
-const chart = session.mount(element, {
-  type: 'echarts',
-  props: {
-    chartType: 'bar',
-    dataBinding: {
-      datasetId: 17,
-      metrics: ['sum__num'],
-      dimensions: ['state'],
-    },
-  },
-});
-session.setFilter('state', {
-  datasetId: 17,
-  column: 'state',
-  operator: 'IN',
-  value: ['CA'],
-});
-const off = session.on('valueChanged', event =>
-  console.log(event.nodeId, event.payload),
-);
-session.setThemeMode('dark');
-chart.unmount();
-session.dispose();
-```
-
-- **Session:** `createSession({server, strategy?, proxy?, themeMode?,
-themeConfig?, mcp?, client?, loadFonts?})`. Every `mount(element, {type,
-props} | {id}, {instanceId?, className?, style?, showTitle?})` is its own
-  React root sharing one bus and data client, so widgets cross-filter.
-  `setFilter(key, filter | null)` publishes `host:<key>`; `dispose()` unmounts
-  everything and clears host filters. Fonts come from Google Fonts (the only
-  stylesheet host artifacts allow) unless `loadFonts: false`.
-- **React artifacts** keep their own React: mount into empty `ref` elements and
-  never render children into them. See `artifact/examples/react-artifact.jsx`.
-- **Build:** `node artifact/build.mjs` writes `artifact/dist/superset-widgets.min.js`
-  and `artifact/dist/examples/inline.html` (bundle inlined, no CDN needed).
-  With `SUPERSET_WIDGETS_URL=https://...` it also writes
-  `artifact/dist/examples/cdn.html`.
-- **MCP prompt:** `build_widget_artifact(connector_name, strategy,
-artifact_kind)` hands Claude the loader, session API, specs and manifest.
-  Set `MCP_WIDGETS_BUNDLE_URL` to the published bundle URL; without it the
-  prompt tells Claude to ask the user for one.
-- **In-tree React** apps that can install the package use
-  `<SupersetArtifactProvider server strategy>` with the components directly.
-- **Connector:** the viewer must have added Superset as a remote MCP connector
-  in Claude; `server` is its display name.
-- **Manifest:** publish with
-  `capabilities: {mcp: {servers: [{server: "Superset", tools: [...]}]}}`, listing
-  the tools the strategy calls. MCP-backed artifacts cannot be shared publicly.
-- **Strategies:**
-  - `widget-tools` (default): `get_widget_data`, `get_widget_values`,
-    `get_saved_widget`. Supports saved widgets (`<Widget id>`) and every inline
-    widget.
-  - `query-dataset`: the existing `query_dataset` tool. Inline widgets only,
-    saved metric names only, SIMPLE filters only.
-  - `proxy`: set when the connector only exposes the `call_tool` meta-tool.
-- **Errors** are `WidgetMcpError`s with a `code` and a message that says what
-  fixes it (reconnect the connector, add it, approve access, try again).
-
 ## Design notes
 
 - The widget, not the dashboard, is the unit of embedding. The builder
@@ -275,13 +351,12 @@ artifact_kind)` hands Claude the loader, session API, specs and manifest.
   This package implements them (and re-exports the types, so a host app needs
   one import), which keeps a charting runtime out of the module federation
   singleton every extension shares.
-- Data always runs on the server through the widget registry
-  (`Widget.fetch_data` / `fetch_values`), either from the stored definition
-  (`{id}`) or from a validated inline spec (`{widget: {type, props}}`), via
-  `POST /api/v1/widget/data` and `/values`.
+- Data always runs on the server through the widget registry, either from the
+  stored definition (`{id}`) or from a validated inline spec
+  (`{widget: {type, props}}`), via `POST /api/v1/widget/data` and `/values`.
 - An extension's widget is loaded by the page that renders it, not bundled: the
   type (`extensions.<publisher>.<name>.<type>`) names the extension, and the
-  same `views.registerView` call it makes in Superset registers it here.
-- Open with other owners: widget JSON shape and data hook (3.8), bus and filter
-  vocabulary (3.4), sandboxing extension widgets (3.17) — extension code runs
-  in the host page's context today, on the host's trust.
+  same `views.registerView` call it makes in Superset registers it with the
+  provider's extension host.
+- Extension code runs in the host page's context, on the host's trust; it is
+  not sandboxed.

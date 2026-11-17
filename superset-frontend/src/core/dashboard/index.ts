@@ -58,6 +58,11 @@ export { useDashboardRevision };
 // instead of "no dashboard active."
 function getDashboardId(): number | undefined {
   if (navigation.getPage() !== 'dashboard') return undefined;
+  // A saved Dashboard v2 lives under the classic dashboard's own path prefix
+  // (`/dashboard/v2/<id>/`), which the page mapping reads as the classic
+  // page. It is not one, and the classic dashboard's id in Redux is then
+  // whichever classic dashboard was open before it.
+  if (window.location.pathname.includes('/dashboard/v2/')) return undefined;
   return store.getState().dashboardInfo?.id;
 }
 

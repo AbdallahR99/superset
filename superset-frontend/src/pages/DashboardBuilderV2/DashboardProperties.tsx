@@ -128,10 +128,9 @@ const Panel = styled.div`
 
 /** How many widgets are on the dashboard, at any depth. */
 const countBlocks = (id: string): number =>
-  (provider.getNode(id)?.children ?? []).reduce(
-    (total, childId) => total + 1 + countBlocks(childId),
-    0,
-  );
+  // The subtree walk is the store's own, bounded and cycle-safe; the node
+  // itself is in it and is not one of the widgets it holds.
+  Math.max(0, provider.getSubtreeIds(id).length - 1);
 
 /**
  * Everything the dashboard is, as opposed to everything on it.
@@ -390,6 +389,8 @@ export default function DashboardProperties(): ReactElement {
                   customCss={customCss}
                   hasCustomLabelsColor={false}
                   showChartTimestamps={props.showChartTimestamps === true}
+                  jsonMetadata={jsonMetadata}
+                  onJsonMetadataChange={setJsonMetadata}
                   onThemeChange={value => write({ themeId: value || null })}
                   onColorSchemeChange={colorScheme => write({ colorScheme })}
                   onCustomCssChange={setCustomCss}

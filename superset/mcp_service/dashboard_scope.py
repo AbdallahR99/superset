@@ -1227,6 +1227,23 @@ def _refuse_while_scoped(tool_name: str) -> Rewriter:
     return refuse
 
 
+def _refuse_unfiltered_rows(tool_name: str) -> Rewriter:
+    """Refuse a row-returning tool the dashboard filters cannot be applied to.
+
+    Gives the refusal an unclassified tool gets, as an explicit classification.
+    """
+
+    def refuse(request: Any, scope: DashboardScope) -> Any:
+        raise MCPDashboardScopeError(
+            f"{tool_name} does not support dashboard filters, and its results "
+            "could include rows those filters exclude.",
+            "Use query_dataset, execute_sql, or the dashboard's chart tools, "
+            "which apply the dashboard filters.",
+        )
+
+    return refuse
+
+
 # Writes that change what existing or new charts and datasets query. A chart
 # added to the scoped dashboard, a re-pointed chart, or a dataset defined by
 # the model (e.g. ``SELECT 'A' AS client, ...``) would otherwise be read under
@@ -1261,6 +1278,9 @@ SCOPE_REWRITERS: dict[str, Rewriter] = {
     "generate_chart": _gate_generate_chart,
     "update_chart": _gate_update_chart,
     "update_chart_preview": _gate_update_chart_preview,
+    # A saved widget's query is fixed by its stored props and belongs to no
+    # dashboard, so the captured dashboard filters cannot be mapped onto it.
+    "get_widget_data": _refuse_unfiltered_rows("get_widget_data"),
     **{name: _refuse_while_scoped(name) for name in DEFINITION_CHANGING_TOOLS},
 }
 
@@ -1299,11 +1319,13 @@ SCOPE_NEUTRAL_TOOLS = frozenset(
         "get_rls_filter_info",
         "get_role_info",
         "get_saved_query_info",
+        "get_saved_widget",
         "get_schema",
         "get_tag_info",
         "get_task_info",
         "get_theme_info",
         "get_user_info",
+        "get_widget_control_schema",
         "health_check",
         "list_annotation_layers",
         "list_charts",
@@ -1317,11 +1339,13 @@ SCOPE_NEUTRAL_TOOLS = frozenset(
         "list_rls_filters",
         "list_roles",
         "list_saved_queries",
+        "list_saved_widgets",
         "list_semantic_views",
         "list_tags",
         "list_tasks",
         "list_themes",
         "list_users",
+        "list_widget_types",
         "manage_dashboard_certification",
         "manage_dashboard_markdown",
         "manage_dashboard_owners",

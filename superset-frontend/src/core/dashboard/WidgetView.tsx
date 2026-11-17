@@ -16,7 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { forwardRef, useState, type HTMLAttributes } from 'react';
+import {
+  forwardRef,
+  useContext,
+  useMemo,
+  useState,
+  type HTMLAttributes,
+} from 'react';
 import { t } from '@apache-superset/core/translation';
 import { css, styled, useTheme } from '@apache-superset/core/theme';
 import { ActionButton, Flex, Typography } from '@superset-ui/core/components';
@@ -25,10 +31,7 @@ import type { MenuItem } from '@superset-ui/core/components/Menu';
 import { ErrorBoundary, KebabMenuButton } from 'src/components';
 import { useDashboardStore, useDashboardRevision } from './store';
 import { isContainerType } from './DashboardProvider';
-import {
-  isWidgetViewRegistered,
-  resolveWidgetView,
-} from './resolveWidgetView';
+import { isWidgetViewRegistered, resolveWidgetView } from './resolveWidgetView';
 import { widgetLabel } from './widgetLabel';
 import { widgetHeaderControl } from './widgetHeaderControl';
 import RootGrid from './RootGrid';
@@ -36,6 +39,7 @@ import RootGrid from './RootGrid';
 import StaticGrid from './StaticGrid';
 import { useDashboardViewMode } from './viewMode';
 import EmbedWidgetModal from './EmbedWidgetModal';
+import { NodePathContext, isUnrenderable } from './nodePath';
 
 /**
  * The overflow menu's contents — the same items, order and grouping as the
@@ -270,8 +274,13 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     const theme = useTheme();
     const editable = useDashboardViewMode() === 'edit';
     const [embedOpen, setEmbedOpen] = useState(false);
+    const path = useContext(NodePathContext);
+    const pathWithSelf = useMemo(() => [...path, nodeId], [path, nodeId]);
     const node = store.getNode(nodeId);
     if (!node) return null;
+    // A node that is its own ancestor, or one nested past the depth a
+    // document may have, is not rendered: see `NodePathContext`.
+    if (isUnrenderable(path, nodeId)) return null;
 
     const selected = editable && store.getSelection() === nodeId;
     // The root is the dashboard itself rather than something on it: it has no
@@ -587,7 +596,9 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
           }}
         >
           <ErrorBoundary>
-            {resolved ?? <UnsupportedBlockPlaceholder nodeId={nodeId} />}
+            <NodePathContext.Provider value={pathWithSelf}>
+              {resolved ?? <UnsupportedBlockPlaceholder nodeId={nodeId} />}
+            </NodePathContext.Provider>
           </ErrorBoundary>
         </div>
         {children}

@@ -69,7 +69,9 @@ test('a saved widget loads its definition, then renders with its saved id', asyn
 
   expect(screen.getByText('loading')).toBeInTheDocument();
   expect(await screen.findByText('from server')).toBeInTheDocument();
-  expect(client.getSavedWidget).toHaveBeenCalledWith('uuid-9');
+  expect(client.getSavedWidget).toHaveBeenCalledWith('uuid-9', {
+    signal: expect.any(AbortSignal),
+  });
   expect(received.at(-1)).toEqual({
     instanceId: 'w1',
     props: { label: 'from server' },

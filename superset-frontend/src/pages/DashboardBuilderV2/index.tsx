@@ -19,13 +19,24 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { t } from '@apache-superset/core/translation';
-import { css, styled, useTheme } from '@apache-superset/core/theme';
-import { EmptyState, Flex } from '@superset-ui/core/components';
+import { css, styled, useIsRtl, useTheme } from '@apache-superset/core/theme';
+import {
+  Button,
+  EmptyState,
+  Flex,
+  Loading,
+  UnsavedChangesModal,
+} from '@superset-ui/core/components';
 import { useParams } from 'react-router-dom';
 import { useToasts } from 'src/components/MessageToasts/withToasts';
-import { fetchDashboardV2 } from 'src/core/dashboard/persistence';
+import { useUnsavedChangesPrompt } from 'src/hooks/useUnsavedChangesPrompt';
 import { dashboard, useDashboardRevision } from 'src/core/dashboard';
 import { provider } from 'src/core/dashboard/store';
+import {
+  dashboardSession,
+  useDashboardSession,
+} from 'src/core/dashboard/session';
+import type { LoadFailure } from 'src/core/dashboard/session';
 import {
   FALLBACK_COL_SPAN,
   FALLBACK_ROW_SPAN,
@@ -35,7 +46,9 @@ import {
 } from 'src/core/dashboard/placement';
 import {
   cellAtPoint,
+  inlineOffsetPx,
   pixelRectForCell,
+  positionStyleForRect,
   resolveCellGeometry,
   resolveGridMetrics,
 } from 'src/core/dashboard/layoutStyle';
@@ -44,6 +57,7 @@ import type { PackedRect } from 'src/core/dashboard/gridPacking';
 import WidgetView from 'src/core/dashboard/WidgetView';
 import DashboardHeader from './DashboardHeader';
 import EditorPanel from './EditorPanel';
+import { useSaveDashboard } from './useSaveDashboard';
 
 const PageContainer = styled(Flex)`
   ${({ theme }) => css`
@@ -88,6 +102,14 @@ const Workspace = styled.div`
 
 const EmptyCanvasWrapper = styled.div`
   height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+`;
+
+/** Where the reason a dashboard could not be opened is said, in the editor's place. */
+const LoadErrorWrapper = styled.div`
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -156,17 +178,33 @@ const DropPreview = styled.div`
   `}
 `;
 
+/** What to say when a dashboard could not be opened. */
+const loadFailureMessage = (failure: LoadFailure | undefined): string => {
+  switch (failure) {
+    case 'not-found':
+      return t('This dashboard does not exist.');
+    case 'forbidden':
+      return t('You do not have access to this dashboard.');
+    case 'invalid':
+      return t(
+        'This dashboard is too large or too deeply nested to be opened here.',
+      );
+    default:
+      return t('This dashboard could not be loaded.');
+  }
+};
+
 /**
- * Prototype entry point for SIP item 7.1 (AI-Native Dashboards, section 7.1
- * of the design doc): a canvas paired with the chat panel, so the
- * widget schema/renderer/platform-API work can be iterated on with a
- * real natural-language chat loop rather than a mock. Does not persist
- * anything yet — layout/style state lives only in memory for this demo.
+ * The Dashboard v2 builder: a header, an editor panel and a canvas over one
+ * node tree.
  *
- * The chat panel itself isn't forced open here — it behaves exactly as it
- * does everywhere else in the app (whatever display mode/open state the
- * user already has), via the same global ChatPanelHost/ChatFloatingHost
- * mounted in App.tsx.
+ * Which saved dashboard that tree belongs to, and every load and save of it,
+ * is the session's business (`src/core/dashboard/session`), not this
+ * component's. The page tells the session which dashboard the route names
+ * and draws what the session says: the editor only once the tree is the one
+ * the route asked for, a spinner until then, and the reason instead when it
+ * could not be had. A tree that is not ready is never on screen to be edited
+ * and never offered to Save.
  *
  * Rendering the tree itself is entirely delegated to `WidgetView` —
  * this page owns only its own chrome (the empty state) and knows nothing
@@ -180,25 +218,52 @@ export default function DashboardBuilderV2() {
   // whatever the chat agent (or any other caller of the dashboard API) did.
   useDashboardRevision();
   const theme = useTheme();
+  const isRtl = useIsRtl();
   const { dashboardId } = useParams<{ dashboardId?: string }>();
-  const { addDangerToast } = useToasts();
+  const { addWarningToast } = useToasts();
+  const session = useDashboardSession();
+  const save = useSaveDashboard();
   const root = dashboard.getRoot();
 
+  // The route decides which dashboard this is. Deliberately without a
+  // cleanup: going from a dashboard that was just created to the route that
+  // carries its new id is the same dashboard, which `open` can only tell
+  // when nothing closed the session in between.
   useEffect(() => {
-    if (!dashboardId) return undefined;
-    let cancelled = false;
-    fetchDashboardV2(dashboardId)
-      .then(result => {
-        if (!cancelled) provider.loadDocument(result.document.nodes);
-      })
-      .catch(() => {
-        if (!cancelled)
-          addDangerToast(t('This dashboard could not be loaded.'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dashboardId, addDangerToast]);
+    dashboardSession.open(dashboardId || undefined);
+  }, [dashboardId]);
+  // Leaving the page is what closes it: whatever is still in flight then has
+  // nothing to land on.
+  useEffect(() => () => dashboardSession.close(), []);
+
+  // A stored document that was not a tree is opened as one (see
+  // `sanitizeDocument`), and saving it writes the repaired tree back. That
+  // is a change the author did not make, so it is said rather than done
+  // quietly.
+  const { repairs, status } = session;
+  useEffect(() => {
+    if (status === 'ready' && repairs > 0) {
+      addWarningToast(
+        t(
+          'This dashboard had structural problems that were repaired on load. Saving will keep the repaired version.',
+        ),
+      );
+    }
+  }, [addWarningToast, repairs, status]);
+
+  // Leaving with edits the server does not have asks first, whether the way
+  // out is a link in the app or the browser itself.
+  const {
+    showModal: showUnsavedModal,
+    setShowModal: setShowUnsavedModal,
+    handleConfirmNavigation,
+    handleSaveAndCloseModal,
+  } = useUnsavedChangesPrompt({
+    hasUnsavedChanges: session.dirty,
+    onSave: async () => {
+      await save();
+    },
+  });
   const isEmpty = !root.children || root.children.length === 0;
   // No `layout` to read yet — a blank root has never had one set — so this
   // resolves to the exact same defaults `RootGrid` itself falls back to,
@@ -258,7 +323,7 @@ export default function DashboardBuilderV2() {
       containerRect.width,
     );
     const { col, row } = cellAtPoint(
-      event.clientX - containerRect.left,
+      inlineOffsetPx(event.clientX, containerRect, isRtl),
       event.clientY - containerRect.top,
       cellGeometry,
     );
@@ -303,25 +368,52 @@ export default function DashboardBuilderV2() {
   return (
     <>
       <PageContainer vertical>
-        <DashboardHeader
-          dashboardId={dashboardId ? Number(dashboardId) : undefined}
-        />
-        <Workspace>
-          <EditorPanel onAdd={addBlock} />
-          <Canvas
-            data-test="canvas"
-            onClick={event => {
-              // A click that reached the canvas itself passed every widget on
-              // the way, so it is the one gesture that unambiguously means
-              // "nothing". A click on a widget stops before here.
-              if (event.target === event.currentTarget) {
-                provider.setSelection(undefined);
-              }
-            }}
-          >
-            {isEmpty ? (
-              <EmptyCanvasWrapper>
-                {/* The dashboard itself, standing in for a canvas that has
+        <DashboardHeader />
+        {session.status === 'loading' && (
+          <Workspace data-test="dashboard-loading">
+            <LoadErrorWrapper>
+              <Loading position="inline-centered" />
+            </LoadErrorWrapper>
+          </Workspace>
+        )}
+        {session.status === 'error' && (
+          <Workspace data-test="dashboard-load-error">
+            <LoadErrorWrapper>
+              <EmptyState
+                image="empty-dashboard.svg"
+                title={loadFailureMessage(session.loadFailure)}
+                description={t(
+                  'Nothing was changed, and nothing can be saved from here until the dashboard has loaded.',
+                )}
+              >
+                <Button
+                  buttonStyle="primary"
+                  data-test="dashboard-load-retry"
+                  onClick={() => dashboardSession.reload()}
+                >
+                  {t('Try again')}
+                </Button>
+              </EmptyState>
+            </LoadErrorWrapper>
+          </Workspace>
+        )}
+        {session.status === 'ready' && (
+          <Workspace>
+            <EditorPanel onAdd={addBlock} />
+            <Canvas
+              data-test="canvas"
+              onClick={event => {
+                // A click that reached the canvas itself passed every widget on
+                // the way, so it is the one gesture that unambiguously means
+                // "nothing". A click on a widget stops before here.
+                if (event.target === event.currentTarget) {
+                  provider.setSelection(undefined);
+                }
+              }}
+            >
+              {isEmpty ? (
+                <EmptyCanvasWrapper>
+                  {/* The dashboard itself, standing in for a canvas that has
                   nothing on it yet. It selects the root because that is the
                   only thing there is to select here, and because how the
                   canvas is arranged is asked in the root's properties — a
@@ -329,106 +421,110 @@ export default function DashboardBuilderV2() {
                   whatever is placed next lands in the mode already chosen.
                   Without this the mode would be unreachable until something
                   had already been placed and then rearranged. */}
-                <CanvasPlaceholder
-                  ref={placeholderRef}
-                  // eslint-disable-next-line jsx-a11y/prefer-tag-over-role
-                  role="button"
-                  tabIndex={0}
-                  aria-label={t('Dashboard')}
-                  data-test="empty-canvas"
-                  onClick={() => provider.setSelection(root.id)}
-                  onKeyDown={event => {
-                    if (event.key === 'Enter' || event.key === ' ') {
+                  <CanvasPlaceholder
+                    ref={placeholderRef}
+                    // eslint-disable-next-line jsx-a11y/prefer-tag-over-role
+                    role="button"
+                    tabIndex={0}
+                    aria-label={t('Dashboard')}
+                    data-test="empty-canvas"
+                    onClick={() => provider.setSelection(root.id)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        provider.setSelection(root.id);
+                      }
+                    }}
+                    // The same drop target `RootGrid` offers once the root has
+                    // at least one child — this stands in for it beforehand,
+                    // since a dashboard with nothing on it yet is exactly when
+                    // this placeholder (rather than `RootGrid`) is what's on
+                    // screen to drop onto. Without this, the empty state's own
+                    // "Drag a widget from the panel" is an instruction
+                    // this element cannot actually answer.
+                    onDragEnter={event => {
+                      if (event.dataTransfer.types.includes(PALETTE_MIME)) {
+                        setDragOverCount(count => count + 1);
+                      }
+                    }}
+                    onDragLeave={event => {
+                      if (event.dataTransfer.types.includes(PALETTE_MIME)) {
+                        setDragOverCount(count => {
+                          const next = Math.max(0, count - 1);
+                          if (next === 0) setGhostRect(null);
+                          return next;
+                        });
+                      }
+                    }}
+                    onDragOver={event => {
+                      if (!event.dataTransfer.types.includes(PALETTE_MIME))
+                        return;
                       event.preventDefault();
-                      provider.setSelection(root.id);
-                    }
-                  }}
-                  // The same drop target `RootGrid` offers once the root has
-                  // at least one child — this stands in for it beforehand,
-                  // since a dashboard with nothing on it yet is exactly when
-                  // this placeholder (rather than `RootGrid`) is what's on
-                  // screen to drop onto. Without this, the empty state's own
-                  // "Drag a widget from the panel" is an instruction
-                  // this element cannot actually answer.
-                  onDragEnter={event => {
-                    if (event.dataTransfer.types.includes(PALETTE_MIME)) {
-                      setDragOverCount(count => count + 1);
-                    }
-                  }}
-                  onDragLeave={event => {
-                    if (event.dataTransfer.types.includes(PALETTE_MIME)) {
-                      setDragOverCount(count => {
-                        const next = Math.max(0, count - 1);
-                        if (next === 0) setGhostRect(null);
-                        return next;
-                      });
-                    }
-                  }}
-                  onDragOver={event => {
-                    if (!event.dataTransfer.types.includes(PALETTE_MIME))
-                      return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'copy';
-                    setGhostRect(resolveEmptyCanvasDropRect(event));
-                  }}
-                  onDrop={event => {
-                    const type = event.dataTransfer.getData(PALETTE_MIME);
-                    setDragOverCount(0);
-                    if (type !== '') {
-                      event.preventDefault();
-                      const rect = resolveEmptyCanvasDropRect(event);
-                      placeBlockAt(root.id, type, 0, {
-                        col: rect.x + 1,
-                        row: rect.y + 1,
-                        colSpan: rect.w,
-                        rowSpan: rect.h,
-                      });
-                    }
-                    setGhostRect(null);
-                  }}
-                >
-                  {ghostRect ? (
-                    (() => {
-                      const containerWidthPx =
-                        placeholderRef.current?.getBoundingClientRect().width ??
-                        0;
-                      const cellGeometry = resolveCellGeometry(
-                        emptyCanvasMetrics,
-                        containerWidthPx,
-                      );
-                      const pixelRect = pixelRectForCell(
-                        ghostRect,
-                        cellGeometry,
-                      );
-                      return (
-                        <DropPreview
-                          data-test="empty-canvas-drop-preview"
-                          style={{
-                            left: pixelRect.left,
-                            top: pixelRect.top,
-                            width: pixelRect.width,
-                            height: pixelRect.height,
-                          }}
-                        />
-                      );
-                    })()
-                  ) : (
-                    <EmptyState
-                      image="empty-dashboard.svg"
-                      title={t('Start building')}
-                      description={t(
-                        'Drag a widget from the panel, or ask the assistant for one.',
-                      )}
-                    />
-                  )}
-                </CanvasPlaceholder>
-              </EmptyCanvasWrapper>
-            ) : (
-              <WidgetView nodeId={root.id} />
-            )}
-          </Canvas>
-        </Workspace>
+                      event.dataTransfer.dropEffect = 'copy';
+                      setGhostRect(resolveEmptyCanvasDropRect(event));
+                    }}
+                    onDrop={event => {
+                      const type = event.dataTransfer.getData(PALETTE_MIME);
+                      setDragOverCount(0);
+                      if (type !== '') {
+                        event.preventDefault();
+                        const rect = resolveEmptyCanvasDropRect(event);
+                        placeBlockAt(root.id, type, 0, {
+                          col: rect.x + 1,
+                          row: rect.y + 1,
+                          colSpan: rect.w,
+                          rowSpan: rect.h,
+                        });
+                      }
+                      setGhostRect(null);
+                    }}
+                  >
+                    {ghostRect ? (
+                      (() => {
+                        const containerWidthPx =
+                          placeholderRef.current?.getBoundingClientRect()
+                            .width ?? 0;
+                        const cellGeometry = resolveCellGeometry(
+                          emptyCanvasMetrics,
+                          containerWidthPx,
+                        );
+                        const pixelRect = pixelRectForCell(
+                          ghostRect,
+                          cellGeometry,
+                        );
+                        return (
+                          <DropPreview
+                            data-test="empty-canvas-drop-preview"
+                            style={positionStyleForRect(pixelRect, isRtl)}
+                          />
+                        );
+                      })()
+                    ) : (
+                      <EmptyState
+                        image="empty-dashboard.svg"
+                        title={t('Start building')}
+                        description={t(
+                          'Drag a widget from the panel, or click one to place it.',
+                        )}
+                      />
+                    )}
+                  </CanvasPlaceholder>
+                </EmptyCanvasWrapper>
+              ) : (
+                <WidgetView nodeId={root.id} />
+              )}
+            </Canvas>
+          </Workspace>
+        )}
       </PageContainer>
+      <UnsavedChangesModal
+        title={t('Save changes to this dashboard?')}
+        body={t("If you don't save, changes will be lost.")}
+        showModal={showUnsavedModal}
+        onHide={() => setShowUnsavedModal(false)}
+        onConfirmNavigation={handleConfirmNavigation}
+        handleSave={handleSaveAndCloseModal}
+      />
     </>
   );
 }

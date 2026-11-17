@@ -696,3 +696,53 @@ test('archive fallback respects the application root', async () => {
     rootSpy.mockRestore();
   }
 });
+
+/** Opens the "+" menu as someone who may create dashboards. */
+const openNewMenuAsDashboardAuthor = async () => {
+  useSelectorMock.mockImplementation(selector =>
+    selector({
+      user: {
+        userId: 1,
+        username: 'admin',
+        roles: { Admin: [['can_write', 'Dashboard']] },
+      },
+      dashboardInfo: {},
+      common: { conf: {} },
+    }),
+  );
+  render(<RightMenu {...createProps()} />, {
+    useRedux: true,
+    useQueryParams: true,
+    useRouter: true,
+    useTheme: true,
+  });
+  await userEvent.hover(screen.getByTestId('new-dropdown-icon'));
+  // The classic entry is there either way, and says the menu has opened.
+  await screen.findByText('Dashboard');
+};
+
+test('the Dashboard v2 entry is not offered while the feature flag is off', async () => {
+  mockIsFeatureEnabled.mockReturnValue(false);
+
+  await openNewMenuAsDashboardAuthor();
+
+  expect(screen.queryByText('Dashboard v2')).not.toBeInTheDocument();
+  expect(
+    screen.queryByTestId('menu-item-dashboard-v2'),
+  ).not.toBeInTheDocument();
+});
+
+test('the Dashboard v2 entry is offered, and leads to the builder, when the feature flag is on', async () => {
+  mockIsFeatureEnabled.mockImplementation(
+    flag => flag === FeatureFlag.DashboardV2,
+  );
+
+  await openNewMenuAsDashboardAuthor();
+
+  expect(await screen.findByText('Dashboard v2')).toBeInTheDocument();
+  expect(screen.getByTestId('menu-item-dashboard-v2')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /Dashboard v2/ })).toHaveAttribute(
+    'href',
+    '/dashboard/v2/new/',
+  );
+});

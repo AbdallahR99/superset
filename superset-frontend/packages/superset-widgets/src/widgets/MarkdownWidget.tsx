@@ -19,11 +19,19 @@
 import { SafeMarkdown } from '@superset-ui/core/components';
 import type { WidgetProps } from '../types';
 
-/** The built-in `markdown` widget; fills whatever box it is given. */
+/**
+ * The built-in `markdown` widget; fills whatever box it is given.
+ *
+ * Its content is written by whoever defined the widget and read in someone
+ * else's page, so it is always sanitised: raw HTML in the source is reduced to
+ * the safe subset (no scripts, event handlers or script-capable links), with
+ * no prop or stored setting that turns that off.
+ */
 export default function MarkdownWidget({ props }: WidgetProps) {
+  const source = typeof props.content === 'string' ? props.content : '';
   return (
     <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
-      <SafeMarkdown source={String(props.content ?? '')} />
+      <SafeMarkdown source={source} htmlSanitization />
     </div>
   );
 }

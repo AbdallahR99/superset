@@ -14,30 +14,87 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Schemas for the embeddable-widget data MCP tools."""
+"""Schemas for the widget MCP tools.
+
+Every request model forbids unknown fields, so a caller cannot smuggle an
+inline widget definition (and with it a SQL expression) into a tool that only
+reads saved widgets.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from superset.mcp_service.utils import sanitize_for_llm_context
+MAX_SAVED_WIDGET_PAGE_SIZE = 100
+DEFAULT_SAVED_WIDGET_PAGE_SIZE = 25
 
 
-class WidgetSpec(BaseModel):
-    """An inline widget definition, validated by the widget registry."""
+class WidgetTypeInfo(BaseModel):
+    """A registered widget type."""
 
-    type: str = Field(..., description="Widget type, e.g. 'echarts' or 'metric-tile'.")
-    props: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Widget props, as produced by get_widget_control_schema.",
+    id: str = Field(..., description="Widget type id, e.g. 'metric-tile'.")
+    name: str = Field(..., description="Human-readable name.")
+    description: str = Field("", description="What the widget shows.")
+
+
+class WidgetTypeList(BaseModel):
+    """Every registered widget type."""
+
+    widget_types: list[WidgetTypeInfo] = Field(default_factory=list)
+    count: int = Field(0, description="Number of widget types.")
+
+
+class GetWidgetControlSchemaRequest(BaseModel):
+    """Request schema for get_widget_control_schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    widget_type: str = Field(..., description="Widget type id from list_widget_types.")
+    paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "x-path values of collapsed branches to expand. Empty returns the "
+            "minimum-viable root schema."
+        ),
+    )
+    control_values: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Current widget props, used only to shape x-dynamic branches. "
+            "They are never executed as a query."
+        ),
+    )
+    series: list[str] | None = Field(
+        default=None,
+        description="Known distinct dimension values, for x-dynamic branches.",
+    )
+
+
+class WidgetControlSchema(BaseModel):
+    """A widget type's control schema, whole (pruned) or as requested subtrees."""
+
+    widget_type: str = Field(..., description="Widget type id.")
+    control_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Minimum-viable root JSON Schema; set when no paths were given.",
+    )
+    subtrees: dict[str, dict[str, Any]] | None = Field(
+        default=None,
+        description="One JSON Schema per requested path; set when paths were given.",
+    )
+    warning: str | None = Field(
+        default=None,
+        description="Set when dynamic branches could not be shaped from the values.",
     )
 
 
 class ResolvedFilter(BaseModel):
     """A structured narrowing ANDed onto the widget's own query."""
+
+    model_config = ConfigDict(extra="forbid")
 
     column: str = Field(..., description="Column on the widget's dataset.")
     operator: Literal["EQUALS", "NOT_EQUALS", "IN", "NOT_IN", "RANGE", "TIME_RANGE"]
@@ -50,79 +107,93 @@ class ResolvedFilter(BaseModel):
     )
 
 
-class WidgetSelectorRequest(BaseModel):
-    """Exactly one of an inline ``widget`` or a saved widget ``id``."""
+class ListSavedWidgetsRequest(BaseModel):
+    """Request schema for list_saved_widgets."""
 
-    widget: WidgetSpec | None = Field(default=None, description="Inline widget.")
-    id: str | None = Field(default=None, description="Saved widget uuid.")
+    model_config = ConfigDict(extra="forbid")
 
-    @model_validator(mode="after")
-    def exactly_one_selector(self) -> "WidgetSelectorRequest":
-        if (self.widget is None) == (self.id is None):
-            raise ValueError("Provide exactly one of 'widget' or 'id'.")
-        return self
-
-    def selector(self) -> Dict[str, Any]:
-        """The selector shape the widget commands expect."""
-        if self.id is not None:
-            return {"id": self.id}
-        assert self.widget is not None
-        return {"widget": self.widget.model_dump()}
-
-
-class GetWidgetDataRequest(WidgetSelectorRequest):
-    filters: List[ResolvedFilter] = Field(
-        default_factory=list,
-        description="Optional filters, e.g. from a host filter or cross-filter.",
+    page: int = Field(1, ge=1, description="1-based page number.")
+    page_size: int = Field(
+        DEFAULT_SAVED_WIDGET_PAGE_SIZE,
+        ge=1,
+        le=MAX_SAVED_WIDGET_PAGE_SIZE,
+        description="Saved widgets per page.",
     )
 
 
-class GetWidgetValuesRequest(WidgetSelectorRequest):
-    pass
-
-
 class GetSavedWidgetRequest(BaseModel):
+    """Request schema for get_saved_widget."""
+
+    model_config = ConfigDict(extra="forbid")
+
     id: str = Field(..., description="Saved widget uuid.")
 
 
-class WidgetDataResponse(BaseModel):
-    columns: List[str] = Field(default_factory=list)
-    rows: List[Dict[str, Any]] = Field(default_factory=list)
+class GetWidgetDataRequest(BaseModel):
+    """Request schema for get_widget_data: a saved widget and optional filters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., description="Saved widget uuid.")
+    filters: list[ResolvedFilter] = Field(
+        default_factory=list,
+        description="Optional column filters that can only narrow the rows.",
+    )
 
 
-class WidgetValuesResponse(BaseModel):
-    values: List[Any] = Field(default_factory=list)
+class SavedWidgetInfo(BaseModel):
+    """A saved widget's definition."""
 
-
-class SavedWidgetResponse(BaseModel):
     uuid: str
     widget_type: str
     title: str | None = None
-    props: Dict[str, Any] = Field(default_factory=dict)
+    props: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Widget props; empty when the role may not see dataset details.",
+    )
     dataset_id: int | None = None
     changed_on: datetime | None = None
 
 
+class SavedWidgetList(BaseModel):
+    """A page of saved widgets."""
+
+    widgets: list[SavedWidgetInfo] = Field(default_factory=list)
+    count: int = Field(0, description="Saved widgets on this page.")
+    total_count: int = Field(0, description="Saved widgets the caller can list.")
+    page: int = 1
+    page_size: int = DEFAULT_SAVED_WIDGET_PAGE_SIZE
+
+
+class WidgetDataResponse(BaseModel):
+    """The rows a widget's query returned."""
+
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    row_count: int = Field(0, description="Number of rows returned.")
+
+
 class WidgetToolError(BaseModel):
+    """Structured failure of a widget tool."""
+
     error: str = Field(..., description="Error message")
     error_type: str = Field(
         ...,
-        description="NotFound, Forbidden, ValidationError, or UnexpectedError",
+        description=(
+            "FeatureDisabled, NotFound, Forbidden, ValidationError, "
+            "DataModelMetadataRestricted, CommandError or UnexpectedError"
+        ),
     )
     errors: Any = Field(
         default=None, description="Field-level validation errors, when present."
     )
     timestamp: datetime | None = None
 
-    @field_validator("error")
-    @classmethod
-    def sanitize_error_for_llm_context(cls, value: str) -> str:
-        return sanitize_for_llm_context(value, field_path=("error",))
-
     @classmethod
     def create(
         cls, error: str, error_type: str, errors: Any = None
     ) -> "WidgetToolError":
+        """Build an error stamped with the current time."""
         return cls(
             error=error,
             error_type=error_type,

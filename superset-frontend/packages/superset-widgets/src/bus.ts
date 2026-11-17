@@ -22,12 +22,36 @@ import type { WidgetBus, WidgetEvent } from './types';
 const valueKey = (sourceId: string, eventType: string): string =>
   JSON.stringify([sourceId, eventType]);
 
+/**
+ * One listener failing must not keep the others from hearing an event, nor
+ * leave the emitting widget with an exception from code it does not own.
+ */
+function callSafely(callback: () => void): void {
+  try {
+    callback();
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[superset-widgets] a bus listener threw', error);
+  }
+}
+
+/**
+ * A bus of its own: every value, source and listener lives in this closure, so
+ * two buses on one page share nothing. A provider creates one per instance.
+ */
 export function createWidgetBus(): WidgetBus {
   const values = new Map<string, unknown>();
   const sources = new Map<string, Set<string>>();
   const listeners = new Map<string, Set<(event: WidgetEvent) => void>>();
   const subscribers = new Set<() => void>();
   let revision = 0;
+  let allocated = 0;
+
+  const tick = () => {
+    revision += 1;
+    // Copied first: a subscriber may unsubscribe (or subscribe) while called.
+    [...subscribers].forEach(subscriber => callSafely(subscriber));
+  };
 
   return {
     emit(sourceId, eventType, payload) {
@@ -38,13 +62,25 @@ export function createWidgetBus(): WidgetBus {
         sources.set(eventType, emitted);
       }
       emitted.add(sourceId);
-      revision += 1;
-      listeners
-        .get(eventType)
-        ?.forEach(listener =>
-          listener({ nodeId: sourceId, eventType, payload }),
-        );
-      subscribers.forEach(subscriber => subscriber());
+      const event: WidgetEvent = { nodeId: sourceId, eventType, payload };
+      [...(listeners.get(eventType) ?? [])].forEach(listener =>
+        callSafely(() => listener(event)),
+      );
+      tick();
+    },
+    forget(sourceId) {
+      let changed = false;
+      sources.forEach((emitted, eventType) => {
+        if (!emitted.delete(sourceId)) return;
+        values.delete(valueKey(sourceId, eventType));
+        if (emitted.size === 0) sources.delete(eventType);
+        changed = true;
+      });
+      if (changed) tick();
+    },
+    createSourceId() {
+      allocated += 1;
+      return `widget-${allocated}`;
     },
     on(eventType, listener) {
       let registered = listeners.get(eventType);
@@ -55,7 +91,9 @@ export function createWidgetBus(): WidgetBus {
       registered.add(listener);
       return {
         dispose: () => {
-          listeners.get(eventType)?.delete(listener);
+          const remaining = listeners.get(eventType);
+          remaining?.delete(listener);
+          if (remaining?.size === 0) listeners.delete(eventType);
         },
       };
     },

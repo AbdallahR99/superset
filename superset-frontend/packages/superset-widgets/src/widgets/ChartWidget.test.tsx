@@ -109,6 +109,7 @@ test('the query goes through the data client as an inline widget, or by saved id
     instanceId: INSTANCE,
     widget: { type: 'echarts', props },
     filters: [],
+    signal: expect.any(AbortSignal),
   });
   unmount();
 
@@ -118,6 +119,7 @@ test('the query goes through the data client as an inline widget, or by saved id
     instanceId: INSTANCE,
     widget: { id: 'saved-uuid', type: 'echarts', props },
     filters: [],
+    signal: expect.any(AbortSignal),
   });
 });
 

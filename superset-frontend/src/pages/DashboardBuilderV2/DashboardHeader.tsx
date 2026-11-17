@@ -19,14 +19,16 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { useSelector } from 'react-redux';
-import { useHistory } from 'react-router-dom';
 import { t } from '@apache-superset/core/translation';
 import { css, styled } from '@apache-superset/core/theme';
+import { FeatureFlag, isFeatureEnabled } from '@superset-ui/core';
+import { extendedDayjs } from '@superset-ui/core/utils/dates';
 import {
   Button,
   Divider,
   Input,
   PublishedLabel,
+  Typography,
 } from '@superset-ui/core/components';
 import MetadataBar, {
   MetadataType,
@@ -34,10 +36,11 @@ import MetadataBar, {
 import { Icons } from '@superset-ui/core/components/Icons';
 import type { BootstrapUser } from 'src/types/bootstrapTypes';
 import { provider, useDashboardRevision } from 'src/core/dashboard/store';
-import { saveDashboardV2 } from 'src/core/dashboard/persistence';
-import { useToasts } from 'src/components/MessageToasts/withToasts';
-import DashboardEmbedModal from 'src/dashboard/components/EmbeddedModal';
+import { useDashboardSession } from 'src/core/dashboard/session';
+import ConflictDialog from './ConflictDialog';
+import EmbedDashboardModal from './EmbedDashboardModal';
 import Inert from './InertControl';
+import { useSaveDashboard } from './useSaveDashboard';
 
 /**
  * Who is making this dashboard, and when it was last written down.
@@ -47,12 +50,12 @@ import Inert from './InertControl';
  * uses — so a dashboard being built and one being read state them in the
  * same shape, with the same icons, in the same place.
  *
- * Only one of them can be true here. A dashboard being created is being
- * created by whoever is looking at it, so the creator is read from the
- * session rather than invented. There is no row behind this page and nothing
- * has ever been written, so there is no modified time to humanize — and
- * "a day ago" beside a Save button that is disabled for having nothing to
- * save would be the only thing on this bar stating a fact that is not one.
+ * A dashboard being created is being created by whoever is looking at it,
+ * so the author is read from the signed-in user rather than invented. When
+ * it was last written is stated only once there is a row behind the page
+ * that says so: until the first save there is no modified time to humanize,
+ * and "a day ago" on a dashboard nothing has ever written would be the only
+ * thing on this bar stating a fact that is not one.
  */
 /**
  * The signed-in person's name.
@@ -69,12 +72,28 @@ const nameOf = (user: BootstrapUser): string =>
   user?.username ||
   '';
 
-const Metadata = (): ReactElement => {
+/** When the row was last written, in words; `undefined` when it cannot be read as a time. */
+const humanize = (changedOn: string | undefined): string | undefined => {
+  if (!changedOn) return undefined;
+  const when = extendedDayjs(changedOn);
+  return when.isValid() ? when.fromNow() : undefined;
+};
+
+const Metadata = ({
+  saved,
+  changedOn,
+}: {
+  /** Whether there is a saved row behind the page at all. */
+  saved: boolean;
+  changedOn: string | undefined;
+}): ReactElement => {
   const user = useSelector<{ user?: BootstrapUser }, BootstrapUser>(
     state => state.user,
   );
   const author = nameOf(user) || t('Not available');
-  const unsaved = t('Not saved yet');
+  const unsaved = saved
+    ? (humanize(changedOn) ?? t('Saved'))
+    : t('Not saved yet');
 
   return (
     <span data-test="header-metadata">
@@ -226,40 +245,21 @@ const Actions = styled.span`
  * the root's own properties now, where a canvas is selected and arranged in
  * one place.
  */
-export default function DashboardHeader({
-  dashboardId,
-}: {
-  /** The saved dashboard behind this page; undefined until first saved. */
-  dashboardId?: number;
-}): ReactElement {
+export default function DashboardHeader(): ReactElement {
   useDashboardRevision();
   const root = provider.getRoot();
-  const history = useHistory();
-  const { addDangerToast, addSuccessToast } = useToasts();
-  const [saving, setSaving] = useState(false);
+  // Which dashboard this is, whether it is loaded, and whether a save is
+  // running are the session's to say (`src/core/dashboard/session`). Nothing
+  // about them is kept here, so this bar cannot disagree with the tree about
+  // which dashboard a save would write to.
+  const session = useDashboardSession();
+  const save = useSaveDashboard();
   const [showEmbed, setShowEmbed] = useState(false);
-
-  const save = () => {
-    const title = typeof root.props?.title === 'string' ? root.props.title : '';
-    setSaving(true);
-    saveDashboardV2({
-      id: dashboardId,
-      title: title || t('Untitled dashboard'),
-      nodes: provider.getDocument(),
-    })
-      .then(saved => {
-        // The tree is kept rather than reloaded from the response, so a
-        // viewer's live selections survive the save.
-        addSuccessToast(t('Dashboard saved'));
-        if (dashboardId === undefined) {
-          history?.push(`/dashboard/v2/${saved.id}/`);
-        }
-      })
-      .catch(() =>
-        addDangerToast(t('Sorry, there was an error saving this dashboard')),
-      )
-      .finally(() => setSaving(false));
-  };
+  const ready = session.status === 'ready';
+  // Embedding hands data to another site through guest tokens; where the
+  // deployment has not turned that on there is nothing to offer, and an
+  // action that could only lead to a refusal is left off the bar.
+  const canEmbed = isFeatureEnabled(FeatureFlag.EmbeddedSuperset);
 
   return (
     <Bar data-test="dashboard-header">
@@ -285,7 +285,17 @@ export default function DashboardHeader({
       {/* Beside the status rather than opposite it: whether a dashboard is a
           draft, whose it is, and when it was last written are one answer to
           one question — what state is this in — and they are read together. */}
-      <Metadata />
+      <Metadata
+        saved={session.dashboardId !== undefined}
+        changedOn={session.changedOn}
+      />
+      {/* Said only while it is true, so its absence means the server has
+          what is on screen. */}
+      {session.dirty && (
+        <Typography.Text type="secondary" data-test="header-unsaved">
+          {t('Unsaved changes')}
+        </Typography.Text>
+      )}
 
       <Actions>
         {/* Icons, not words, because these two are reached by muscle memory
@@ -302,15 +312,17 @@ export default function DashboardHeader({
             the four of them read as one run of controls. The rule is what
             says where one pair stops and the other starts. */}
         <Divider type="vertical" />
-        <Button
-          buttonStyle="secondary"
-          buttonSize="small"
-          disabled={dashboardId === undefined}
-          onClick={() => setShowEmbed(true)}
-          data-test="header-embed"
-        >
-          {t('Embed')}
-        </Button>
+        {canEmbed && (
+          <Button
+            buttonStyle="secondary"
+            buttonSize="small"
+            disabled={!ready}
+            onClick={() => setShowEmbed(true)}
+            data-test="header-embed"
+          >
+            {t('Embed')}
+          </Button>
+        )}
         {/* Saving commits a version; History is the versions already
             committed. One concern, read in one place — so the record sits
             immediately before the button that produces what it lists, rather
@@ -321,19 +333,23 @@ export default function DashboardHeader({
         <Button
           buttonStyle="primary"
           buttonSize="small"
-          loading={saving}
+          // A tree that is still loading, or that failed to load, is not the
+          // dashboard the route names, and saving it would write a blank
+          // over the one that is.
+          disabled={!ready}
+          loading={session.saving}
           onClick={save}
           data-test="header-save"
         >
           {t('Save')}
         </Button>
-        {dashboardId !== undefined && (
-          <DashboardEmbedModal
+        {canEmbed && (
+          <EmbedDashboardModal
             show={showEmbed}
             onHide={() => setShowEmbed(false)}
-            dashboardId={String(dashboardId)}
           />
         )}
+        <ConflictDialog />
       </Actions>
     </Bar>
   );

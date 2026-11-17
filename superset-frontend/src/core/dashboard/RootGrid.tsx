@@ -20,11 +20,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import 'gridstack/dist/gridstack.min.css';
 import type { dashboard as dashboardApi } from '@apache-superset/core';
-import { css, styled, useTheme } from '@apache-superset/core/theme';
+import { css, styled, useIsRtl, useTheme } from '@apache-superset/core/theme';
 import { useDashboardStore, useDashboardRevision } from './store';
 import {
   cellAtPoint,
+  inlineOffsetPx,
   pixelRectForCell,
+  positionStyleForRect,
   resolveCellGeometry,
   resolveGridMetrics,
 } from './layoutStyle';
@@ -284,6 +286,11 @@ export default function RootGrid({ nodeId }: { nodeId: string }) {
   const store = useDashboardStore();
   useDashboardRevision(store);
   const theme = useTheme();
+  // Column 0 is at the inline-start edge: the right one when the page reads
+  // right-to-left. The grid engine is told so (`useGridStack`), and every
+  // conversion between a pointer and a column below goes through
+  // `inlineOffsetPx` with the same answer.
+  const isRtl = useIsRtl();
   const node = store.getNode(nodeId);
   // Ahead of the early return below, and computed off `node?.layout` rather
   // than `node.layout`: every hook this component calls (`useGridStack`
@@ -373,6 +380,7 @@ export default function RootGrid({ nodeId }: { nodeId: string }) {
   const { containerRef, registerItem, unregisterItem } = useGridStack({
     metrics,
     packed: previewPacked,
+    rtl: isRtl,
     cancelSelector: cancelSelectorFor(nodeId),
     onGestureEnd: (items, gesture) =>
       handleGestureEndRef.current(items, gesture),
@@ -402,7 +410,7 @@ export default function RootGrid({ nodeId }: { nodeId: string }) {
   ): DropPlacement => {
     const cellGeometry = resolveCellGeometry(metrics, containerRect.width);
     const { col, row } = cellAtPoint(
-      clientX - containerRect.left,
+      inlineOffsetPx(clientX, containerRect, isRtl),
       clientY - containerRect.top,
       cellGeometry,
     );
@@ -734,12 +742,7 @@ export default function RootGrid({ nodeId }: { nodeId: string }) {
             return (
               <DropGhost
                 data-test="grid-drop-ghost"
-                style={{
-                  left: pixelRect.left,
-                  top: pixelRect.top,
-                  width: pixelRect.width,
-                  height: pixelRect.height,
-                }}
+                style={positionStyleForRect(pixelRect, isRtl)}
               />
             );
           })()}

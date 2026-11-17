@@ -90,7 +90,7 @@ export default function CollapsibleWidget({
         containerId={nodeId}
         accepts={children.length === 0}
         emptyTitle={t('Nothing here yet')}
-        emptyDescription={t('Ask the assistant to add something here.')}
+        emptyDescription={t('Drag a widget here from the panel.')}
         dataTest={`collapsible-content-${nodeId}`}
       />
     </Root>

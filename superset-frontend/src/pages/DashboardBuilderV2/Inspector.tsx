@@ -364,7 +364,7 @@ const PropsJsonEditor = ({
           aria-label={t('Copy properties as JSON')}
           tooltip={copied ? t('Copied') : t('Copy properties as JSON')}
           placement="bottom"
-          style={{ marginLeft: 'auto' }}
+          style={{ marginInlineStart: 'auto' }}
           onClick={() => {
             copyTextToClipboard(() => Promise.resolve(draft));
             setCopied(true);
@@ -457,7 +457,11 @@ const PropsEditor = ({
   } else if (schemaControlledTypes.has(widgetType)) {
     formTab = (
       <Suspense fallback={<Loading position="inline-centered" size="s" />}>
-        <SchemaControlPanel nodeId={nodeId} />
+        {/* Keyed by node: the panel holds a fetched schema, a form draft and a
+            pending debounced refetch, all of them about one widget. Reused
+            for the next selection, a schema fetched for the previous widget
+            could land in the panel showing this one. */}
+        <SchemaControlPanel key={nodeId} nodeId={nodeId} />
       </Suspense>
     );
   } else {

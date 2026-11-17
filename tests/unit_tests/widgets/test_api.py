@@ -25,7 +25,14 @@ can drift apart."""
 
 from __future__ import annotations
 
+import pytest
+
 from superset.utils import json
+
+# The widget APIs answer 404 unless the Dashboard V2 feature is switched on.
+pytestmark = pytest.mark.parametrize(
+    "app", [{"FEATURE_FLAGS": {"DASHBOARD_V2": True}}], indirect=True
+)
 
 
 def test_validate_accepts_valid_control_values(client, full_api_access) -> None:

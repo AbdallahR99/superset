@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { createContext } from 'react';
 import type { WidgetComponent } from './types';
 import AgGridTableWidget from './widgets/AgGridTableWidget';
 import ChartWidget from './widgets/ChartWidget';
@@ -34,9 +35,27 @@ export const builtInWidgetComponents: Readonly<
   markdown: MarkdownWidget,
 };
 
+/**
+ * Widget types one provider adds for the widgets under it, by `widget_type`.
+ * Looked up before the page-wide registry below, so two providers on a page
+ * can each bring their own types without either seeing the other's.
+ */
+export const WidgetComponentsContext = createContext<
+  Readonly<Record<string, WidgetComponent>> | undefined
+>(undefined);
+
+/**
+ * Page-wide registrations: component code only, the same for every provider
+ * on the page, in the way the built-in types above are. Nothing that belongs
+ * to a provider — its extensions' widgets, its client, its bus — is kept here.
+ */
 const registered = new Map<string, WidgetComponent>();
 
-/** Adds (or overrides) the component rendered for `type`, e.g. an extension's widget. */
+/**
+ * Adds (or overrides) the component rendered for `type` everywhere on the
+ * page. To add a type for one provider only, pass it as that provider's
+ * `widgets`.
+ */
 export function registerWidgetComponent(
   type: string,
   component: WidgetComponent,

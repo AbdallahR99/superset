@@ -16,31 +16,48 @@
 # under the License.
 """MCP tool: get_saved_widget"""
 
-from __future__ import annotations
+import logging
 
+from fastmcp import Context
 from superset_core.mcp.decorators import tool, ToolAnnotations
 
-from superset.mcp_service.widgets.data_utils import widget_tool_error
+from superset.extensions import event_logger
+from superset.mcp_service.privacy import user_can_view_data_model_metadata
 from superset.mcp_service.widgets.schemas import (
     GetSavedWidgetRequest,
-    SavedWidgetResponse,
+    SavedWidgetInfo,
     WidgetToolError,
 )
+from superset.mcp_service.widgets.utils import (
+    serialize_saved_widget,
+    widget_tool_error,
+    widgets_disabled_error,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _get_saved_widget_impl(
     request: GetSavedWidgetRequest,
-) -> SavedWidgetResponse | WidgetToolError:
+) -> SavedWidgetInfo | WidgetToolError:
+    """Pure logic: one saved widget, read through ``GetSavedWidgetCommand``.
+
+    The command is the one behind ``GET /api/v1/widget/<uuid>``, so the same
+    read rule applies.
+    """
+    if (disabled := widgets_disabled_error()) is not None:
+        return disabled
     # pylint: disable=import-outside-toplevel
     from superset.commands.widget.saved import GetSavedWidgetCommand
-    from superset.commands.widget.utils import serialize_saved_widget
 
     try:
         widget = GetSavedWidgetCommand(request.id).run()
     except Exception as ex:  # pylint: disable=broad-except
         return widget_tool_error(ex)
 
-    return SavedWidgetResponse(**serialize_saved_widget(widget))
+    return serialize_saved_widget(
+        widget, include_data_model_metadata=user_can_view_data_model_metadata()
+    )
 
 
 @tool(
@@ -50,20 +67,26 @@ def _get_saved_widget_impl(
         title="Get saved widget",
         readOnlyHint=True,
         destructiveHint=False,
+        openWorldHint=False,
     ),
 )
-def get_saved_widget(
-    request: GetSavedWidgetRequest,
-) -> SavedWidgetResponse | WidgetToolError:
-    """Get a saved widget's definition: its type, props and dataset.
+async def get_saved_widget(
+    request: GetSavedWidgetRequest, ctx: Context
+) -> SavedWidgetInfo | WidgetToolError:
+    """Get a saved widget's definition: its type, title, props and dataset.
 
     Example:
     ```json
     {"id": "cedf0501-fa36-4e19-9f84-e9da6d657dcc"}
     ```
 
-    Returns ``{"uuid", "widget_type", "title", "props", "dataset_id",
-    "changed_on"}``, or an error with ``error_type`` NotFound or Forbidden.
+    Returns ``uuid``, ``widget_type``, ``title``, ``props``, ``dataset_id``
+    and ``changed_on``, or an error with ``error_type`` NotFound or Forbidden.
     Use ``get_widget_data`` with the same ``id`` to fetch its rows.
     """
-    return _get_saved_widget_impl(request)
+    await ctx.info("Retrieving saved widget: id=%s" % (request.id,))
+    with event_logger.log_context(action="mcp.get_saved_widget"):
+        result = _get_saved_widget_impl(request)
+    if isinstance(result, WidgetToolError):
+        await ctx.warning("Saved widget lookup failed: %s" % (result.error_type,))
+    return result

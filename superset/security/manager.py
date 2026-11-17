@@ -6548,11 +6548,11 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
             EmbeddedDashboardNotFoundError,
         )
         from superset.daos.dashboard import EmbeddedDashboardDAO
-        from superset.daos.saved_widget import SavedWidgetDAO
         from superset.models.dashboard import Dashboard
 
         for resource in resources:
-            if resource["type"] == GuestTokenResourceType.DASHBOARD.value:
+            resource_type = resource.get("type")
+            if resource_type == GuestTokenResourceType.DASHBOARD.value:
                 # TODO (embedded): remove this check once uuids are rolled out
                 dashboard = Dashboard.get(str(resource["id"]))
                 if not dashboard:
@@ -6564,9 +6564,6 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                     # A raw dashboard id must still reference an embedded dashboard;
                     # otherwise a guest token could be scoped to a non-embedded one.
                     raise EmbeddedDashboardNotFoundError()
-            elif resource["type"] == GuestTokenResourceType.WIDGET.value:
-                if SavedWidgetDAO.find_by_uuid(str(resource["id"])) is None:
-                    raise ValidationError(f"Saved widget {resource['id']} not found.")
 
                 # The caller minting the token must themselves be entitled to
                 # the dashboard being scoped. `grant_guest_token` is a
@@ -6580,6 +6577,87 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                     self._raise_for_guest_token_datasource_access(dashboard, datasets)
                 except SupersetSecurityException as ex:
                     raise EmbeddedDashboardAccessDeniedError() from ex
+            elif resource_type == GuestTokenResourceType.WIDGET.value:
+                self._raise_for_guest_token_widget_access(resource.get("id"))
+            else:
+                # Fail closed: a resource type this method does not know how to
+                # authorize must never end up in a signed token.
+                raise ValidationError(
+                    f"Unknown guest token resource type {resource_type!r}."
+                )
+
+        self._raise_for_guest_token_inline_datasets(datasets)
+
+    def _raise_for_guest_token_widget_access(self, widget_ref: Any) -> None:
+        """
+        Require a ``widget`` resource to name an existing saved widget whose
+        dataset the minting principal can read.
+
+        A widget-scoped guest token reads the widget's dataset on the strength
+        of the uuid alone, so the same reasoning as for dashboards applies: a
+        principal holding only the coarse ``grant_guest_token`` permission must
+        not be able to hand a guest data it cannot read itself.
+        """
+        # pylint: disable=import-outside-toplevel
+        from marshmallow import ValidationError
+
+        from superset.commands.widget.exceptions import (
+            SavedWidgetGuestTokenDeniedError,
+        )
+        from superset.daos.datasource import DatasourceDAO
+        from superset.daos.exceptions import DatasourceNotFound
+        from superset.daos.saved_widget import SavedWidgetDAO
+        from superset.widgets.data import props_dataset_id
+
+        widget = SavedWidgetDAO.find_by_uuid(str(widget_ref))
+        if widget is None:
+            raise ValidationError(f"Saved widget {widget_ref} not found.")
+        dataset_id = props_dataset_id(widget.props_dict)
+        if dataset_id is None:
+            return  # nothing to read: the token grants no data for this widget
+        try:
+            datasource = DatasourceDAO.get_datasource(DatasourceType.TABLE, dataset_id)
+        except DatasourceNotFound as ex:
+            raise ValidationError(
+                f"Saved widget {widget_ref} reads a dataset that does not exist."
+            ) from ex
+        if not self.can_access_datasource(datasource):
+            raise SavedWidgetGuestTokenDeniedError()
+
+    def _raise_for_guest_token_inline_datasets(
+        self, datasets: Optional[list[int]]
+    ) -> None:
+        """
+        Require the minting principal to be entitled to every dataset in the
+        token's ``datasets`` claim while the widget APIs are enabled.
+
+        For dashboard resources the claim only narrows what the token reads.
+        With ``DASHBOARD_V2`` on it also lets the guest send inline, SQL-free
+        widget definitions against the listed datasets, which makes it a grant
+        the minter has to hold. With the flag off no route consumes the claim
+        as a grant, so the established behaviour is unchanged.
+        """
+        # pylint: disable=import-outside-toplevel
+        from marshmallow import ValidationError
+
+        from superset import is_feature_enabled
+        from superset.commands.widget.exceptions import (
+            SavedWidgetGuestTokenDeniedError,
+        )
+        from superset.daos.datasource import DatasourceDAO
+        from superset.daos.exceptions import DatasourceNotFound
+
+        if not datasets or not is_feature_enabled("DASHBOARD_V2"):
+            return
+        for dataset_id in datasets:
+            try:
+                datasource = DatasourceDAO.get_datasource(
+                    DatasourceType.TABLE, dataset_id
+                )
+            except DatasourceNotFound as ex:
+                raise ValidationError(f"Dataset {dataset_id} not found.") from ex
+            if not self.can_access_datasource(datasource):
+                raise SavedWidgetGuestTokenDeniedError()
 
     def _raise_for_guest_token_datasource_access(
         self, dashboard: "Dashboard", datasets: Optional[list[int]]
@@ -7047,12 +7125,21 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         in the token's ``datasets`` claim (no claim means no inline specs).
         """
         user = self.get_current_guest_user_if_guest()
-        if not user or context.dataset_id is None:
+        dataset_id = getattr(context, "dataset_id", None)
+        if not user or isinstance(dataset_id, bool) or not isinstance(dataset_id, int):
             return False
-        if context.saved_widget_uuid is not None:
-            return self.guest_token_names_widget(context.saved_widget_uuid)
+        saved_widget_uuid = getattr(context, "saved_widget_uuid", None)
+        if saved_widget_uuid is not None:
+            return self.guest_token_names_widget(saved_widget_uuid)
         datasets = user.guest_token.get("datasets")
-        return isinstance(datasets, list) and context.dataset_id in datasets
+        return (
+            isinstance(datasets, list)
+            and all(
+                isinstance(item, int) and not isinstance(item, bool)
+                for item in datasets
+            )
+            and dataset_id in datasets
+        )
 
     def guest_widget_grants_datasource(
         self, context: Any, datasource: "BaseDatasource | Explorable"

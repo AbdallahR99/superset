@@ -16,14 +16,21 @@
 # under the License.
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
 
 from superset.dashboard_v2.document import (
+    document_revision,
+    DocumentLimits,
     DocumentValidationError,
     load_stored_document,
     normalize_document,
+    parse_strict_json,
+    validate_stored_document,
+    with_revision,
+    without_revision,
     write_stored_document,
 )
 from superset.utils import json
@@ -68,11 +75,321 @@ def test_normalize_document_keeps_props_inline_and_drops_unknown_keys() -> None:
         "props": {"dataBinding": {"datasetId": 7, "metrics": ["count"]}},
     }
     assert stored["nodes"]["tabs"]["children"] == ["node_1", "node_2"]
-    assert [(leaf.node_id, leaf.widget_type) for leaf in leaves] == [
-        ("node_1", "echarts"),
-        ("node_2", "markdown"),
+    assert "revision" not in stored
+    # Every node but the root grid is handed to its widget type's validation,
+    # containers included.
+    assert [(leaf.node_id, leaf.widget_type, leaf.is_container) for leaf in leaves] == [
+        ("tabs", "tabs", True),
+        ("node_1", "echarts", False),
+        ("node_2", "markdown", False),
     ]
-    assert leaves[1].props == {"content": "# hi"}
+    assert leaves[2].props == {"content": "# hi"}
+
+
+def _grid(**nodes: Any) -> dict[str, Any]:
+    return {"nodes": nodes}
+
+
+def _chain(length: int) -> dict[str, Any]:
+    """A root with ``length`` containers nested one inside the other."""
+    nodes: dict[str, Any] = {"root": {"type": "grid", "children": ["n1"]}}
+    for index in range(1, length + 1):
+        children = [f"n{index + 1}"] if index < length else []
+        nodes[f"n{index}"] = {"type": "grid", "children": children}
+    return {"nodes": nodes}
+
+
+@pytest.mark.parametrize(
+    "document, message",
+    [
+        # A node that contains itself.
+        (_grid(root={"type": "grid", "children": ["root"]}), "own ancestor"),
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "grid", "children": ["a"]},
+            ),
+            "own ancestor",
+        ),
+        # A cycle through two containers.
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "grid", "children": ["b"]},
+                b={"type": "grid", "children": ["a"]},
+            ),
+            "own ancestor",
+        ),
+        # The same node under two parents.
+        (
+            _grid(
+                root={"type": "grid", "children": ["a", "b"]},
+                a={"type": "grid", "children": ["leaf"]},
+                b={"type": "grid", "children": ["leaf"]},
+                leaf={"type": "markdown"},
+            ),
+            "more than one parent",
+        ),
+        # The same id twice in one children array.
+        (
+            _grid(
+                root={"type": "grid", "children": ["a", "a"]},
+                a={"type": "markdown"},
+            ),
+            "same child more than once",
+        ),
+        # A node nothing points at, and a cycle detached from the root.
+        (
+            _grid(root={"type": "grid", "children": []}, orphan={"type": "markdown"}),
+            "not reachable from the root",
+        ),
+        (
+            _grid(
+                root={"type": "grid", "children": []},
+                a={"type": "grid", "children": ["b"]},
+                b={"type": "grid", "children": ["a"]},
+            ),
+            "not reachable from the root",
+        ),
+        # Children that are not node ids (unhashable values included).
+        (
+            _grid(root={"type": "grid", "children": [{"id": "a"}]}),
+            "array of node ids",
+        ),
+        (_grid(root={"type": "grid", "children": [["a"]]}), "array of node ids"),
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "markdown", "children": "root"},
+            ),
+            "array of node ids",
+        ),
+        # Ids outside the allowed alphabet or length.
+        (
+            _grid(
+                **{
+                    "root": {"type": "grid", "children": ["a b"]},
+                    "a b": {"type": "markdown"},
+                }
+            ),
+            "node id",
+        ),
+        (
+            _grid(
+                **{
+                    "root": {"type": "grid", "children": ["x" * 65]},
+                    "x" * 65: {"type": "markdown"},
+                }
+            ),
+            "node id",
+        ),
+        # A grid that is not a container, an unsupported version.
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "grid"},
+            ),
+            "must have children",
+        ),
+        (
+            {"version": 2, "nodes": {"root": {"type": "grid", "children": []}}},
+            "version",
+        ),
+        # Values JSON cannot represent.
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "markdown", "props": {"value": float("nan")}},
+            ),
+            "non-finite",
+        ),
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "markdown", "style": {"width": float("inf")}},
+            ),
+            "non-finite",
+        ),
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "markdown", "props": {"value": {1, 2}}},
+            ),
+            "non-JSON value of type set",
+        ),
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "markdown", "layout": {"value": b"bytes"}},
+            ),
+            "non-JSON value of type bytes",
+        ),
+        (
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "markdown", "props": {1: "integer key"}},
+            ),
+            "non-string object key",
+        ),
+    ],
+)
+def test_normalize_document_rejects_invalid_trees_and_values(
+    document: Any, message: str
+) -> None:
+    with pytest.raises(DocumentValidationError, match=message):
+        normalize_document(document)
+
+
+def test_normalize_document_enforces_depth_limit() -> None:
+    limits = DocumentLimits(max_depth=3)
+
+    normalize_document(_chain(3), limits=limits)
+    with pytest.raises(DocumentValidationError, match="deeper than 3 levels"):
+        normalize_document(_chain(4), limits=limits)
+
+
+def test_normalize_document_enforces_node_limit() -> None:
+    def flat(count: int) -> dict[str, Any]:
+        names = [f"n{index}" for index in range(count)]
+        return _grid(
+            root={"type": "grid", "children": names},
+            **{name: {"type": "markdown"} for name in names},
+        )
+
+    limits = DocumentLimits(max_nodes=5)
+
+    normalize_document(flat(4), limits=limits)
+    with pytest.raises(DocumentValidationError, match="6 nodes; the limit is 5"):
+        normalize_document(flat(5), limits=limits)
+
+
+def test_normalize_document_enforces_size_limit() -> None:
+    document = _grid(
+        root={"type": "grid", "children": ["a"]},
+        a={"type": "markdown", "props": {"content": "x" * 2000}},
+    )
+
+    normalize_document(document, limits=DocumentLimits(max_bytes=4000))
+    with pytest.raises(DocumentValidationError, match="the limit is 1000"):
+        normalize_document(document, limits=DocumentLimits(max_bytes=1000))
+
+
+def test_normalize_document_enforces_value_depth_limit() -> None:
+    def nested(levels: int) -> dict[str, Any]:
+        value: Any = "leaf"
+        for _ in range(levels):
+            value = {"next": value}
+        return _grid(
+            root={"type": "grid", "children": ["a"]},
+            a={"type": "markdown", "props": value},
+        )
+
+    limits = DocumentLimits(max_value_depth=4)
+
+    normalize_document(nested(4), limits=limits)
+    with pytest.raises(DocumentValidationError, match="deeper than 4 levels"):
+        normalize_document(nested(5), limits=limits)
+
+
+def test_normalize_document_survives_hostile_nesting_without_recursion() -> None:
+    """Neither a very long chain of containers nor a self-referential value
+    reaches the interpreter's recursion limit: both are refused by a bound."""
+    depth = sys.getrecursionlimit() * 5
+    unlimited = DocumentLimits(max_nodes=depth + 10, max_depth=depth + 10)
+
+    stored, _ = normalize_document(_chain(depth), limits=unlimited)
+    assert len(stored["nodes"]) == depth + 1
+
+    with pytest.raises(DocumentValidationError, match="deeper than 16 levels"):
+        normalize_document(_chain(depth), limits=DocumentLimits(max_nodes=depth + 10))
+
+    looped: dict[str, Any] = {}
+    looped["self"] = looped
+    with pytest.raises(DocumentValidationError, match="nested deeper"):
+        normalize_document(
+            _grid(
+                root={"type": "grid", "children": ["a"]},
+                a={"type": "markdown", "props": looped},
+            )
+        )
+
+
+def test_normalize_document_rejects_unknown_types_when_types_are_known() -> None:
+    document = _grid(
+        root={"type": "grid", "children": ["a", "box"]},
+        a={"type": "markdown"},
+        box={"type": "mystery-container", "children": []},
+    )
+
+    normalize_document(document, known_types={"markdown", "mystery-container"})
+    with pytest.raises(
+        DocumentValidationError, match="unknown type 'mystery-container'"
+    ):
+        normalize_document(document, known_types={"markdown"})
+
+
+@pytest.mark.parametrize(
+    "raw, message",
+    [
+        ('{"nodes": {"a": 1, "a": 2}}', "duplicate key 'a'"),
+        ('{"value": NaN}', "NaN is not a valid JSON value"),
+        ('{"value": -Infinity}', "-Infinity is not a valid JSON value"),
+        ("{not json", "not valid JSON"),
+        (b"\xff\xfe", "not valid JSON"),
+        ("[" * 200_000, "nested too deeply"),
+        ('{"a":' * 200_000, "nested too deeply"),
+    ],
+)
+def test_parse_strict_json_rejects(raw: bytes | str, message: str) -> None:
+    with pytest.raises(DocumentValidationError, match=message):
+        parse_strict_json(raw)
+
+
+def test_parse_strict_json_accepts_plain_json() -> None:
+    assert parse_strict_json(b'{"a": [1, 2.5, "x", null, true]}') == {
+        "a": [1, 2.5, "x", None, True]
+    }
+
+
+def test_revision_helpers() -> None:
+    stored, _ = normalize_document(_document())
+
+    assert document_revision(stored) == 0
+    stamped = with_revision(stored, 7)
+    assert document_revision(stamped) == 7
+    assert stamped["nodes"] is stored["nodes"]
+    assert without_revision(stamped) == stored
+    for junk in (True, -1, "3", 2.0, None):
+        assert document_revision({**stored, "revision": junk}) == 0
+
+
+def test_validate_stored_document() -> None:
+    stored, _ = normalize_document(_document())
+
+    validate_stored_document(None)
+    validate_stored_document(with_revision(stored, 3))
+    with pytest.raises(DocumentValidationError, match="revision"):
+        validate_stored_document({**stored, "revision": "3"})
+    with pytest.raises(DocumentValidationError, match="own ancestor"):
+        validate_stored_document(
+            _grid(root={"type": "grid", "children": ["root"]}),
+        )
+
+
+def test_dashboard_json_metadata_rejects_a_malformed_v2_document() -> None:
+    """A legacy dashboard update cannot smuggle in a cyclic document."""
+    from marshmallow import ValidationError
+
+    from superset.dashboards.schemas import validate_json_metadata
+
+    stored, _ = normalize_document(_document())
+    validate_json_metadata(json.dumps({"v2_document": with_revision(stored, 2)}))
+    with pytest.raises(ValidationError, match="own ancestor"):
+        validate_json_metadata(
+            json.dumps(
+                {"v2_document": _grid(root={"type": "grid", "children": ["root"]})}
+            )
+        )
 
 
 @pytest.mark.parametrize(

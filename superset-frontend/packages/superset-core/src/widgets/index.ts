@@ -30,8 +30,8 @@
  * runtime with it.
  *
  * The same contract holds wherever a widget is drawn — the Dashboard v2
- * builder, a host application embedding one, or a Claude artifact — so a
- * widget is written once and never learns which of them it is inside.
+ * builder or a host application embedding one — so a widget is written once
+ * and never learns which of them it is inside.
  */
 
 import type { ComponentType } from 'react';
@@ -75,6 +75,18 @@ export interface WidgetBus {
   /** Ticks on every emit. */
   subscribe(listener: () => void): () => void;
   getRevision(): number;
+  /**
+   * Drops everything `sourceId` has emitted, so a widget that left the page
+   * stops counting as a source. Optional: a host that derives its sources
+   * from a document it owns has nothing to forget.
+   */
+  forget?(sourceId: string): void;
+  /**
+   * A source id no other caller of this bus has been given. Hosts whose
+   * widgets may come from several React roots implement it, because ids
+   * generated per root repeat across roots.
+   */
+  createSourceId?(): string;
 }
 
 /**
@@ -85,7 +97,12 @@ export interface WidgetBus {
  * `@apache-superset/widgets` for the convention the built-in widgets share).
  */
 export type FilterOperator =
-  'EQUALS' | 'NOT_EQUALS' | 'IN' | 'NOT_IN' | 'RANGE' | 'TIME_RANGE';
+  | 'EQUALS'
+  | 'NOT_EQUALS'
+  | 'IN'
+  | 'NOT_IN'
+  | 'RANGE'
+  | 'TIME_RANGE';
 
 /**
  * A constraint to AND onto a widget's query. Mirrors the adhoc-filter shape
@@ -140,17 +157,32 @@ export interface SavedWidget {
  * without changing what it is allowed to read.
  */
 export interface WidgetDataClient {
-  fetchData(request: {
-    instanceId: string;
-    widget: WidgetRef;
-    filters: ResolvedFilter[];
-  }): Promise<QueryDataResult>;
+  fetchData(request: WidgetDataRequest): Promise<QueryDataResult>;
   /** Distinct selectable values, for a filter-like widget. */
-  fetchValues(request: {
-    instanceId: string;
-    widget: WidgetRef;
-  }): Promise<unknown[]>;
-  getSavedWidget?(id: string): Promise<SavedWidget>;
+  fetchValues(request: WidgetValuesRequest): Promise<unknown[]>;
+  getSavedWidget?(
+    id: string,
+    options?: WidgetRequestOptions,
+  ): Promise<SavedWidget>;
+}
+
+/** What every request a widget makes may carry. */
+export interface WidgetRequestOptions {
+  /**
+   * Aborted when the widget no longer wants the answer: its props or filters
+   * changed, or it unmounted. A client should stop the request; a caller must
+   * ignore whatever still arrives after aborting.
+   */
+  signal?: AbortSignal;
+}
+
+export interface WidgetValuesRequest extends WidgetRequestOptions {
+  instanceId: string;
+  widget: WidgetRef;
+}
+
+export interface WidgetDataRequest extends WidgetValuesRequest {
+  filters: ResolvedFilter[];
 }
 
 /** What every widget component is rendered with. */

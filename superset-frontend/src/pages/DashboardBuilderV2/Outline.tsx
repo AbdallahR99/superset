@@ -23,6 +23,7 @@ import { EmptyState } from '@superset-ui/core/components';
 import { views } from 'src/core/views';
 import { DASHBOARD_WIDGETS_LOCATION } from 'src/core/dashboard/resolveWidgetView';
 import { provider, useDashboardRevision } from 'src/core/dashboard/store';
+import { isUnrenderable } from 'src/core/dashboard/nodePath';
 
 /** How long a label may run before it is cut. */
 const LABEL_LIMIT = 40;
@@ -206,19 +207,30 @@ const Panel = styled.div`
   `}
 `;
 
+/**
+ * One node and, beneath it, the nodes it holds.
+ *
+ * `ancestors` is the row's own way down from the top of the tree. A row
+ * whose node is already on it, or that sits deeper than a document may nest,
+ * is not drawn: the store keeps its tree free of cycles, and this is what
+ * keeps the outline finite if a tree ever reaches it that is not.
+ */
 const Row = ({
   nodeId,
-  depth,
+  ancestors,
 }: {
   nodeId: string;
-  depth: number;
+  ancestors: readonly string[];
 }): ReactElement | null => {
   const node = provider.getNode(nodeId);
-  if (!node) {
+  if (!node || isUnrenderable(ancestors, nodeId)) {
     return null;
   }
+  // The root is on the path but is not a row, so a top-level row is at 0.
+  const depth = ancestors.length - 1;
   const selected = provider.getSelection() === nodeId;
   const children = node.children ?? [];
+  const path = [...ancestors, nodeId];
 
   return (
     <li role="none">
@@ -249,7 +261,7 @@ const Row = ({
           role="group"
         >
           {children.map(childId => (
-            <Row key={childId} nodeId={childId} depth={depth + 1} />
+            <Row key={childId} nodeId={childId} ancestors={path} />
           ))}
         </Branch>
       )}
@@ -293,7 +305,7 @@ export default function Outline(): ReactElement {
     <Panel>
       <List role="tree" aria-label={t('Dashboard outline')} data-test="outline">
         {children.map(childId => (
-          <Row key={childId} nodeId={childId} depth={0} />
+          <Row key={childId} nodeId={childId} ancestors={[root.id]} />
         ))}
       </List>
     </Panel>

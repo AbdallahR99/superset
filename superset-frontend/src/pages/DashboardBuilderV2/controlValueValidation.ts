@@ -113,11 +113,18 @@ export async function commitWidgetProps(
   delta: Record<string, unknown>,
   options?: { onBeforeCommit?: () => boolean | void },
 ): Promise<CommitPropsResult> {
-  const node = provider.getNode(nodeId);
-  const candidate = { ...node?.props, ...delta };
+  const snapshot = provider.getNode(nodeId)?.props ?? {};
+  const candidate = { ...snapshot, ...delta };
   const { errors, values } = await validateControlValues(widgetType, candidate);
   if (errors.length > 0) {
     return { ok: false, errors };
+  }
+  // The round-trip took time, and the node did not wait for it. If it was
+  // removed meanwhile there is nothing left to commit to, and that is not an
+  // error of the candidate's.
+  const current = provider.getNode(nodeId);
+  if (current === undefined) {
+    return { ok: false, errors: [] };
   }
   // The backend's own Pydantic-normalized candidate (coerced types,
   // alias-keyed) — not the raw one just sent for validation — so this
@@ -128,7 +135,19 @@ export async function commitWidgetProps(
   // recognize as the same value). Falls back to the raw candidate only if
   // the backend genuinely had nothing to normalize (`control_values` itself
   // was absent).
-  const normalized = values ?? candidate;
+  const normalized = { ...(values ?? candidate) };
+  // What was validated is the whole of the node's props as they stood before
+  // the round-trip, and writing all of that back would undo anything written
+  // to the node meanwhile by someone else: another control's own commit, or
+  // the id a widget is given when it is saved for embedding. A key this
+  // commit was not about, whose value changed while it was away, keeps the
+  // value it has.
+  const currentProps = current.props ?? {};
+  Object.keys(currentProps).forEach(key => {
+    if (!(key in delta) && currentProps[key] !== snapshot[key]) {
+      normalized[key] = currentProps[key];
+    }
+  });
   if (options?.onBeforeCommit?.() === false) {
     return { ok: false, errors: [] };
   }

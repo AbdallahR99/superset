@@ -108,9 +108,7 @@ export default function FilterBarWidget({
           size="small"
           image="empty.svg"
           title={t('No filters yet')}
-          description={t(
-            'Drag a Filter widget in from the Palette, or ask the assistant.',
-          )}
+          description={t('Drag a Filter widget in from the panel.')}
         />
       )}
       {childIds.map(childId => {
@@ -156,7 +154,7 @@ export default function FilterBarWidget({
           style={{
             display: 'flex',
             flexDirection: 'column',
-            marginLeft: horizontal ? 'auto' : undefined,
+            marginInlineStart: horizontal ? 'auto' : undefined,
           }}
         >
           {horizontal && (

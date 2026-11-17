@@ -406,28 +406,6 @@ WTF_CSRF_EXEMPT_LIST = [
     "flask_appbuilder.security.views.acs",
 ]
 
-# ---------------------------------------------------
-# MCP OAuth authorization server
-# ---------------------------------------------------
-# Lets MCP clients such as claude.ai custom connectors obtain per-user access
-# tokens (authorization code + PKCE, dynamic client registration). The MCP
-# service must run with MCP_OAUTH_ENABLED as well to act as the resource server.
-MCP_OAUTH_ENABLED = False
-# Public base URL of this Superset instance, e.g. "https://superset.example.com".
-MCP_OAUTH_ISSUER: str | None = None
-# Resource indicators tokens may be issued for, e.g.
-# ["https://superset.example.com/mcp"]. The first one is the default.
-MCP_OAUTH_RESOURCES: list[str] = []
-# PEM-encoded RSA private key used to sign RS256 access tokens.
-MCP_OAUTH_PRIVATE_KEY: str | None = None
-MCP_OAUTH_SCOPES: list[str] = ["mcp"]
-MCP_OAUTH_ACCESS_TOKEN_TTL = 60 * 60
-MCP_OAUTH_REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60
-MCP_OAUTH_AUTHORIZATION_CODE_TTL = 60
-# Exact redirect URIs dynamic registration accepts; None accepts any https URI
-# (and http on localhost), e.g. ["https://claude.ai/api/mcp/auth_callback"].
-MCP_OAUTH_ALLOWED_REDIRECT_URIS: list[str] | None = None
-
 # Whether to run the web server in debug mode or not
 DEBUG = utils.parse_boolean_string(os.environ.get("FLASK_DEBUG"))
 FLASK_USE_RELOAD = True
@@ -778,6 +756,11 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Experimental PyArrow engine for CSV parsing (may have issues with dates/nulls)
     # @lifecycle: development
     "CSV_UPLOAD_PYARROW_ENGINE": False,
+    # Enables the Dashboard V2 builder: its pages, menu entry and the
+    # dashboard_v2, widgets and widget REST APIs. When disabled those routes
+    # respond with 404 and the frontend hides every entry point.
+    # @lifecycle: development
+    "DASHBOARD_V2": False,
     # Allow metrics and columns to be grouped into folders in the chart builder
     # @lifecycle: development
     "DATASET_FOLDERS": False,

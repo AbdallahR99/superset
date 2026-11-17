@@ -19,6 +19,7 @@
 import { buildQueryContext, SupersetClient } from '@superset-ui/core';
 import type { QueryFormData } from '@superset-ui/core';
 import type { dashboard as dashboardApi } from '@apache-superset/core';
+import { WidgetApiError, errorKindForStatus, isAbortError } from './errors';
 
 type DataBindingSpec = dashboardApi.DataBindingSpec;
 type DataRow = dashboardApi.DataRow;
@@ -37,13 +38,14 @@ interface ChartDataResponseResult {
 export async function describeFetchError(e: unknown): Promise<string> {
   if (typeof Response !== 'undefined' && e instanceof Response) {
     try {
-      const body = await e.clone().json();
+      const body = (await e.clone().json()) as {
+        message?: string;
+        errors?: { message?: string }[];
+      } | null;
       const detail =
         body?.message ??
         (Array.isArray(body?.errors)
-          ? body.errors
-              .map((err: { message?: string }) => err.message)
-              .join('; ')
+          ? body.errors.map(err => err.message).join('; ')
           : undefined);
       return detail
         ? `${e.status} ${e.statusText}: ${detail}`
@@ -55,8 +57,22 @@ export async function describeFetchError(e: unknown): Promise<string> {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * A rejection from `SupersetClient` as an `Error` a widget can show and a host
+ * can classify. A cancelled request is passed through untouched, so the caller
+ * that aborted it can tell.
+ */
+export async function toFetchError(e: unknown): Promise<unknown> {
+  if (isAbortError(e)) return e;
+  const message = await describeFetchError(e);
+  return typeof Response !== 'undefined' && e instanceof Response
+    ? new WidgetApiError(message, errorKindForStatus(e.status), e.status)
+    : new Error(message);
+}
+
 export async function fetchQueryData(
   binding: DataBindingSpec,
+  options: dashboardApi.FetchQueryDataOptions = {},
 ): Promise<QueryDataResult> {
   const formData = {
     datasource: `${binding.datasetId}__table`,
@@ -89,9 +105,10 @@ export async function fetchQueryData(
     ({ json } = await SupersetClient.post({
       endpoint: '/api/v1/chart/data',
       jsonPayload: queryContext,
+      signal: options.signal,
     }));
   } catch (e) {
-    throw new Error(await describeFetchError(e));
+    throw await toFetchError(e);
   }
 
   const result = json?.result?.[0];

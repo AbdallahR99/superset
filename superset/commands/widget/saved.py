@@ -32,6 +32,7 @@ from superset.commands.widget.exceptions import (
 )
 from superset.commands.widget.utils import (
     load_saved_widget,
+    raise_for_widget_authoring,
     raise_for_widget_ownership,
     validate_widget_props,
 )
@@ -48,6 +49,8 @@ def _props_attributes(props: dict[str, Any]) -> dict[str, Any]:
 
 
 class CreateSavedWidgetCommand(BaseCommand):
+    """Store a new saved widget owned by the caller."""
+
     def __init__(self, data: dict[str, Any]) -> None:
         self._properties = data.copy()
 
@@ -68,9 +71,12 @@ class CreateSavedWidgetCommand(BaseCommand):
         validate_widget_props(
             self._properties.get("widget_type"), self._properties.get("props")
         )
+        raise_for_widget_authoring(self._properties["props"])
 
 
 class UpdateSavedWidgetCommand(BaseCommand):
+    """Change the props or title of a saved widget the caller owns."""
+
     def __init__(self, ref: str, data: dict[str, Any]) -> None:
         self._ref = ref
         self._properties = data.copy()
@@ -94,9 +100,12 @@ class UpdateSavedWidgetCommand(BaseCommand):
         raise_for_widget_ownership(self._model)
         if "props" in self._properties:
             validate_widget_props(self._model.widget_type, self._properties["props"])
+            raise_for_widget_authoring(self._properties["props"])
 
 
 class DeleteSavedWidgetCommand(BaseCommand):
+    """Delete a saved widget the caller owns."""
+
     def __init__(self, ref: str) -> None:
         self._ref = ref
         self._model: SavedWidget | None = None
@@ -115,6 +124,8 @@ class DeleteSavedWidgetCommand(BaseCommand):
 
 
 class GetSavedWidgetCommand(BaseCommand):
+    """Load one saved widget the caller may read."""
+
     def __init__(self, ref: str) -> None:
         self._ref = ref
 

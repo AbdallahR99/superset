@@ -16,10 +16,12 @@
 # under the License.
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
+from pytest_mock import MockerFixture
 from superset_core.widgets import Widget, widget
 
 from superset.widgets.controls import EchartsControls
@@ -199,18 +201,36 @@ def test_data_binding_schema_is_unchanged_after_metric_control_extraction() -> N
     }
 
 
-def test_data_binding_schema_unchanged_via_mcp_boundary() -> None:
-    from superset.mcp_service.widgets.tool.get_widget_control_schema import (
-        _get_widget_control_schema_impl,
+@pytest.mark.parametrize(
+    "app", [{"FEATURE_FLAGS": {"DASHBOARD_V2": True}}], indirect=True
+)
+def test_data_binding_schema_unchanged_via_mcp_boundary(
+    app_context: None, mocker: MockerFixture
+) -> None:
+    # The MCP widget tools share the DASHBOARD_V2 gate of the REST API and are
+    # limited to roles that may inspect the data model; this test is about the
+    # schema the tool returns, so the caller is one of those roles.
+    from superset.mcp_service.widgets.schemas import (
+        GetWidgetControlSchemaRequest,
+        WidgetControlSchema,
     )
+
+    # The tool package re-exports the tool function under the module's own
+    # name, so the module has to be fetched by its dotted path.
+    tool = import_module("superset.mcp_service.widgets.tool.get_widget_control_schema")
+    mocker.patch.object(tool, "user_can_view_data_model_metadata", return_value=True)
 
     # dataBinding is mandatory, so the minimal-viable pruning inlines it
     # (recursing into its own mandatory leaves) rather than leaving a $ref
     # into $defs -- a different code path through schema_tools.py than the
     # REST/get_control_schema boundary above, so this exercises the field
     # order fix against progressive disclosure too.
-    result = _get_widget_control_schema_impl("metric-tile")
-    data_binding = result["properties"]["dataBinding"]
+    result = tool._get_widget_control_schema_impl(
+        GetWidgetControlSchemaRequest(widget_type="metric-tile")
+    )
+    assert isinstance(result, WidgetControlSchema)
+    assert result.control_schema is not None
+    data_binding = result.control_schema["properties"]["dataBinding"]
     assert list(data_binding["properties"]) == [
         "datasetId",
         "metrics",

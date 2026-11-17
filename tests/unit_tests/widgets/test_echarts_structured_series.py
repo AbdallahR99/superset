@@ -22,9 +22,17 @@ stable metric label, not position)."""
 
 from __future__ import annotations
 
+import pytest
+
 from superset.utils import json
 from superset.widgets.builtin import _metric_key, Echarts
 from superset.widgets.registry import registry
+
+# The widget REST routes exercised below answer 404 unless the Dashboard V2
+# feature is switched on.
+pytestmark = pytest.mark.parametrize(
+    "app", [{"FEATURE_FLAGS": {"DASHBOARD_V2": True}}], indirect=True
+)
 
 
 def _series_properties(control_values, series=None):

@@ -1,10 +1,27 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "baseUrl": "../..",
+
+    // Directory Overrides: Parent config paths are relative to frontend root,
+    // but packages need paths relative to their own directory
     "outDir": "lib",
     "rootDir": "src",
-    "declarationDir": "lib"
+    "declarationDir": "lib",
+    "paths": {
+      "@storybook-shared": ["../../.storybook/shared"],
+      "@superset-ui/core": ["../superset-ui-core/src"],
+      "@superset-ui/core/*": ["../superset-ui-core/src/*"],
+      "@superset-ui/chart-controls": ["../superset-ui-chart-controls/src"],
+      "@superset-ui/chart-controls/*": ["../superset-ui-chart-controls/src/*"],
+      "@superset-ui/switchboard": ["../superset-ui-switchboard/src"],
+      "@apache-superset/core": ["../superset-core/src"],
+      "@apache-superset/core/*": ["../superset-core/src/*"],
+      "@apache-superset/widgets": ["./src"],
+      "@apache-superset/widgets/*": ["./src/*"],
+      "@superset-ui/plugin-chart-*": ["../../plugins/plugin-chart-*/src"],
+      "@superset-ui/preset-chart-*": ["../../plugins/preset-chart-*/src"],
+      "echarts/types/src/*": ["../../node_modules/echarts/types/src/*"]
+    }
   },
   "include": ["src/**/*", "types/**/*"],
   "exclude": ["src/**/*.test.*", "src/**/*.stories.*"],

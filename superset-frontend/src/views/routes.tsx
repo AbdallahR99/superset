@@ -254,10 +254,18 @@ export const routes: Routes = [
     Component: DashboardList,
     mobileSupported: true,
   },
+  // Dashboard v2 exists only behind its feature flag. With the flag off these
+  // two routes are not registered at all, so their URLs are handled like any
+  // other unknown dashboard path rather than opening the builder.
+  //
   // Must precede DASHBOARD ("/dashboard/:idOrSlug/"): that pattern is a
-  // non-exact prefix match, so it would otherwise shadow this literal path.
-  { path: RoutePaths.DASHBOARD_V2_NEW, Component: DashboardBuilderV2 },
-  { path: RoutePaths.DASHBOARD_V2, Component: DashboardBuilderV2 },
+  // non-exact prefix match, so it would otherwise shadow these paths.
+  ...(isFeatureEnabled(FeatureFlag.DashboardV2)
+    ? [
+        { path: RoutePaths.DASHBOARD_V2_NEW, Component: DashboardBuilderV2 },
+        { path: RoutePaths.DASHBOARD_V2, Component: DashboardBuilderV2 },
+      ]
+    : []),
   { path: RoutePaths.DASHBOARD, Component: Dashboard, mobileSupported: true },
   { path: RoutePaths.CHART_ADD, Component: ChartCreation },
   { path: RoutePaths.CHART_LIST, Component: ChartList },

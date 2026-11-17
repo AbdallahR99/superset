@@ -24,6 +24,11 @@ export const DEFAULT_GUEST_TOKEN_FETCH_TIMEOUT_MS = 30_000;
 export interface GuestTokenSource {
   /** A token valid for at least the refresh margin, fetching a new one when needed. */
   get(): Promise<string>;
+  /**
+   * Forgets the cached token, so the next `get` asks the host for a new one.
+   * Given the token Superset refused, it only forgets that one.
+   */
+  invalidate(rejected?: string): void;
 }
 
 /** Epoch milliseconds the token expires at, from its `exp` claim. */
@@ -79,18 +84,39 @@ export function createGuestTokenSource(
         return Promise.resolve(token);
       }
       if (!pending) {
-        pending = withTimeout(fetchGuestToken(), timeoutMs)
+        // A broker that throws instead of rejecting must not escape as a
+        // synchronous exception from a widget's effect.
+        const started = new Promise<string>(resolve => {
+          resolve(fetchGuestToken());
+        });
+        const request: Promise<string> = withTimeout(started, timeoutMs)
           .then(next => {
-            token = next;
-            expiresAt =
-              guestTokenExpiry(next) ?? Date.now() + FALLBACK_LIFETIME_MS;
+            if (typeof next !== 'string' || next === '') {
+              throw new Error('fetchGuestToken did not return a token.');
+            }
+            // A fetch that was invalidated while in flight still answers its
+            // own callers, but is not kept for later ones.
+            if (pending === request) {
+              token = next;
+              expiresAt =
+                guestTokenExpiry(next) ?? Date.now() + FALLBACK_LIFETIME_MS;
+            }
             return next;
           })
           .finally(() => {
-            pending = undefined;
+            if (pending === request) pending = undefined;
           });
+        pending = request;
       }
       return pending;
+    },
+    invalidate(rejected) {
+      // Only the token that was refused: several widgets getting a 401 for
+      // the same token must not each throw away the fresh one that replaced it.
+      if (rejected !== undefined && rejected !== token) return;
+      token = undefined;
+      expiresAt = 0;
+      pending = undefined;
     },
   };
 }

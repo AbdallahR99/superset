@@ -31,10 +31,14 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { createContext, useContext, useEffect, useState } from 'react';
-import { getWidgetComponent } from '../registry';
+import { toError, useWidgetErrorReporter } from '../errors';
 import type { WidgetComponent } from '../types';
 import { createApiFetch, type ApiFetchOptions } from './httpClient';
-import { createExtensionCore, type ExtensionInfo } from './extensionHost';
+import {
+  createExtensionHost,
+  type ExtensionHost,
+  type ExtensionInfo,
+} from './extensionHost';
 
 const EXTENSION_WIDGET_TYPE = /^extensions\.([^.]+)\.([^.]+)\..+$/;
 
@@ -60,6 +64,12 @@ export interface ExtensionWidgetLoaderOptions extends ApiFetchOptions {
    * `react-dom`, `antd` and `@apache-superset/core` every extension declares.
    */
   shared?: Record<string, unknown>;
+  /**
+   * Where the loaded extensions register their widgets. Defaults to a host
+   * of the loader's own, which is what keeps one provider's extension widgets
+   * apart from another's.
+   */
+  host?: ExtensionHost;
 }
 
 /** The runtime half of a Module Federation container, as `window[name]` holds it. */
@@ -96,23 +106,36 @@ function loadScript(src: string): Promise<void> {
     script.src = src;
     script.type = 'text/javascript';
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () =>
+    script.onload = () => {
+      script.remove();
+      resolve();
+    };
+    script.onerror = () => {
+      script.remove();
       reject(new Error(`Could not load the extension bundle at ${src}.`));
+    };
     document.head.appendChild(script);
   });
 }
 
 /**
- * In flight or done, keyed by deployment and extension: a page with several
- * providers on the same Superset must not evaluate one extension twice, and
- * its container can only be initialized once.
+ * The one thing the page itself forces loaders to take turns on. A Module
+ * Federation container announces itself by assigning a global named after the
+ * extension, and an extension built against the `superset` global reads that
+ * while its entry module is evaluated. Both globals only mean something
+ * between a script finishing and its container being started, so each load
+ * holds this queue for exactly that stretch. It orders loads and holds
+ * nothing else: no container, no core and no credential outlives a turn.
  */
-const loading = new Map<string, Promise<void>>();
+let containerTurn: Promise<void> = Promise.resolve();
 
-/** Test seam, and for a host that swaps deployments without a reload. */
-export function clearLoadedExtensions(): void {
-  loading.clear();
+function takeContainerTurn<T>(run: () => Promise<T>): Promise<T> {
+  const result = containerTurn.then(run);
+  containerTurn = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
 
 /**
@@ -123,12 +146,21 @@ export function clearLoadedExtensions(): void {
  * bundle must be readable by whoever the page renders as (see
  * `EMBEDDED_EXTENSION_ASSETS_PUBLIC` for guest tokens, which a `<script>` tag
  * cannot carry).
+ *
+ * A loader belongs to one provider. Everything it loads is evaluated for it
+ * alone and registers with its own {@link ExtensionHost}, so the same
+ * extension under two providers is two independent copies: neither can read
+ * the other's widgets, events, filters or data. Share one loader between
+ * providers only if they also share a `bus` and a `client`.
  */
 export function createExtensionWidgetLoader(
   options: ExtensionWidgetLoaderOptions,
 ): ExtensionWidgetLoader {
   const api = createApiFetch(options);
   const base = options.supersetDomain.replace(/\/+$/, '');
+  const host = options.host ?? createExtensionHost();
+  // In flight or done, per extension, for this loader only.
+  const loading = new Map<string, Promise<void>>();
 
   const url = (path: string) =>
     /^https?:\/\//.test(path) ? path : `${base}${path}`;
@@ -138,66 +170,75 @@ export function createExtensionWidgetLoader(
     const extension = await api<ExtensionInfo>(
       `/api/v1/extensions/${encodeURIComponent(publisher)}/${encodeURIComponent(name)}`,
     );
-    if (!extension.remoteEntry) {
+    const { remoteEntry } = extension;
+    if (!remoteEntry) {
       throw new Error(`Extension ${id} has no frontend to load.`);
     }
-    await loadScript(url(extension.remoteEntry));
     // Only a page that actually loads an extension pays for antd's full
     // surface; the widgets themselves import the components they use.
     const antd = await import('antd');
-
     const containerName = extension.moduleFederationName || id;
-    const container = (window as unknown as Record<string, unknown>)[
-      containerName
-    ];
-    if (!isFederationContainer(container)) {
-      throw new Error(
-        `Extension ${id} did not register the container "${containerName}".`,
-      );
-    }
-    const core = createExtensionCore(extension);
-    // Superset's own loader puts the platform API on `window.superset`, and an
-    // extension built with `externals: {'@apache-superset/core': 'superset'}`
-    // reads it from there rather than from the share scope below. One global
-    // for the page: with several extensions loaded, the last one's context
-    // wins, exactly as it does in the host.
-    (window as unknown as Record<string, unknown>).superset ??= core;
+    const core = host.createCore(extension);
+    const globals = window as unknown as Record<string, unknown>;
 
-    await container.init({
-      react: shareEntry(React, versionOf(React)),
-      'react-dom': shareEntry(ReactDOM, versionOf(ReactDOM)),
-      antd: shareEntry(antd, versionOf(antd)),
-      '@apache-superset/core': shareEntry(
-        core,
-        '0.1.0',
-      ),
-      ...options.shared,
+    await takeContainerTurn(async () => {
+      // Evaluated afresh for this loader: the script assigns a new container,
+      // with a module cache of its own, to the extension's global. A page
+      // with two providers therefore runs two copies of the extension, each
+      // started below with its own provider's core.
+      await loadScript(url(remoteEntry));
+      const container = globals[containerName];
+      if (!isFederationContainer(container)) {
+        throw new Error(
+          `Extension ${id} did not register the container "${containerName}".`,
+        );
+      }
+      // Superset's own loader puts the platform API on `window.superset`, and
+      // an extension built with `externals: {'@apache-superset/core':
+      // 'superset'}` reads it from there, when its entry module is evaluated,
+      // rather than from the share scope below. It is set for this
+      // extension's start only and then put back, so no later extension (and
+      // no other provider) is handed this one's context.
+      const hadPrevious = 'superset' in globals;
+      const previous = globals.superset;
+      globals.superset = core;
+      try {
+        await container.init({
+          react: shareEntry(React, versionOf(React)),
+          'react-dom': shareEntry(ReactDOM, versionOf(ReactDOM)),
+          antd: shareEntry(antd, versionOf(antd)),
+          '@apache-superset/core': shareEntry(core, '0.1.0'),
+          ...options.shared,
+        });
+        const factory = await container.get('./index');
+        // The extension registers its widgets as a side effect of this call.
+        factory();
+      } finally {
+        if (hadPrevious) globals.superset = previous;
+        else delete globals.superset;
+      }
     });
-    const factory = await container.get('./index');
-    // The extension registers its widgets as a side effect of this call.
-    factory();
   }
 
   return async function loadExtensionWidget(type) {
     const parsed = parseExtensionWidgetType(type);
     if (!parsed) throw new Error(`Unknown widget type "${type}".`);
 
-    const key = `${base}|${parsed.id}`;
-    let pending = loading.get(key);
+    let pending = loading.get(parsed.id);
     if (!pending) {
       pending = loadExtension(parsed.publisher, parsed.name);
-      loading.set(key, pending);
+      loading.set(parsed.id, pending);
     }
     try {
       await pending;
     } catch (error) {
       // Keeping a rejected load would make every later widget from this
       // extension fail with the first widget's error.
-      loading.delete(key);
+      if (loading.get(parsed.id) === pending) loading.delete(parsed.id);
       throw error;
     }
 
-    const component = getWidgetComponent(type);
+    const component = host.getComponent(type);
     if (!component) {
       throw new Error(
         `Extension ${parsed.id} does not contribute the widget "${type}".`,
@@ -220,6 +261,7 @@ export interface ExtensionWidgetState {
 const IDLE: ExtensionWidgetState = { loading: false };
 
 interface LoadResult {
+  loader?: ExtensionWidgetLoader;
   type?: string;
   component?: WidgetComponent;
   error?: Error;
@@ -230,44 +272,49 @@ interface LoadResult {
  * type the registry already has (or for no widget at all): the hook then does
  * nothing. An extension type with no result yet reads as loading from the
  * first render, so nothing flashes "unknown widget type" on the way.
+ *
+ * A result belongs to the loader that produced it: when the provider's loader
+ * changes (another deployment, another token) the component of the previous
+ * one is not shown while the new one loads.
  */
 export function useExtensionWidget(
   type: string | undefined,
+  instanceId?: string,
 ): ExtensionWidgetState {
   const loader = useContext(ExtensionWidgetLoaderContext);
+  const reportError = useWidgetErrorReporter();
   const [result, setResult] = useState<LoadResult>({});
 
   useEffect(() => {
     if (!type || !isExtensionWidgetType(type)) return undefined;
+    let cancelled = false;
+    const fail = (error: Error) => {
+      if (cancelled) return;
+      setResult({ loader, type, error });
+      reportError(error, { phase: 'extension', instanceId, widgetType: type });
+    };
     if (!loader) {
-      setResult({
-        type,
-        error: new Error(
+      fail(
+        new Error(
           `"${type}" is contributed by a Superset extension, which this page cannot load.`,
         ),
-      });
+      );
       return undefined;
     }
-    let cancelled = false;
     loader(type).then(
       component => {
-        if (!cancelled) setResult({ type, component });
+        if (!cancelled) setResult({ loader, type, component });
       },
-      error => {
-        if (!cancelled) {
-          setResult({
-            type,
-            error: error instanceof Error ? error : new Error(String(error)),
-          });
-        }
-      },
+      (reason: unknown) => fail(toError(reason)),
     );
     return () => {
       cancelled = true;
     };
-  }, [loader, type]);
+  }, [loader, type, instanceId, reportError]);
 
   if (!type || !isExtensionWidgetType(type)) return IDLE;
-  if (result.type !== type) return { loading: true };
+  if (result.type !== type || result.loader !== loader) {
+    return { loading: true };
+  }
   return { loading: false, component: result.component, error: result.error };
 }

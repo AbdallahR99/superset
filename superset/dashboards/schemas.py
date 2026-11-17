@@ -21,6 +21,10 @@ from marshmallow import fields, post_dump, post_load, pre_load, Schema
 from marshmallow.validate import Length, OneOf, ValidationError
 
 from superset import security_manager
+from superset.dashboard_v2.document import (
+    DocumentValidationError,
+    validate_stored_document,
+)
 from superset.subjects.schemas import SubjectReferenceField, SubjectResponseSchema
 from superset.tags.models import TagType
 from superset.utils import json
@@ -198,6 +202,19 @@ class SharedLabelsColorsField(fields.Field):
         raise ValidationError("Not a valid list")
 
 
+def validate_v2_document(value: Union[dict[str, Any], None]) -> None:
+    """Reject a malformed Dashboard v2 document inside ``json_metadata``.
+
+    The Dashboard v2 API is the write path that also checks widget types,
+    widget props and the document revision; this validator only guarantees
+    that whatever reaches ``json_metadata`` another way is a bounded tree.
+    """
+    try:
+        validate_stored_document(value)
+    except DocumentValidationError as ex:
+        raise ValidationError(str(ex)) from ex
+
+
 class DashboardJSONMetadataSchema(Schema):
     # native_filter_configuration is for dashboard-native filters
     native_filter_configuration = fields.List(fields.Dict(), allow_none=True)
@@ -207,8 +224,10 @@ class DashboardJSONMetadataSchema(Schema):
     # for charts - can be overridden by chart_configuration for each chart
     global_chart_configuration = fields.Dict()
     chart_customization_config = fields.List(fields.Dict(), allow_none=True)
-    # Dashboard v2 document (see superset.dashboard_v2.document)
-    v2_document = fields.Dict(allow_none=True)
+    # Dashboard v2 document (see superset.dashboard_v2.document). Validated
+    # structurally on this path too, so a dashboard update or import cannot
+    # store a cyclic, oversized or otherwise malformed document.
+    v2_document = fields.Dict(allow_none=True, validate=validate_v2_document)
     timed_refresh_immune_slices = fields.List(fields.Integer())
     # deprecated wrt dashboard-native filters
     filter_scopes = fields.Dict()

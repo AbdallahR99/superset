@@ -22,9 +22,8 @@
  *
  * Structural/layout operations on the "Dashboard v2" prototype dashboard: a
  * flat, addressable tree of nodes (not nested JSX-in-JSON) so small,
- * targeted edits are cheap — the shape an AI agent (most likely a `chat`
- * extension) or any other extension calls to place, move, resize, and
- * remove nodes. This is an early sketch of the design doc's platform-API
+ * targeted edits are cheap — the shape an extension calls to place, move,
+ * resize, and remove nodes. This is an early sketch of the design doc's platform-API
  * section, not yet backed by persistence, real chart execution, or the
  * `ChartPlugin`/widget catalog — every method here is synchronous
  * and in-memory.
@@ -233,7 +232,7 @@ export declare const onDidLayoutChange: Event<void>;
  *
  * Layered on top of plain emit/listen is a retained-value convenience:
  * {@link getValue} returns the last payload emitted for a given
- * `(nodeId, eventType)` pair, so a late subscriber — an AI agent asking
+ * `(nodeId, eventType)` pair, so a late subscriber — anything asking
  * "what's this node's current state?" — doesn't need to have been
  * listening since the beginning.
  */
@@ -315,4 +314,18 @@ export interface QueryDataResult {
  */
 export declare function fetchQueryData(
   binding: DataBindingSpec,
+  options?: FetchQueryDataOptions,
 ): Promise<QueryDataResult>;
+
+/** Optional context for {@link fetchQueryData}. */
+export interface FetchQueryDataOptions {
+  /**
+   * The node asking. A widget passes its own id so the host can tell which
+   * filters on the page apply to it (a widget is never narrowed by its own
+   * selection) and which page services to run the query with. Without it the
+   * host can only answer when there is no doubt about who is asking.
+   */
+  nodeId?: string;
+  /** Aborted when the caller no longer wants the result. */
+  signal?: AbortSignal;
+}

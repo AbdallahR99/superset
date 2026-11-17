@@ -28,8 +28,16 @@ shape served, and strict validation of the control values it accepts."""
 
 from __future__ import annotations
 
+import pytest
+
 from superset.utils import json
 from superset.widgets.registry import registry
+
+# The widget REST routes exercised below answer 404 unless the Dashboard V2
+# feature is switched on.
+pytestmark = pytest.mark.parametrize(
+    "app", [{"FEATURE_FLAGS": {"DASHBOARD_V2": True}}], indirect=True
+)
 
 
 def _echarts_schema(control_values=None):

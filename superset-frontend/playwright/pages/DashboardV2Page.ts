@@ -18,7 +18,11 @@
  */
 
 import { Page, Locator } from '@playwright/test';
+import { skipUnlessFeatureEnabled } from '../helpers/featureFlags';
 import { gotoWithRetry } from '../helpers/navigation';
+
+/** The feature flag the builder, its routes and its API sit behind. */
+export const DASHBOARD_V2_FLAG = 'DASHBOARD_V2';
 
 /** A `.grid-stack-item`'s own position/size, read from the `gs-x`/`gs-y`/`gs-w`/`gs-h` attributes GridStack itself writes — the ground truth of what's actually on screen, independent of anything the app's own React state claims. */
 export interface GridItemAttrs {
@@ -29,10 +33,19 @@ export interface GridItemAttrs {
 }
 
 /**
- * Page object for the "Dashboard v2" prototype canvas (`/dashboard/v2/new/`)
- * — a GridStack-backed root grid plus a palette of draggable building
- * blocks. No backend persistence: each test starts from a fresh, empty
- * in-memory dashboard.
+ * Page object for the Dashboard v2 builder (`/dashboard/v2/new/` and
+ * `/dashboard/v2/<id>/`) — a GridStack-backed root grid, a palette of
+ * draggable building blocks, and a header that saves the dashboard. Each
+ * test starts from a fresh, empty, unsaved dashboard; nothing reaches the
+ * server unless the test saves.
+ *
+ * The builder exists only behind the `DASHBOARD_V2` feature flag, so
+ * `goto` stands the test down on an instance where the flag is off rather
+ * than failing on a page that was never meant to render.
+ *
+ * Everything here is found by `data-test` or by a structural attribute,
+ * never by a label: the same specs then run whoever is signed in, however
+ * they signed in, and in whichever language the session is.
  *
  * Two distinct drag mechanisms exist on this page and each test helper
  * below is specific to one:
@@ -55,15 +68,95 @@ export class DashboardV2Page {
     GRID_DROP_GHOST: '[data-test="grid-drop-ghost"]',
     GRID_STACK_ITEM: '.grid-stack-item',
     EDITOR_PANEL: '[data-test="editor-panel"]',
+    SAVE: '[data-test="header-save"]',
+    UNSAVED: '[data-test="header-unsaved"]',
+    TITLE: '[data-test="header-title"]',
+    LOADING: '[data-test="dashboard-loading"]',
+    LOAD_ERROR: '[data-test="dashboard-load-error"]',
+    CONFLICT_DIALOG: '[data-test="conflict-dialog"]',
+    CONFLICT_RELOAD: '[data-test="conflict-reload"]',
+    CONFLICT_OVERWRITE: '[data-test="conflict-overwrite"]',
+    CONFLICT_KEEP_EDITING: '[data-test="conflict-keep-editing"]',
   } as const;
+
+  /** The route of a saved Dashboard v2, with its id captured. */
+  static readonly SAVED_URL = /\/dashboard\/v2\/(\d+)\/?(?:[?#].*)?$/;
 
   constructor(page: Page) {
     this.page = page;
   }
 
+  /**
+   * Opens a new, unsaved dashboard. Skips the calling test when the
+   * `DASHBOARD_V2` feature flag is off on the instance under test.
+   */
   async goto(): Promise<void> {
+    await skipUnlessFeatureEnabled(this.page, DASHBOARD_V2_FLAG);
     await gotoWithRetry(this.page, 'dashboard/v2/new/');
     await this.page.waitForSelector(DashboardV2Page.SELECTORS.EMPTY_CANVAS);
+  }
+
+  /** Opens a saved dashboard by id and waits until its document is on screen. */
+  async gotoSaved(id: number): Promise<void> {
+    await gotoWithRetry(this.page, `dashboard/v2/${id}/`);
+    await this.page.waitForSelector(DashboardV2Page.SELECTORS.CANVAS);
+  }
+
+  get saveButton(): Locator {
+    return this.page.locator(DashboardV2Page.SELECTORS.SAVE);
+  }
+
+  /** Shown only while the dashboard holds edits the server does not. */
+  get unsavedIndicator(): Locator {
+    return this.page.locator(DashboardV2Page.SELECTORS.UNSAVED);
+  }
+
+  get title(): Locator {
+    return this.page.locator(DashboardV2Page.SELECTORS.TITLE);
+  }
+
+  get conflictDialog(): Locator {
+    return this.page.locator(DashboardV2Page.SELECTORS.CONFLICT_DIALOG);
+  }
+
+  get conflictReload(): Locator {
+    return this.page.locator(DashboardV2Page.SELECTORS.CONFLICT_RELOAD);
+  }
+
+  get conflictOverwrite(): Locator {
+    return this.page.locator(DashboardV2Page.SELECTORS.CONFLICT_OVERWRITE);
+  }
+
+  get conflictKeepEditing(): Locator {
+    return this.page.locator(DashboardV2Page.SELECTORS.CONFLICT_KEEP_EDITING);
+  }
+
+  /** The id in the current URL, once the dashboard has been saved. */
+  savedId(): number {
+    const match = DashboardV2Page.SAVED_URL.exec(this.page.url());
+    if (!match)
+      throw new Error(`Not a saved dashboard URL: ${this.page.url()}`);
+    return Number(match[1]);
+  }
+
+  /**
+   * Renames the dashboard. The name commits when the field loses focus, so
+   * the field is blurred before this returns.
+   */
+  async rename(name: string): Promise<void> {
+    await this.title.fill(name);
+    await this.title.blur();
+  }
+
+  /**
+   * Saves a dashboard that has no id yet and returns the id it was given,
+   * read from the route the builder moves to once the server has answered.
+   */
+  async saveNew(): Promise<number> {
+    await this.saveButton.click();
+    await this.page.waitForURL(DashboardV2Page.SAVED_URL);
+    await this.unsavedIndicator.waitFor({ state: 'detached' });
+    return this.savedId();
   }
 
   palette(type: string): Locator {
@@ -120,23 +213,17 @@ export class DashboardV2Page {
    * that places one block via `placeBlockByClick` and then wants to drag a
    * second one from the palette needs this in between.
    *
-   * A plain `text=Building Blocks` locator is unsafe here: on a branch (or
-   * any other page state) where that text happens to appear elsewhere too
-   * — e.g. a dev-mode badge showing the current git branch name — it
-   * resolves to more than one element and Playwright refuses to click
-   * ambiguously. Scoping to the `tab` role narrows that, but not
-   * completely: an author can place a `tabs` widget on the canvas itself
-   * and name one of its own panes "Building Blocks", which is `role="tab"`
-   * too — an unscoped `getByRole('tab', ...)` would then match that canvas
-   * tab *and* the real palette tab, and Playwright would again refuse to
-   * click ambiguously. Scoping to `[data-test="editor-panel"]` — the
-   * rail the palette's own tab bar lives in, never the canvas — rules
-   * that out regardless of what an author names a widget on the canvas.
+   * Found by the tab's own key (`data-node-key`, which the tab bar writes
+   * from the `key` the panel gives each tab) rather than by its label: the
+   * label is translated, and it is also text an author can put on the
+   * canvas, where a `tabs` widget with a pane of the same name would make a
+   * label-based locator ambiguous. Scoped to `[data-test="editor-panel"]`,
+   * the rail the palette's own tab bar lives in, never the canvas.
    */
   async showPalette(): Promise<void> {
     await this.page
       .locator(DashboardV2Page.SELECTORS.EDITOR_PANEL)
-      .getByRole('tab', { name: 'Building Blocks', exact: true })
+      .locator('[data-node-key="widgets"] [role="tab"]')
       .click();
   }
 
@@ -219,7 +306,7 @@ export class DashboardV2Page {
   async applyPropsJson(props: Record<string, unknown>): Promise<void> {
     await this.page
       .locator('[data-test="inspector-props-tabs"]')
-      .getByRole('tab', { name: 'JSON' })
+      .locator('[data-node-key="json"] [role="tab"]')
       .click();
     await this.page
       .locator('[data-test="inspector-props"]')

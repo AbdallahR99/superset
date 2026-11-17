@@ -19,7 +19,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactElement } from 'react';
 import { t } from '@apache-superset/core/translation';
-import { css, styled } from '@apache-superset/core/theme';
+import {
+  css,
+  flipPlacement,
+  styled,
+  useDirection,
+} from '@apache-superset/core/theme';
 import { Button, Tabs } from '@superset-ui/core/components';
 import { Icons } from '@superset-ui/core/components/Icons';
 import { provider, useDashboardRevision } from 'src/core/dashboard/store';
@@ -47,6 +52,20 @@ const KEYBOARD_STEP = 16;
 
 const clampWidth = (width: number): number =>
   Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
+
+/**
+ * The width a drag of the rail's edge asks for, before clamping.
+ *
+ * The edge being dragged is the rail's inline-end edge: moving the pointer
+ * right widens a rail that sits on the left, and narrows one that sits on
+ * the right, which is where it is in a right-to-left layout.
+ */
+export const resizedWidth = (
+  startWidth: number,
+  startX: number,
+  currentX: number,
+  isRtl: boolean,
+): number => startWidth + (isRtl ? startX - currentX : currentX - startX);
 
 /**
  * The rail, open or shut.
@@ -158,6 +177,11 @@ export default function EditorPanel({
   onAdd: (type: string) => void;
 }): ReactElement {
   useDashboardRevision();
+  // The rail sits at the inline-start side of the canvas, so the edge an
+  // author drags is its right edge when the page reads left-to-right and its
+  // left edge otherwise. A pointer moves in physical pixels either way.
+  const direction = useDirection();
+  const isRtl = direction === 'rtl';
   const [tab, setTab] = useState<PanelTab>('widgets');
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   /** Whether the rail is out of the way. The width it had is kept either way. */
@@ -222,7 +246,16 @@ export default function EditorPanel({
 
   const drag = (event: PointerEvent<HTMLDivElement>): void => {
     if (from.current !== null) {
-      setWidth(clampWidth(from.current.width + event.clientX - from.current.x));
+      setWidth(
+        clampWidth(
+          resizedWidth(
+            from.current.width,
+            from.current.x,
+            event.clientX,
+            isRtl,
+          ),
+        ),
+      );
     }
   };
 
@@ -233,8 +266,9 @@ export default function EditorPanel({
 
   const nudge = (event: KeyboardEvent<HTMLDivElement>): void => {
     const moves: Record<string, (current: number) => number> = {
-      ArrowRight: current => current + KEYBOARD_STEP,
-      ArrowLeft: current => current - KEYBOARD_STEP,
+      // The arrow that points away from the rail is the one that grows it.
+      ArrowRight: current => current + (isRtl ? -KEYBOARD_STEP : KEYBOARD_STEP),
+      ArrowLeft: current => current + (isRtl ? KEYBOARD_STEP : -KEYBOARD_STEP),
       Home: () => MIN_WIDTH,
       End: () => MAX_WIDTH,
     };
@@ -269,7 +303,7 @@ export default function EditorPanel({
           aria-label={t('Show the editor panel')}
           aria-expanded={false}
           tooltip={t('Show the editor panel')}
-          placement="right"
+          placement={flipPlacement('right', direction)}
           onClick={() => setClosed(false)}
         >
           <Icons.MenuUnfoldOutlined iconSize="m" />

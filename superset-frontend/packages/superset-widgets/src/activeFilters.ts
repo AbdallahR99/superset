@@ -84,7 +84,8 @@ export function getActiveResolvedFilters(
     .filter(sourceId => sourceId !== consumerId)
     .flatMap(sourceId => {
       const value = bus.getValue(sourceId, dashboardApi.VALUE_CHANGED_EVENT) as
-        FilterValueChangedPayload | undefined;
+        | FilterValueChangedPayload
+        | undefined;
       if (!value?.resolved) return [];
       // Schema-driven forms seed `[""]` for an untouched targets list; blank
       // entries must read the same as no targets at all.

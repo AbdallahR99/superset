@@ -98,11 +98,53 @@ export function cellAtPoint(
 }
 
 /**
+ * How far a pointer is from the grid's inline-start edge, in pixels: the
+ * left edge of a left-to-right grid and the right edge of a right-to-left
+ * one. Column 0 sits at that edge in both (the grid engine is initialised
+ * with the same direction, see `useGridStack`), so this is the horizontal
+ * offset {@link cellAtPoint} expects whichever way the page reads. A
+ * `clientX` is physical and a column is logical, and subtracting `rect.left`
+ * regardless is what drops a widget on the mirror image of the column the
+ * pointer is over.
+ */
+export function inlineOffsetPx(
+  clientX: number,
+  containerRect: { left: number; right: number },
+  isRtl: boolean,
+): number {
+  return isRtl ? containerRect.right - clientX : clientX - containerRect.left;
+}
+
+/**
+ * The inline `style` that puts an absolutely positioned box on a
+ * {@link pixelRectForCell} rect. That rect's `left` is measured from the
+ * grid's inline-start edge, and an inline style is not mirrored for
+ * right-to-left the way a styled block is, so the edge has to be named here.
+ */
+export function positionStyleForRect(
+  pixelRect: { left: number; top: number; width: number; height: number },
+  isRtl: boolean,
+): {
+  left?: number;
+  right?: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const { left, top, width, height } = pixelRect;
+  return isRtl
+    ? { right: left, top, width, height }
+    : { left, top, width, height };
+}
+
+/**
  * The on-screen pixel rect a `PackedRect` occupies — the inverse of
  * `cellAtPoint`, and the other half of the same cell geometry every grid
  * item is positioned with (see `CellGeometry`'s own doc comment for the
  * margin/2 reasoning). The drop ghost is the one thing here that needs
  * this: it isn't a real grid widget, so nothing positions it but this.
+ * `left` is the distance from the grid's inline-start edge; turn the result
+ * into a style with {@link positionStyleForRect}.
  */
 export function pixelRectForCell(
   rect: PackedRect,

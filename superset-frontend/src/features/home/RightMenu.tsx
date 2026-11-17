@@ -261,19 +261,29 @@ const RightMenu = ({
       perm: 'can_write',
       view: 'Dashboard',
     },
-    {
-      label: t('Dashboard v2'),
-      // Keep the URL relative so isFrontendRoute() matches and Link navigates
-      // via React Router — see the SQL query entry's comment above.
-      url: '/dashboard/v2/new/',
-      icon: (
-        <Icons.ThunderboltOutlined
-          data-test={`menu-item-${t('Dashboard v2')}`}
-        />
-      ),
-      perm: 'can_write',
-      view: 'Dashboard',
-    },
+    // Offered only where Dashboard v2 is turned on: with the flag off its
+    // route is not registered and the server does not serve the page, so the
+    // entry would lead nowhere.
+    ...(isFeatureEnabled(FeatureFlag.DashboardV2)
+      ? [
+          {
+            label: t('Dashboard v2'),
+            // Keep the URL relative so isFrontendRoute() matches and Link
+            // navigates via React Router — see the SQL query entry's comment
+            // above.
+            url: '/dashboard/v2/new/',
+            icon: (
+              <Icons.ThunderboltOutlined
+                // A fixed name rather than the translated label, so a test
+                // finds the entry whatever language the session is in.
+                data-test="menu-item-dashboard-v2"
+              />
+            ),
+            perm: 'can_write',
+            view: 'Dashboard',
+          },
+        ]
+      : []),
   ];
 
   const checkAllowUploads = () => {

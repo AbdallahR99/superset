@@ -941,14 +941,12 @@ from superset.mcp_service.user.tool import (  # noqa: F401, E402
     get_user_info,
     list_users,
 )
-from superset.mcp_service.widgets import prompts as widget_prompts  # noqa: F401, E402
 from superset.mcp_service.widgets.tool import (  # noqa: F401, E402
     get_saved_widget,
     get_widget_control_schema,
     get_widget_data,
-    get_widget_values,
+    list_saved_widgets,
     list_widget_types,
-    set_widget_control_values,
 )
 
 #: Tool names exempt from the mcp_auth_hook protection check. Adding a tool
@@ -1053,6 +1051,7 @@ def _apply_config_guards(flask_app: Any) -> set[str]:
       the GLOBAL_TASK_FRAMEWORK feature flag via feature_flag_manager so that
       all Superset enablement paths (DEFAULT_FEATURE_FLAGS, GET_FEATURE_FLAGS_FUNC,
       IS_FEATURE_ENABLED_FUNC, etc.) are respected.
+    - Widget tools: removed unless the DASHBOARD_V2 feature flag is enabled.
     """
     removed: set[str] = set()
 
@@ -1061,6 +1060,18 @@ def _apply_config_guards(flask_app: Any) -> set[str]:
     if not feature_flag_manager.is_feature_enabled("GLOBAL_TASK_FRAMEWORK"):
         for tool_name in ("list_tasks", "get_task_info"):
             _remove_tool_quietly(tool_name, "GLOBAL_TASK_FRAMEWORK not enabled")
+            removed.add(tool_name)
+
+    # Widget tools: the widget REST API is unavailable without DASHBOARD_V2,
+    # so its MCP counterpart is not served either.
+    from superset.mcp_service.widgets.utils import (  # noqa: PLC0415
+        WIDGET_TOOL_NAMES,
+        WIDGETS_FEATURE_FLAG,
+    )
+
+    if not feature_flag_manager.is_feature_enabled(WIDGETS_FEATURE_FLAG):
+        for tool_name in WIDGET_TOOL_NAMES:
+            _remove_tool_quietly(tool_name, f"{WIDGETS_FEATURE_FLAG} not enabled")
             removed.add(tool_name)
 
     return removed

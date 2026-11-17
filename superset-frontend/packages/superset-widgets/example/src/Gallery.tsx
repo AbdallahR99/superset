@@ -97,7 +97,8 @@ function Demo({
 
 function SelectionReadout({ instanceId }: { instanceId: string }) {
   const value = useWidgetValue(instanceId) as
-    FilterValueChangedPayload | undefined;
+    | FilterValueChangedPayload
+    | undefined;
   const selection = value?.resolved?.value;
   return (
     <p className="hint">
@@ -202,8 +203,8 @@ export function Gallery({ themeMode }: { themeMode: ThemeModeName }) {
       <h2>Component gallery</h2>
       <p className="hint">
         One example per component and prop. Every widget has a{' '}
-        <code>&lt;/&gt; Code</code> button. Not shown: <code>client</code> (the
-        Claude-artifact MCP client), <code>guestTokenHeaderName</code> and{' '}
+        <code>&lt;/&gt; Code</code> button. Not shown: <code>client</code> (a
+        custom data client), <code>guestTokenHeaderName</code> and{' '}
         <code>guestTokenFetchTimeoutMs</code> (guest-token mode only).
       </p>
       <SupersetProvider

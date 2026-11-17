@@ -212,7 +212,8 @@ function FilterActivityIndicator({
   const hasIncomingFilter = incomingFilters.length > 0;
 
   const ownValue = store.getValue(nodeId, dashboardApi.VALUE_CHANGED_EVENT) as
-    FilterValueChangedPayload | undefined;
+    | FilterValueChangedPayload
+    | undefined;
   const hasOwnCrossFilter = Boolean(ownValue?.resolved);
 
   if (!hasIncomingFilter && !hasOwnCrossFilter) return null;

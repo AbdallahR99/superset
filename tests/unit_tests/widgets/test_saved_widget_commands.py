@@ -322,11 +322,18 @@ def test_create_rejects_guests_and_invalid_props(mocker: MockerFixture) -> None:
         ).validate()
 
     _security(mocker, "superset.commands.widget.saved", guest=False)
+    # The author's dataset entitlement has its own tests
+    # (tests/unit_tests/security/test_widget_data_access.py).
+    authoring = mocker.patch(
+        "superset.commands.widget.saved.raise_for_widget_authoring"
+    )
     with pytest.raises(WidgetInvalidError):
         CreateSavedWidgetCommand(
             {"widget_type": "metric-tile", "props": {"decimals": "x"}}
         ).validate()
+    authoring.assert_not_called()
     CreateSavedWidgetCommand({"widget_type": "echarts", "props": BAR_PROPS}).validate()
+    authoring.assert_called_once_with(BAR_PROPS)
 
 
 def test_update_requires_owner_or_admin(mocker: MockerFixture) -> None:

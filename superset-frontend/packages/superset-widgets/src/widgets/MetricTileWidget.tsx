@@ -16,19 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState } from 'react';
-import type { dashboard as dashboardApi } from '@apache-superset/core';
 import { styled, useTheme } from '@apache-superset/core/theme';
 import { Flex, Loading, Typography } from '@superset-ui/core/components';
 import { Icons } from '@superset-ui/core/components/Icons';
-import { useWidgetBus, useWidgetBusRevision } from '../bus';
-import { useWidgetDataClient, widgetRef } from '../dataClient';
-import { getActiveResolvedFilters } from '../activeFilters';
 import type { WidgetProps } from '../types';
+import { useWidgetData } from '../useWidgetData';
 
 const TYPE = 'metric-tile';
 
-type DataBindingSpec = dashboardApi.DataBindingSpec;
 type Theme = ReturnType<typeof useTheme>;
 
 interface DeltaSpec {
@@ -91,69 +86,28 @@ function DeltaIndicator({ delta, theme }: { delta: DeltaSpec; theme: Theme }) {
  * like any other widget (see `registry.ts`). Fetches its
  * `dataBinding` the same generic way `ChartWidget`/`AgGridTableWidget` do, and
  * renders the first result row's value directly as text — no ECharts
- * gauge/`graphic` text workaround (what an AI reached for before this widget
- * existed), and no `$bind` splicing, since there's nothing here to splice
- * into: the whole point of this widget is a single live number.
+ * gauge/`graphic` text workaround and no `$bind` splicing, since there is
+ * nothing here to splice into: the whole point of this widget is a single
+ * live number.
  *
  * `dataBinding` is expected to resolve one column (one metric, no
  * `dimensions`) — the value shown is always the *first* row's value for
  * that column; a tile shows one number, so grouping isn't meaningful here
  * the way it is for a chart or table.
  */
-export default function MetricTileWidget({
-  instanceId,
-  props,
-  savedId,
-}: WidgetProps) {
-  // Re-renders on every bus emit, so active filters are recomputed.
-  const bus = useWidgetBus();
-  useWidgetBusRevision(bus);
-  const client = useWidgetDataClient();
+export default function MetricTileWidget(widgetProps: WidgetProps) {
+  const { props } = widgetProps;
   const theme = useTheme();
-  const [value, setValue] = useState<unknown>(undefined);
-  const [columnLabel, setColumnLabel] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const dataBinding = props.dataBinding as DataBindingSpec | undefined;
-  // See `ChartWidget` — same dataset-scoped filter merge, same reason.
-  const activeFilters = dataBinding
-    ? getActiveResolvedFilters(bus, dataBinding.datasetId, instanceId)
-    : [];
-  const bindingKey = JSON.stringify({ dataBinding, activeFilters, savedId });
-
-  useEffect(() => {
-    if (!dataBinding) {
-      setError('This metric tile has no dataBinding.');
-      setLoaded(false);
-      return undefined;
-    }
-    let cancelled = false;
-    setError(null);
-    setLoaded(false);
-    client
-      .fetchData({
-        instanceId,
-        widget: widgetRef(TYPE, props, savedId),
-        filters: activeFilters,
-      })
-      .then(result => {
-        if (cancelled) return;
-        const [column] = result.columns;
-        setColumnLabel(column ?? null);
-        setValue(column ? result.rows[0]?.[column] : undefined);
-        setLoaded(true);
-      })
-      .catch(e => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-    // activeFilters is a fresh array every render — bindingKey is its
-    // stable, value-equality-comparable proxy.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bindingKey]);
+  const { result, error, loading } = useWidgetData(
+    TYPE,
+    widgetProps,
+    'This metric tile has no dataBinding.',
+  );
+  // One number: the first row's value for the first column.
+  const [column] = result?.columns ?? [];
+  const columnLabel = column ?? null;
+  const value = column ? result?.rows[0]?.[column] : undefined;
+  const loaded = !loading && result !== undefined;
 
   const decimals = (props.decimals as number | undefined) ?? 0;
   const prefix = (props.prefix as string | undefined) ?? '';

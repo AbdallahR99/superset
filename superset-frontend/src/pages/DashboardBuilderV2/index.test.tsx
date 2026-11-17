@@ -33,12 +33,10 @@ const renderPage = () =>
 test('a blank dashboard can still be reached', async () => {
   renderPage();
 
-  // The canvas is no longer chat-only: a palette sits beside it, so the
-  // empty state names both ways in.
+  // A palette sits beside the canvas, and the empty state names both ways
+  // of using it.
   expect(
-    screen.getByText(
-      'Drag a widget from the panel, or ask the assistant for one.',
-    ),
+    screen.getByText('Drag a widget from the panel, or click one to place it.'),
   ).toBeInTheDocument();
 
   await userEvent.click(screen.getByTestId('empty-canvas'));

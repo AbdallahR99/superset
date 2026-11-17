@@ -38,8 +38,11 @@ export type {
   WidgetBus,
   WidgetComponent,
   WidgetDataClient,
+  WidgetDataRequest,
   WidgetEvent,
   WidgetProps,
   WidgetRef,
+  WidgetRequestOptions,
+  WidgetValuesRequest,
 } from '@apache-superset/core/widgets';
 export type { Disposable } from '@apache-superset/core/common';

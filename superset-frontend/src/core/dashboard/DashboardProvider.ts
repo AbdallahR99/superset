@@ -26,6 +26,16 @@ import { DEFAULT_COLUMNS } from './layoutStyle';
 import { resolveExplicitCollisions } from './gridPacking';
 import { HOST_SOURCE_PREFIX } from '@apache-superset/core/widgets';
 import type { WidgetBus } from '@apache-superset/core/widgets';
+import {
+  MAX_DOCUMENT_DEPTH,
+  MAX_DOCUMENT_NODES,
+  collectSubtreeIds,
+  depthOf,
+  isInSubtree,
+  sanitizeDocument,
+  subtreeHeight,
+} from './documentTree';
+import type { DocumentIssue } from './documentTree';
 
 type DashboardNode = dashboardApi.DashboardNode;
 type WidgetSpec = dashboardApi.WidgetSpec;
@@ -126,6 +136,14 @@ class DashboardProvider implements WidgetBus {
   private revision = 0;
 
   /**
+   * Counts changes to the document alone. `revision` also ticks for a
+   * selection and for every bus emit, neither of which is something to save;
+   * this is the counter "has anything been edited since it was loaded or
+   * saved" is answered from.
+   */
+  private documentVersion = 0;
+
+  /**
    * Which node the author is working on.
    *
    * Host-internal, exactly like {@link getRevision} and for the same reason:
@@ -173,6 +191,9 @@ class DashboardProvider implements WidgetBus {
 
   public getRevision = (): number => this.revision;
 
+  /** Host-internal. Ticks once per change to the document; see `documentVersion`. */
+  public getDocumentVersion = (): number => this.documentVersion;
+
   public getSelection = (): string | undefined => this.selection;
 
   /**
@@ -200,6 +221,7 @@ class DashboardProvider implements WidgetBus {
     }
     this.nodes = nodes;
     this.revision += 1;
+    this.documentVersion += 1;
     this.layoutChangeEmitter.fire();
     this.stateSubscribers.forEach(fn => fn());
   }
@@ -226,14 +248,35 @@ class DashboardProvider implements WidgetBus {
   public getParentId = (id: string): string | undefined =>
     this.findParentId(id, this.nodes);
 
-  /** True if `targetId` is `nodeId` itself or nested somewhere in its subtree. */
-  private isNodeOrDescendant(nodeId: string, targetId: string): boolean {
-    if (nodeId === targetId) return true;
-    return (
-      this.nodes[nodeId]?.children?.some(childId =>
-        this.isNodeOrDescendant(childId, targetId),
-      ) ?? false
-    );
+  /**
+   * Every node in the subtree under `id`, itself included, parents before
+   * their children. Bounded and cycle-safe (see `documentTree`), so a caller
+   * that needs to walk a subtree does not write a recursion of its own.
+   */
+  public getSubtreeIds = (id: string): string[] =>
+    collectSubtreeIds(this.nodes, id);
+
+  /**
+   * Refuses a change that would take the document past the limits a loaded
+   * one is held to (see `sanitizeDocument`), so the store cannot be grown
+   * into something it would itself refuse to load back.
+   */
+  private assertWithinLimits(
+    parentId: string,
+    addedNodes: number,
+    addedHeight: number,
+  ): void {
+    if (Object.keys(this.nodes).length + addedNodes > MAX_DOCUMENT_NODES) {
+      throw new Error(
+        `[dashboard] A dashboard may hold at most ${MAX_DOCUMENT_NODES} widgets`,
+      );
+    }
+    const parentDepth = depthOf(this.nodes, ROOT_ID, parentId) ?? 0;
+    if (parentDepth + 1 + addedHeight > MAX_DOCUMENT_DEPTH) {
+      throw new Error(
+        `[dashboard] Widgets may nest at most ${MAX_DOCUMENT_DEPTH} levels deep`,
+      );
+    }
   }
 
   private findParentId(
@@ -301,6 +344,8 @@ class DashboardProvider implements WidgetBus {
       );
     }
 
+    this.assertWithinLimits(parentId, 1, 0);
+
     const id = generateNodeId();
     const node: StoredNode = {
       type: spec.type,
@@ -332,11 +377,10 @@ class DashboardProvider implements WidgetBus {
     if (!this.nodes[id]) return;
 
     const nodes = { ...this.nodes };
-    const removeSubtree = (nodeId: string) => {
-      nodes[nodeId]?.children?.forEach(removeSubtree);
-      delete nodes[nodeId];
-    };
-    removeSubtree(id);
+    collectSubtreeIds(this.nodes, id).forEach(nodeId => {
+      // The root survives whatever a malformed subtree claims to contain.
+      if (nodeId !== ROOT_ID) delete nodes[nodeId];
+    });
 
     Object.entries(nodes).forEach(([parentId, parent]) => {
       if (parent.children?.includes(id)) {
@@ -362,11 +406,12 @@ class DashboardProvider implements WidgetBus {
         `[dashboard] Node "${newParentId}" cannot hold children (not a container)`,
       );
     }
-    if (this.isNodeOrDescendant(id, newParentId)) {
+    if (isInSubtree(this.nodes, id, newParentId)) {
       throw new Error(
         `[dashboard] Cannot move node "${id}" into itself or one of its own descendants`,
       );
     }
+    this.assertWithinLimits(newParentId, 0, subtreeHeight(this.nodes, id));
 
     const oldParentId = this.findParentId(id, this.nodes);
 
@@ -482,23 +527,44 @@ class DashboardProvider implements WidgetBus {
   /**
    * Host-internal. Replaces the whole tree with a saved document and drops
    * the previous document's session state (selection, emitted values).
+   *
+   * A document is input (see `documentTree`): it is repaired into a strict
+   * tree before anything renders it, and what had to be repaired is returned
+   * so the caller can say so. One that is too large or too deep is refused
+   * with a `DocumentLimitError` and leaves the current tree untouched.
    */
-  public loadDocument(nodes: Record<string, DocumentNode>): void {
-    if (!nodes[ROOT_ID]) {
-      throw new Error(
-        `[dashboard] A document must contain a "${ROOT_ID}" node`,
-      );
+  public loadDocument(nodes: Record<string, DocumentNode>): DocumentIssue[] {
+    const { nodes: tree, issues } = sanitizeDocument(nodes, ROOT_ID);
+    const root = tree[ROOT_ID];
+    // Everything that places a widget asks the root for its `children`, so a
+    // stored root without the array would be a dashboard nothing can be
+    // added to.
+    if (!Array.isArray(root.children)) {
+      tree[ROOT_ID] = { ...root, children: [] };
     }
-    reserveNodeIds(Object.keys(nodes));
+    reserveNodeIds(Object.keys(tree));
     this.selection = undefined;
     this.eventValues = {};
     this.eventSources.clear();
-    this.commit({ ...nodes });
+    this.commit(tree);
+    return issues;
   }
 
-  /** Host-internal. The tree as a saveable document. */
+  /** Host-internal. Replaces the whole tree with a blank dashboard. */
+  public newDocument(): void {
+    this.loadDocument(createBlankNodes());
+  }
+
+  /**
+   * Host-internal. The tree as a saveable document: exactly the nodes
+   * reachable from the root, so nothing detached is ever written back.
+   */
   public getDocument(): Record<string, DocumentNode> {
-    return { ...this.nodes };
+    const document: Record<string, DocumentNode> = {};
+    collectSubtreeIds(this.nodes, ROOT_ID).forEach(id => {
+      document[id] = this.nodes[id];
+    });
+    return document;
   }
 
   /** Every id that emitted `eventType` and is still a node in the tree, plus host sources. */
@@ -557,6 +623,7 @@ class DashboardProvider implements WidgetBus {
     this.nodes = createBlankNodes();
     this.selection = undefined;
     this.revision = 0;
+    this.documentVersion = 0;
     this.layoutChangeEmitter = createEventEmitter<void>();
     this.stateSubscribers.clear();
     this.eventValues = {};

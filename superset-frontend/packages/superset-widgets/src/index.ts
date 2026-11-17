@@ -61,39 +61,27 @@ export type {
   ExtensionWidgetLoaderOptions,
   ExtensionWidgetState,
 } from './embed/extensionLoader';
-export {
-  adaptExtensionWidget,
-  createExtensionCore,
-} from './embed/extensionHost';
-export type { ExtensionInfo } from './embed/extensionHost';
-export { SupersetArtifactProvider } from './embed/SupersetArtifactProvider';
-export type { SupersetArtifactProviderProps } from './embed/SupersetArtifactProvider';
-export { createSession } from './embed/session';
-export type {
-  MountOptions,
-  MountTarget,
-  MountedWidget,
-  WidgetSession,
-  WidgetSessionOptions,
-} from './embed/session';
-export {
-  MCP_TOOLS,
-  createMcpWidgetClient,
-  extractPayload,
-  getArtifactMcp,
-} from './mcp/client';
-export type {
-  ArtifactMcp,
-  McpStrategy,
-  McpWidgetClientOptions,
-} from './mcp/client';
-export { WidgetMcpError, toWidgetMcpError } from './mcp/errors';
-export type { WidgetMcpErrorCode } from './mcp/errors';
+export { createExtensionHost } from './embed/extensionHost';
+export type { ExtensionHost, ExtensionInfo } from './embed/extensionHost';
 export type {
   ApiFetch,
   ApiFetchOptions,
   HttpWidgetClientOptions,
 } from './embed/httpClient';
+
+// Errors a host can classify and act on
+export {
+  WidgetApiError,
+  WidgetErrorContext,
+  isAbortError,
+  useWidgetErrorReporter,
+} from './errors';
+export type {
+  WidgetErrorInfo,
+  WidgetErrorKind,
+  WidgetErrorPhase,
+  WidgetErrorReporter,
+} from './errors';
 
 // Host contracts (the dashboard builder implements these too)
 export {
@@ -113,11 +101,35 @@ export {
   useWidgetApplySource,
 } from './deferredApply';
 export {
+  WidgetComponentsContext,
   builtInWidgetComponents,
   getWidgetComponent,
   registerWidgetComponent,
   unregisterWidgetComponent,
 } from './registry';
+export { useWidgetData } from './useWidgetData';
+export type { WidgetDataState } from './useWidgetData';
+export {
+  DEFAULT_MAX_TREE_DEPTH,
+  DEFAULT_MAX_TREE_NODES,
+  collectSubtreeIds,
+  findParentId,
+  getAncestorIds,
+  isNodeOrDescendant,
+  sanitizeTree,
+  subtreeDepth,
+  validateTree,
+  walkTree,
+} from './tree';
+export type {
+  NodeLookup,
+  NodeSource,
+  TreeIssue,
+  TreeIssueKind,
+  TreeLimits,
+  TreeNodeLike,
+  TreeVisit,
+} from './tree';
 export {
   getActiveAdhocFilters,
   getActiveResolvedFilters,
@@ -131,6 +143,8 @@ export type {
 } from './filterVocabulary';
 export { describeFetchError, fetchQueryData } from './chartData';
 export { resolveBindings } from './resolveBindings';
+export { sanitizeColumnDefs } from './widgets/AgGridTableWidget';
+export { sanitizeEchartsOption } from './widgets/echartsSafety';
 export type {
   DataBindingSpec,
   DataRow,
@@ -142,7 +156,10 @@ export type {
   WidgetBus,
   WidgetComponent,
   WidgetDataClient,
+  WidgetDataRequest,
   WidgetEvent,
   WidgetProps,
   WidgetRef,
+  WidgetRequestOptions,
+  WidgetValuesRequest,
 } from './types';

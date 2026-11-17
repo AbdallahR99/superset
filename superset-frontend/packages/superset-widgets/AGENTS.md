@@ -1,13 +1,13 @@
 # Embedding Superset widgets — instructions for coding agents
 
-Use this when writing a React app or artifact that shows Superset data with
+Use this when writing a React app that shows Superset data with
 `@apache-superset/widgets`. Prefer it over inferring an API from code.
 
 ## Pick the form
 
 - **Inline** (`<Chart>`, `<MetricTile>`, `<Table>`, `<FilterSelect>`,
-  `<Markdown>`, or `<Widget type props>`): default for artifacts and generated
-  apps. Nothing has to exist in Superset first.
+  `<Markdown>`, or `<Widget type props>`): default for host apps. Nothing has
+  to exist in Superset first.
 - **Saved** (`<Widget id>`): when the user names an existing widget, or wants
   the query fixed and governed in Superset.
 
@@ -20,10 +20,10 @@ is what an extension authoring a widget imports instead.
 
 ## Never invent names or ids
 
-- Dataset ids, column names and saved metric names: MCP `list_datasets`,
-  `get_dataset_info` (or `GET /api/v1/dataset/<id>`).
-- Widget props: MCP `get_widget_control_schema` for the widget type
-  (`echarts`, `metric-tile`, `ag-grid-table`, `filter.select`, `markdown`).
+- Dataset ids, column names and saved metric names:
+  `GET /api/v1/dataset/<id>`.
+- Widget props: `GET /api/v1/widgets/type/<type>/control-schema` for the
+  widget type (`echarts`, `metric-tile`, `ag-grid-table`, `filter.select`, `markdown`).
 - Saved widget ids: `GET /api/v1/widget/`.
 
 If you can't look them up, ask.
@@ -54,9 +54,9 @@ A type like `extensions.acme.widgets.funnel` comes from a Superset extension.
 Render it exactly like a built-in one (`<Widget type props>` or `<Widget id>`);
 the provider loads the extension the first time it appears. Do not try to
 import or bundle the extension yourself. It needs a `supersetDomain` provider,
-so it cannot work in a Claude artifact, and guest-token pages need the
-deployment's `EMBEDDED_EXTENSION_ASSETS_PUBLIC` on. Get its props from MCP
-`get_widget_control_schema` for that type, same as any other widget.
+and guest-token pages need the deployment's `EMBEDDED_EXTENSION_ASSETS_PUBLIC`
+on. Get its props from the widget schema endpoint for that type, same as any
+other widget.
 
 ## Host interaction
 
@@ -65,6 +65,28 @@ const setState = useSupersetFilter('state');
 setState({ datasetId: 17, column: 'state', operator: 'IN', value: ['CA'] }); // null clears
 useWidgetEvent('valueChanged', e => console.log(e.nodeId, e.payload));
 ```
+
+Prefer the provider's declarative props when the host already holds the state:
+
+```tsx
+<SupersetProvider
+  supersetDomain={url}
+  fetchGuestToken={fetchToken}
+  guestTokenKey={user.id} // change it when the token is for someone else
+  filters={{
+    state: { datasetId: 17, column: 'state', operator: 'IN', value: ['CA'] },
+  }}
+  onError={(error, info) => report(error, info)} // never thrown during render
+  direction="rtl" // or locale="ar"; omit to follow the page
+/>
+```
+
+- One provider per Superset deployment and per token identity. Providers share
+  nothing unless given the same `bus` or `client`.
+- `onError` receives `WidgetApiError`s with `kind`: `unauthorized`,
+  `forbidden`, `not_found`, `conflict`, `invalid`, `network`, `config`.
+- Do not pass functions or HTML through widget props: table `columnDefs` keep
+  declarative settings only and markdown is sanitised.
 
 ## Token broker (server-side, required)
 
@@ -102,32 +124,3 @@ origin, headers `Content-Type` and `X-GuestToken` on `/api/*`.
 
 Widgets run in the host's JS context. Use `@superset-ui/embedded-sdk`
 (iframe) when the host must not be trusted with the data.
-
-## Embedding in Claude artifacts
-
-- Artifacts have no network access and no storage: use
-  `SupersetArtifactProvider` (MCP connector transport), never
-  `SupersetProvider` with `supersetDomain`/`fetchGuestToken`, and never a
-  token broker.
-- `server` must be the Superset connector's display name in the viewer's
-  Claude settings. Ask for it; do not guess.
-- Declare the connector in the artifact manifest:
-  `capabilities: {mcp: {servers: [{server, tools}]}}` with exactly the tools
-  the strategy calls (`query_dataset`, or `get_widget_data`,
-  `get_widget_values`, `get_saved_widget`). MCP artifacts cannot be public.
-- Prefer `strategy: "widget-tools"` when the deployment has the widget tools;
-  `query-dataset` supports inline widgets with saved metric names and SIMPLE
-  filters only.
-- Artifacts cannot import npm packages: load `superset-widgets.min.js` with a
-  `<script>` from the published URL (the `build_widget_artifact` MCP prompt
-  carries it when `MCP_WIDGETS_BUNDLE_URL` is set; otherwise ask the user).
-  Never guess the URL or paste the bundle into the page.
-- Drive it through `SupersetWidgets.createSession({server, strategy})`:
-  `mount(element, {type, props} | {id}, {instanceId})`, `setFilter(key,
-filter | null)`, `on("valueChanged", fn)`, `setThemeMode`, `dispose()`.
-  One session per page.
-- In a React artifact, mount into empty `ref` elements inside `useEffect`,
-  dispose on cleanup, and never render children into those elements; the
-  bundle brings its own React.
-- Render each widget's error message as-is: it names the fix (reconnect, add
-  the connector, approve access, retry later).

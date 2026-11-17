@@ -208,7 +208,7 @@ export default function CarouselWidget({
         <FlowContent
           containerId={activeSlideId}
           emptyTitle={t('Nothing on this slide yet')}
-          emptyDescription={t('Ask the assistant to add something here.')}
+          emptyDescription={t('Drag a widget here from the panel.')}
           dataTest={`carousel-slide-${nodeId}`}
         />
       ) : (
@@ -238,7 +238,7 @@ export default function CarouselWidget({
             size="small"
             image="empty.svg"
             title={t('Nothing in this carousel yet')}
-            description={t('Ask the assistant to add a slide.')}
+            description={t('Drag a widget here to start the first slide.')}
           />
         </EmptyArea>
       )}

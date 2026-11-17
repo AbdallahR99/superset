@@ -14,31 +14,37 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
 """MCP tool: list_widget_types"""
 
-from __future__ import annotations
-
 import logging
-from typing import Any, Dict, List
 
+from fastmcp import Context
 from superset_core.mcp.decorators import tool, ToolAnnotations
 
-from superset.mcp_service.widgets.utils import registry
+from superset.extensions import event_logger
+from superset.mcp_service.widgets.schemas import (
+    WidgetToolError,
+    WidgetTypeInfo,
+    WidgetTypeList,
+)
+from superset.mcp_service.widgets.utils import registry, widgets_disabled_error
 
 logger = logging.getLogger(__name__)
 
 
-def _list_widget_types_impl() -> List[Dict[str, Any]]:
+def _list_widget_types_impl() -> WidgetTypeList | WidgetToolError:
     """Pure logic: the registered schema-driven widget types."""
-    return [
-        {
-            "id": cls.widget_type,
-            "name": cls.name,
-            "description": cls.description,
-        }
-        for cls in registry.values()
+    if (disabled := widgets_disabled_error()) is not None:
+        return disabled
+    widget_types = [
+        WidgetTypeInfo(
+            id=cls.widget_type,
+            name=cls.name,
+            description=cls.description or "",
+        )
+        for cls in sorted(registry.values(), key=lambda cls: cls.widget_type)
     ]
+    return WidgetTypeList(widget_types=widget_types, count=len(widget_types))
 
 
 @tool(
@@ -48,15 +54,20 @@ def _list_widget_types_impl() -> List[Dict[str, Any]]:
         title="List dashboard widget types",
         readOnlyHint=True,
         destructiveHint=False,
+        openWorldHint=False,
     ),
 )
-def list_widget_types() -> List[Dict[str, Any]]:
+async def list_widget_types(ctx: Context) -> WidgetTypeList | WidgetToolError:
     """List the Dashboard V2 widget types that have a schema-driven control
     panel.
 
-    This is the entry point for progressive disclosure: pick a type's ``id``,
-    then call ``get_widget_control_schema`` for its minimum-viable control schema
-    (call it again with ``paths`` to drill into optional/nested branches).
-    Returns each type's id, human name, and description.
+    Takes no parameters. Pick a type's ``id``, then call
+    ``get_widget_control_schema`` for its minimum-viable control schema.
+    Returns each type's id, human name and description.
     """
-    return _list_widget_types_impl()
+    await ctx.info("Listing widget types")
+    with event_logger.log_context(action="mcp.list_widget_types"):
+        result = _list_widget_types_impl()
+    if isinstance(result, WidgetToolError):
+        await ctx.warning("Widget type listing failed: %s" % (result.error_type,))
+    return result

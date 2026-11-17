@@ -78,6 +78,14 @@ export interface GestureEnd {
 export interface UseGridStackArgs {
   metrics: GridMetrics;
   packed: Record<string, PackedRect>;
+  /**
+   * Whether column 0 is at the right edge. Passed explicitly: GridStack's own
+   * `'auto'` only reads an inline `direction` style on the grid element,
+   * which this app never sets (direction comes from `<html dir>` and the
+   * theme). Read once, when the grid is created; direction is decided for
+   * the page load and does not change under a mounted grid.
+   */
+  rtl?: boolean;
   /** The `draggableCancel`-equivalent selector — regions a press must never start a drag from (the remove button, a nested container, a flow resize grip, a header control). Threaded in rather than hardcoded here, since it's dashboard markup this hook has no other reason to know about. */
   cancelSelector: string;
   onGestureStart?: (kind: 'drag' | 'resize', id: string) => void;
@@ -123,6 +131,7 @@ function readGestureItems(grid: GridStack): GestureEndItem[] {
 export function useGridStack({
   metrics,
   packed,
+  rtl = false,
   cancelSelector,
   onGestureStart,
   onGestureEnd,
@@ -167,6 +176,9 @@ export function useGridStack({
         column: columns,
         cellHeight: rowUnitPx + gap,
         margin: gap / 2,
+        // Positions items from the right edge and mirrors the drag and
+        // resize pointer math to match; see `UseGridStackArgs.rtl`.
+        rtl,
         // Widgets never overlap regardless of `float` — this only turns off
         // the *second*, library-owned compaction pass that would otherwise
         // fight `packChildLayout`'s own auto-placement (already gravity-style,

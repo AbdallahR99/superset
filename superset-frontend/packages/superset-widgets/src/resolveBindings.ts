@@ -133,39 +133,75 @@ function resolveBind(bind: BindMarker['$bind'], ctx: BindContext): unknown {
 // one of these keys is unconditionally wrong, not just wrong in some cases.
 // Left unchecked, this fails deep inside ECharts' own `setOption` as e.g.
 // "valueFormatter is not a function," with nothing pointing back at the
-// AI-authored option key that caused it.
+// authored option key that caused it.
 const FUNCTION_ONLY_KEYS = new Set(['valueFormatter', 'labelLayout']);
 
-function resolveValue(value: unknown, ctx: BindContext): unknown {
+/**
+ * Deeper than any real ECharts option nests. An option is authored data, so a
+ * pathological one must fail as this widget's error instead of exhausting the
+ * call stack of the page that renders it.
+ */
+export const MAX_OPTION_DEPTH = 64;
+
+/** One level of an option; `resolveChild` resolves whatever it holds. */
+function resolveContainer(
+  value: object,
+  ctx: BindContext,
+  resolveChild: (child: unknown) => unknown,
+): unknown {
   if (Array.isArray(value)) {
-    return value.map(item => resolveValue(item, ctx));
+    return value.map(item => resolveChild(item));
   }
   if (isBindMarker(value)) {
     return resolveBind(value.$bind, ctx);
   }
-  if (value !== null && typeof value === 'object') {
-    if (looksLikeUnwrappedBind(value as Record<string, unknown>)) {
-      throw new Error(
-        `Found a $bind object without its "$bind" wrapper: ${JSON.stringify(value)} — ` +
-          `did you mean {"$bind": ${JSON.stringify(value)}}?`,
-      );
-    }
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, v]) => {
-        if (FUNCTION_ONLY_KEYS.has(key)) {
-          throw new Error(
-            `"${key}" must be a JavaScript function in ECharts, which a JSON-authored ` +
-              'option can never provide. Remove it and use a string-template field ' +
-              'instead where one exists (e.g. "formatter" on tooltip/axisLabel/label, ' +
-              'not "valueFormatter" — a string like "{b}: ${c}" works directly on ' +
-              '"formatter").',
-          );
-        }
-        return [key, resolveValue(v, ctx)];
-      }),
+  if (looksLikeUnwrappedBind(value as Record<string, unknown>)) {
+    throw new Error(
+      `Found a $bind object without its "$bind" wrapper: ${JSON.stringify(value)} — ` +
+        `did you mean {"$bind": ${JSON.stringify(value)}}?`,
     );
   }
-  return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, v]) => {
+      if (FUNCTION_ONLY_KEYS.has(key)) {
+        throw new Error(
+          `"${key}" must be a JavaScript function in ECharts, which a JSON-authored ` +
+            'option can never provide. Remove it and use a string-template field ' +
+            'instead where one exists (e.g. "formatter" on tooltip/axisLabel/label, ' +
+            'not "valueFormatter" — a string like "{b}: ${c}" works directly on ' +
+            '"formatter").',
+        );
+      }
+      return [key, resolveChild(v)];
+    }),
+  );
+}
+
+function resolveValue(
+  value: unknown,
+  ctx: BindContext,
+  depth: number,
+  ancestors: Set<object>,
+): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (depth > MAX_OPTION_DEPTH) {
+    throw new Error(
+      `echartsOptions is nested more than ${MAX_OPTION_DEPTH} levels deep.`,
+    );
+  }
+  // An option built in code (a host passing props, not JSON) can reference
+  // itself; following that reference would never end.
+  if (ancestors.has(value)) {
+    throw new Error('echartsOptions contains a circular reference.');
+  }
+  ancestors.add(value);
+  try {
+    return resolveContainer(value, ctx, child =>
+      resolveValue(child, ctx, depth + 1, ancestors),
+    );
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 /**
@@ -173,12 +209,15 @@ function resolveValue(value: unknown, ctx: BindContext): unknown {
  * `{"$bind": {...}}` marker with the real value it references — query
  * results or a theme token (decision 12 of the design doc's unified `$bind`
  * construct). Everything else in the tree passes through unchanged, so an
- * AI-authored option can mix literal ECharts config with bound values
+ * authored option can mix literal ECharts config with bound values
  * anywhere a literal would otherwise go.
  */
 export function resolveBindings(
   echartsOptions: Record<string, unknown>,
   ctx: BindContext,
 ): Record<string, unknown> {
-  return resolveValue(echartsOptions, ctx) as Record<string, unknown>;
+  return resolveValue(echartsOptions, ctx, 0, new Set()) as Record<
+    string,
+    unknown
+  >;
 }

@@ -18,19 +18,27 @@
  */
 import {
   Component,
+  useContext,
   useEffect,
   useId,
+  useMemo,
   useState,
   type CSSProperties,
   type ErrorInfo,
   type ReactNode,
 } from 'react';
 import { dashboard as dashboardApi } from '@apache-superset/core';
+import { useDirection } from '@apache-superset/core/theme';
 import { Flex, Loading, Typography } from '@superset-ui/core/components';
 import { useWidgetBus } from '../bus';
 import { useWidgetDataClient } from '../dataClient';
-import { getWidgetComponent } from '../registry';
-import type { DataBindingSpec, SavedWidget } from '../types';
+import {
+  toError,
+  useWidgetErrorReporter,
+  type WidgetErrorInfo,
+} from '../errors';
+import { WidgetComponentsContext, getWidgetComponent } from '../registry';
+import type { DataBindingSpec, SavedWidget, WidgetDataClient } from '../types';
 import { useExtensionWidget } from './extensionLoader';
 
 export interface CommonWidgetProps {
@@ -73,9 +81,6 @@ function widgetTitle(
     : undefined;
 }
 
-const toError = (error: unknown): Error =>
-  error instanceof Error ? error : new Error(String(error));
-
 function DefaultError({ error }: { error: Error }) {
   return (
     <Flex
@@ -89,7 +94,11 @@ function DefaultError({ error }: { error: Error }) {
 }
 
 class WidgetErrorBoundary extends Component<
-  { renderError?: (error: Error) => ReactNode; children: ReactNode },
+  {
+    renderError?: (error: Error) => ReactNode;
+    onError: (error: Error) => void;
+    children: ReactNode;
+  },
   { error?: Error }
 > {
   state: { error?: Error } = {};
@@ -101,6 +110,7 @@ class WidgetErrorBoundary extends Component<
   componentDidCatch(error: Error, info: ErrorInfo) {
     // eslint-disable-next-line no-console
     console.error('[superset-widgets]', error, info.componentStack);
+    this.props.onError(toError(error));
   }
 
   render() {
@@ -112,10 +122,22 @@ class WidgetErrorBoundary extends Component<
   }
 }
 
+interface LoadedDefinition {
+  client: WidgetDataClient;
+  id: string;
+  widget?: SavedWidget;
+  error?: Error;
+}
+
 /**
  * One Superset widget, rendered in place: either an inline definition
  * (`type` + `props`) or a widget saved in Superset (`id`). Must be inside a
  * `SupersetProvider`.
+ *
+ * Nothing here throws while rendering: a definition that cannot be loaded, a
+ * type nobody draws and a widget that fails are each shown in the widget's
+ * own box (or through `renderError`) and reported to the provider's
+ * `onError`.
  */
 export function Widget(widgetProps: WidgetElementProps) {
   const {
@@ -127,40 +149,64 @@ export function Widget(widgetProps: WidgetElementProps) {
     showTitle = true,
     id,
   } = widgetProps;
-  const generatedId = useId();
-  const busId = instanceId ?? `widget${generatedId}`;
+  const reactId = useId();
   const bus = useWidgetBus();
   const client = useWidgetDataClient();
-  const [saved, setSaved] = useState<SavedWidget>();
-  const [loadError, setLoadError] = useState<Error>();
+  const reportError = useWidgetErrorReporter();
+  const providerComponents = useContext(WidgetComponentsContext);
+  const direction = useDirection();
+  // `useId` repeats across React roots, so two roots sharing one bus would
+  // emit under the same id and hide each other's filters. A bus that hands
+  // out ids is asked for one instead, kept for as long as the bus is.
+  const allocatedId = useMemo(() => bus.createSourceId?.(), [bus]);
+  const busId = instanceId ?? allocatedId ?? `widget${reactId}`;
+  const [loaded, setLoaded] = useState<LoadedDefinition>();
 
   useEffect(() => {
     if (!id) return undefined;
-    let cancelled = false;
-    setSaved(undefined);
-    setLoadError(undefined);
+    const fail = (error: Error) => {
+      setLoaded({ client, id, error });
+      reportError(error, {
+        phase: 'definition',
+        instanceId: busId,
+        savedId: id,
+      });
+    };
     if (!client.getSavedWidget) {
-      setLoadError(new Error('This data client cannot load saved widgets.'));
+      fail(new Error('This data client cannot load saved widgets.'));
       return undefined;
     }
-    client.getSavedWidget(id).then(
+    // Aborted when the id or the client changes and on unmount: the
+    // definition asked for before never replaces the one asked for after.
+    const controller = new AbortController();
+    const { signal } = controller;
+    let pending: Promise<SavedWidget>;
+    try {
+      pending = client.getSavedWidget(id, { signal });
+    } catch (thrown) {
+      pending = Promise.reject(thrown);
+    }
+    pending.then(
       widget => {
-        if (!cancelled) setSaved(widget);
+        if (!signal.aborted) setLoaded({ client, id, widget });
       },
-      error => {
-        if (!cancelled) setLoadError(toError(error));
+      (reason: unknown) => {
+        if (!signal.aborted) fail(toError(reason));
       },
     );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, id]);
+    return () => controller.abort();
+  }, [busId, client, id, reportError]);
 
   // A widget that leaves must not keep filtering the ones that stay.
   useEffect(
     () => () => {
+      if (bus.forget) {
+        bus.forget(busId);
+        return;
+      }
       const value = bus.getValue(busId, dashboardApi.VALUE_CHANGED_EVENT) as
-        { resolved?: unknown } | undefined;
+        | { resolved?: unknown }
+        | undefined;
       if (value?.resolved) {
         bus.emit(busId, dashboardApi.VALUE_CHANGED_EVENT, {
           selection: null,
@@ -171,13 +217,42 @@ export function Widget(widgetProps: WidgetElementProps) {
     [bus, busId],
   );
 
+  // What was loaded counts only for the id and the client on screen.
+  const current =
+    id && loaded && loaded.id === id && loaded.client === client
+      ? loaded
+      : undefined;
+  const saved = current?.widget;
+  const loadError = current?.error;
   const type = id ? saved?.widget_type : widgetProps.type;
   const props = id ? saved?.props : (widgetProps.props ?? {});
-  const registered = type ? getWidgetComponent(type) : undefined;
-  // A type the registry does not have may still belong to an extension, whose
-  // frontend is fetched from Superset the first time one of its widgets renders.
-  const extension = useExtensionWidget(registered ? undefined : type);
+  // A provider's own widget types come first, then the page-wide registry. A
+  // type neither has may still belong to an extension, whose frontend is
+  // fetched from Superset the first time one of its widgets renders.
+  const registered = type
+    ? (providerComponents?.[type] ?? getWidgetComponent(type))
+    : undefined;
+  const extension = useExtensionWidget(registered ? undefined : type, busId);
   const WidgetComponent = registered ?? extension.component;
+  const unknownType =
+    type && props && !WidgetComponent && !extension.loading && !extension.error
+      ? type
+      : undefined;
+  const errorInfo = useMemo<WidgetErrorInfo>(
+    () => ({
+      phase: 'render',
+      instanceId: busId,
+      widgetType: type,
+      savedId: id,
+    }),
+    [busId, type, id],
+  );
+
+  useEffect(() => {
+    if (unknownType) {
+      reportError(new Error(`Unknown widget type "${unknownType}"`), errorInfo);
+    }
+  }, [unknownType, errorInfo, reportError]);
 
   let content: ReactNode;
   if (loadError) {
@@ -193,7 +268,13 @@ export function Widget(widgetProps: WidgetElementProps) {
     content = renderError?.(error) ?? <DefaultError error={error} />;
   } else {
     content = (
-      <WidgetErrorBoundary renderError={renderError}>
+      // Keyed by what is drawn, so an error caught for one definition does
+      // not stay on screen for the next.
+      <WidgetErrorBoundary
+        key={`${type}:${id ?? ''}`}
+        renderError={renderError}
+        onError={error => reportError(error, errorInfo)}
+      >
         <WidgetComponent instanceId={busId} props={props} savedId={id} />
       </WidgetErrorBoundary>
     );
@@ -209,6 +290,9 @@ export function Widget(widgetProps: WidgetElementProps) {
       className={className}
       style={{ position: 'relative', width: '100%', height: '100%', ...style }}
       data-superset-widget={type}
+      // Text follows the provider's direction even in a page that declares
+      // another one (or none).
+      dir={direction}
     >
       {title && (
         <Typography.Text strong ellipsis style={{ flex: 'none' }}>
@@ -260,6 +344,11 @@ export interface MetricTileProps extends CommonWidgetProps {
 
 export interface TableProps extends CommonWidgetProps {
   dataBinding: DataBindingSpec;
+  /**
+   * Declarative column settings only (`field`, `headerName`, `width`,
+   * `pinned`, `hide`, ...). Anything AG Grid would evaluate or call is
+   * dropped; see `sanitizeColumnDefs`.
+   */
   columnDefs?: Record<string, unknown>[];
 }
 
@@ -272,6 +361,7 @@ export interface FilterSelectProps extends CommonWidgetProps {
 }
 
 export interface MarkdownProps extends CommonWidgetProps {
+  /** Markdown source. Raw HTML in it is sanitised before it is rendered. */
   content: string;
 }
 

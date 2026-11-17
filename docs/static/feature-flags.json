@@ -34,6 +34,12 @@
         "description": "Experimental PyArrow engine for CSV parsing (may have issues with dates/nulls)"
       },
       {
+        "name": "DASHBOARD_V2",
+        "default": false,
+        "lifecycle": "development",
+        "description": "Enables the Dashboard V2 builder: its pages, menu entry and the dashboard_v2, widgets and widget REST APIs. When disabled those routes respond with 404 and the frontend hides every entry point."
+      },
+      {
         "name": "DATASET_FOLDERS",
         "default": false,
         "lifecycle": "development",

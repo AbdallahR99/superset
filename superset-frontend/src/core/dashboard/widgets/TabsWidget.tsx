@@ -238,7 +238,7 @@ export default function TabsWidget({
         <FlowContent
           containerId={activeTabId}
           emptyTitle={t('Nothing in this tab yet')}
-          emptyDescription={t('Ask the assistant to add something here.')}
+          emptyDescription={t('Drag a widget here from the panel.')}
           dataTest={`tabs-panes-${nodeId}`}
         />
       )}

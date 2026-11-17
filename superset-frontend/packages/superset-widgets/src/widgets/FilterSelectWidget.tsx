@@ -23,6 +23,7 @@ import { t } from '@apache-superset/core/translation';
 import { useWidgetBus, useWidgetBusRevision } from '../bus';
 import { useWidgetDataClient, widgetRef } from '../dataClient';
 import { useWidgetApplySource } from '../deferredApply';
+import { toError, useWidgetErrorReporter } from '../errors';
 import { FILTER_BAR_APPLY_EVENT } from '../filterVocabulary';
 import type {
   FilterValueChangedPayload,
@@ -41,6 +42,7 @@ function useDistinctColumnValues(
   column: string | undefined,
 ): string[] {
   const client = useWidgetDataClient();
+  const reportError = useWidgetErrorReporter();
   const [values, setValues] = useState<string[]>([]);
   // Props are read when the lookup runs; only what changes the answer
   // re-runs it, so an inline `props` literal does not refetch every render.
@@ -52,24 +54,40 @@ function useDistinctColumnValues(
       setValues([]);
       return undefined;
     }
-    let cancelled = false;
-    client
-      .fetchValues({
+    // Aborted when the column, dataset or client changes and on unmount, so
+    // the options of a previous target never land in this one's list.
+    const controller = new AbortController();
+    const { signal } = controller;
+    setValues([]);
+    let pending: Promise<unknown[]>;
+    try {
+      pending = client.fetchValues({
         instanceId,
         widget: widgetRef(TYPE, propsRef.current, savedId),
-      })
-      .then(result => {
-        if (!cancelled) {
-          setValues(result.filter(v => v != null).map(v => String(v)));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setValues([]);
+        signal,
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, instanceId, savedId, datasetId, column]);
+    } catch (thrown) {
+      pending = Promise.reject(thrown);
+    }
+    pending.then(
+      result => {
+        if (signal.aborted) return;
+        setValues(result.filter(v => v != null).map(v => String(v)));
+      },
+      (reason: unknown) => {
+        if (signal.aborted) return;
+        // The control stays usable with no suggestions; the host hears why.
+        setValues([]);
+        reportError(toError(reason), {
+          phase: 'values',
+          instanceId,
+          widgetType: TYPE,
+          savedId,
+        });
+      },
+    );
+    return () => controller.abort();
+  }, [client, instanceId, savedId, datasetId, column, reportError]);
 
   return values;
 }
@@ -123,9 +141,17 @@ export default function FilterSelectWidget({
     ...(scopeTargets?.length ? { targets: scopeTargets } : {}),
   });
 
+  // Listeners registered once read the payload builder of the latest render,
+  // so a change of column, dataset or scope is never applied from a closure
+  // that predates it.
+  const payloadForRef = useRef(payloadFor);
+  payloadForRef.current = payloadFor;
+
   const [pendingSelection, setPendingSelection] = useState<
     string[] | undefined
   >(undefined);
+  const pendingSelectionRef = useRef(pendingSelection);
+  pendingSelectionRef.current = pendingSelection;
 
   const currentValue = bus.getValue(
     instanceId,
@@ -143,36 +169,27 @@ export default function FilterSelectWidget({
       bus.emit(
         instanceId,
         dashboardApi.VALUE_CHANGED_EVENT,
-        payloadFor(defaultSelection),
+        payloadForRef.current(defaultSelection),
       );
     }
+    // The default applies once per bus identity, not on every edit of it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bus, instanceId]);
 
   useEffect(() => {
     if (!inFilterBar) return undefined;
     const subscription = bus.on(FILTER_BAR_APPLY_EVENT, event => {
-      if (event.nodeId !== applySourceId || pendingSelection === undefined) {
-        return;
-      }
+      const pending = pendingSelectionRef.current;
+      if (event.nodeId !== applySourceId || pending === undefined) return;
       bus.emit(
         instanceId,
         dashboardApi.VALUE_CHANGED_EVENT,
-        payloadFor(pendingSelection),
+        payloadForRef.current(pending),
       );
       setPendingSelection(undefined);
     });
     return () => subscription.dispose();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    bus,
-    inFilterBar,
-    applySourceId,
-    pendingSelection,
-    column,
-    datasetId,
-    instanceId,
-  ]);
+  }, [bus, inFilterBar, applySourceId, instanceId]);
 
   if (!column || datasetId == null) {
     return (
@@ -199,8 +216,8 @@ export default function FilterSelectWidget({
       <Select
         mode="multiple"
         allowClear
-        ariaLabel={`Filter by ${column}`}
-        placeholder={`Filter by ${column}`}
+        ariaLabel={t('Filter by %s', column)}
+        placeholder={t('Filter by %s', column)}
         options={options.map(option => ({ label: option, value: option }))}
         value={value}
         // The container clips overflow, so the dropdown renders at body level.

@@ -52,15 +52,15 @@ import {
 import { LabelLayout } from 'echarts/features';
 import { CanvasRenderer } from 'echarts/renderers';
 import { dashboard as dashboardApi } from '@apache-superset/core';
-import { useTheme } from '@apache-superset/core/theme';
+import { LtrIsolate, useTheme } from '@apache-superset/core/theme';
 import type { QueryFormMetric } from '@superset-ui/core';
 import { Flex, Loading, Typography } from '@superset-ui/core/components';
-import { useWidgetBus, useWidgetBusRevision } from '../bus';
-import { useWidgetDataClient, widgetRef } from '../dataClient';
+import { useWidgetBus } from '../bus';
 import { resolveBindings } from '../resolveBindings';
-import { getActiveResolvedFilters } from '../activeFilters';
 import type { FilterValueChangedPayload } from '../filterVocabulary';
 import type { WidgetProps } from '../types';
+import { useWidgetData } from '../useWidgetData';
+import { sanitizeEchartsOption } from './echartsSafety';
 import {
   applyStructuredEchartsSeries,
   type EchartsChartType,
@@ -74,7 +74,6 @@ import {
 const TYPE = 'echarts';
 
 type DataBindingSpec = dashboardApi.DataBindingSpec;
-type DataRow = dashboardApi.DataRow;
 
 /** The one field of ECharts' own click-event payload this widget reads — a data point's category/name, exactly what a bar/pie/etc. click carries for a categorical series. */
 interface EchartsClickParams {
@@ -89,7 +88,7 @@ interface EchartsClickParams {
 // a ChartPlugin's registration is metadata-only, and the real render module
 // (with its own `use([...])` call) only loads lazily the first time that
 // specific plugin actually renders — which never happens on this page,
-// since it bypasses ChartPlugin/SuperChart entirely. AI-authored options can
+// since it bypasses ChartPlugin/SuperChart entirely. authored options can
 // use any of these series/component types, hence registering broadly rather
 // than guessing which ones this page will need.
 echarts.use([
@@ -244,7 +243,7 @@ function EchartsCanvas({
   }, [width, height]);
 
   useEffect(() => {
-    // notMerge: true — an AI edit can change series/axis shapes drastically
+    // notMerge: true — an edit can change series/axis shapes drastically
     // between calls (e.g. pie -> bar), so stale config from the previous
     // option must not linger.
     chartRef.current?.setOption(option, true);
@@ -259,7 +258,7 @@ function EchartsCanvas({
  * (generic, viz_type-less — see `dataClient.ts`), resolves any `$bind`
  * markers in its `echartsOptions` against the results, and draws the
  * result. No `SuperChart`/`ChartPlugin`/`buildQuery`/`transformProps`
- * involved — the AI authors close to a real ECharts `option` directly.
+ * involved — the author writes close to a real ECharts `option` directly.
  *
  * `props.crossFilter: true` turns a click on a data point into a filter —
  * this widget emitting `dashboard.VALUE_CHANGED_EVENT` on itself, the exact
@@ -272,30 +271,22 @@ function EchartsCanvas({
  * `echarts` widget with `crossFilter` unset behaves exactly as it always
  * has; this is additive, not a mode switch.
  */
-export default function ChartWidget({
-  instanceId,
-  props,
-  savedId,
-}: WidgetProps) {
-  // Re-renders on every bus emit, so active filters are recomputed.
+export default function ChartWidget(widgetProps: WidgetProps) {
+  const { instanceId, props } = widgetProps;
   const bus = useWidgetBus();
-  useWidgetBusRevision(bus);
-  const client = useWidgetDataClient();
   const theme = useTheme();
   const [containerRef, size] = useElementSize();
-  const [rows, setRows] = useState<DataRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Fetches for the binding and the filters that apply to this widget, and
+  // re-renders it on every bus emit (see `useWidgetData`).
+  const data = useWidgetData(
+    TYPE,
+    widgetProps,
+    'This chart widget has no dataBinding.',
+  );
+  const rows = data.result?.rows ?? null;
+  const { error } = data;
 
   const dataBinding = props.dataBinding as DataBindingSpec | undefined;
-  // A query-bound widget doesn't subscribe to individual filter nodes — it
-  // recomputes which filters currently apply to it (scoped by dataset
-  // match, see `activeFilters.ts`) every time this component
-  // re-renders, and merges them in the same way its own authored filters
-  // already flow into `dataBinding.filters`.
-  const activeFilters = dataBinding
-    ? getActiveResolvedFilters(bus, dataBinding.datasetId, instanceId)
-    : [];
-  const bindingKey = JSON.stringify({ dataBinding, activeFilters, savedId });
 
   // Cross-filtering: opt-in (see `props.crossFilter`) and, for this
   // prototype, scoped to the *first* dimension only — a data point from a
@@ -342,39 +333,11 @@ export default function ChartWidget({
     );
   };
 
-  useEffect(() => {
-    if (!dataBinding) {
-      setError('This chart widget has no dataBinding.');
-      setRows(null);
-      return undefined;
-    }
-    let cancelled = false;
-    setError(null);
-    setRows(null);
-    client
-      .fetchData({
-        instanceId,
-        widget: widgetRef(TYPE, props, savedId),
-        filters: activeFilters,
-      })
-      .then(result => {
-        if (!cancelled) setRows(result.rows);
-      })
-      .catch(e => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-    // activeFilters is a fresh array every render — bindingKey is its
-    // stable, value-equality-comparable proxy.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bindingKey]);
-
   const chartType = props.chartType as EchartsChartType | null | undefined;
   const customizeSeries = (
     props.customize as
-      { series?: Record<string, SeriesOverrideValue> } | undefined
+      | { series?: Record<string, SeriesOverrideValue> }
+      | undefined
   )?.series;
   const chrome = props.chrome as EchartsChromeValue | undefined;
 
@@ -401,7 +364,8 @@ export default function ChartWidget({
     // that sits where every other widget's name sits.
     const withoutTitle = { ...withStructuredChrome };
     delete withoutTitle.title;
-    return withDefaultGrid(withoutTitle);
+    // Last, on the finished option: nothing after this adds authored values.
+    return sanitizeEchartsOption(withDefaultGrid(withoutTitle));
   }, [
     props.echartsOptions,
     chartType,
@@ -479,12 +443,16 @@ export default function ChartWidget({
         </Flex>
       )}
       {!error && option && size.width > 0 && size.height > 0 && (
-        <EchartsCanvas
-          width={size.width}
-          height={size.height}
-          option={option}
-          onPointClick={handlePointClick}
-        />
+        // A chart is drawn left to right in every locale, as in the rest of
+        // Superset: axes, legends and tooltips keep their physical layout.
+        <LtrIsolate>
+          <EchartsCanvas
+            width={size.width}
+            height={size.height}
+            option={option}
+            onPointClick={handlePointClick}
+          />
+        </LtrIsolate>
       )}
     </div>
   );

@@ -16,8 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState } from 'react';
-import type { dashboard as dashboardApi } from '@apache-superset/core';
+import { useMemo } from 'react';
 import {
   Flex,
   Loading,
@@ -25,93 +24,107 @@ import {
   Typography,
 } from '@superset-ui/core/components';
 import type { ColDef } from '@superset-ui/core/components/ThemedAgGridReact';
-import { useWidgetBus, useWidgetBusRevision } from '../bus';
-import { useWidgetDataClient, widgetRef } from '../dataClient';
-import { getActiveResolvedFilters } from '../activeFilters';
 import type { WidgetProps } from '../types';
+import { useWidgetData } from '../useWidgetData';
 
 const TYPE = 'ag-grid-table';
 
-type DataBindingSpec = dashboardApi.DataBindingSpec;
-type DataRow = dashboardApi.DataRow;
-
 // No module registration needed here, unlike `ChartWidget`'s own
-// `echarts.use([...])` call — `setupAGGridModules()` already runs
-// unconditionally at app bootstrap (see `src/views/App.tsx`), well before
-// this (or any other) AG Grid consumer ever renders.
+// `echarts.use([...])` call — `setupAGGridModules()` runs once before any
+// grid renders: at app bootstrap in Superset (see `src/views/App.tsx`), and
+// from `SupersetProvider` in a host page.
 
 function deriveColumnDefs(columns: string[]): ColDef[] {
   return columns.map(field => ({ field, headerName: field }));
 }
 
 /**
- * The built-in `ag-grid-table` widget — registered like any other
- * widget (see `registry.ts`). Fetches its `dataBinding`
- * (generic, viz_type-less — see `dataClient.ts`) the same way `ChartWidget`
- * does, then hands the rows straight to AG Grid via the already-themed
- * `ThemedAgGridReact` wrapper. Unlike `echarts`, a table's `rowData`/
- * `columnDefs` map directly onto query results with no `$bind`-style
- * splicing needed — `columnDefs` can optionally be authored explicitly
- * (e.g. for custom headers, formatting, or widths), but when omitted,
- * columns are derived one-to-one from the query's own result columns.
+ * The column settings an authored `columnDefs` entry may carry, by the type
+ * each must have. A column definition is data — stored with a saved widget or
+ * passed by a host — but AG Grid compiles string "expressions" in fields such
+ * as `valueGetter`, `valueFormatter` and `cellClassRules` into functions and
+ * runs them. Only declarative settings are let through, so a definition
+ * written by one user can never run script in the page of another.
  */
-export default function AgGridTableWidget({
-  instanceId,
-  props,
-  savedId,
-}: WidgetProps) {
-  // Re-renders on every bus emit, so active filters are recomputed.
-  const bus = useWidgetBus();
-  useWidgetBusRevision(bus);
-  const client = useWidgetDataClient();
-  const [rows, setRows] = useState<DataRow[] | null>(null);
-  const [columns, setColumns] = useState<string[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+const COLUMN_SETTINGS: Readonly<
+  Record<string, 'string' | 'number' | 'boolean'>
+> = {
+  field: 'string',
+  colId: 'string',
+  headerName: 'string',
+  headerTooltip: 'string',
+  type: 'string',
+  cellDataType: 'string',
+  sort: 'string',
+  pinned: 'string',
+  width: 'number',
+  minWidth: 'number',
+  maxWidth: 'number',
+  flex: 'number',
+  sortIndex: 'number',
+  hide: 'boolean',
+  sortable: 'boolean',
+  resizable: 'boolean',
+  filter: 'boolean',
+  wrapText: 'boolean',
+  autoHeight: 'boolean',
+  wrapHeaderText: 'boolean',
+  autoHeaderHeight: 'boolean',
+  suppressMovable: 'boolean',
+  lockPosition: 'boolean',
+};
 
-  const dataBinding = props.dataBinding as DataBindingSpec | undefined;
-  // See `ChartWidget` — same dataset-scoped filter merge, same reason.
-  const activeFilters = dataBinding
-    ? getActiveResolvedFilters(bus, dataBinding.datasetId, instanceId)
-    : [];
-  const bindingKey = JSON.stringify({ dataBinding, activeFilters, savedId });
+const MAX_COLUMNS = 500;
 
-  useEffect(() => {
-    if (!dataBinding) {
-      setError('This table widget has no dataBinding.');
-      setRows(null);
-      setColumns(null);
-      return undefined;
+/** The declarative part of authored column definitions; see {@link COLUMN_SETTINGS}. */
+export function sanitizeColumnDefs(columnDefs: unknown): ColDef[] {
+  if (!Array.isArray(columnDefs)) return [];
+  return columnDefs.slice(0, MAX_COLUMNS).flatMap(entry => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      return [];
     }
-    let cancelled = false;
-    setError(null);
-    setRows(null);
-    setColumns(null);
-    client
-      .fetchData({
-        instanceId,
-        widget: widgetRef(TYPE, props, savedId),
-        filters: activeFilters,
-      })
-      .then(result => {
-        if (!cancelled) {
-          setRows(result.rows);
-          setColumns(result.columns);
-        }
-      })
-      .catch(e => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-    // activeFilters is a fresh array every render — bindingKey is its
-    // stable, value-equality-comparable proxy.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bindingKey]);
+    const authored = entry as Record<string, unknown>;
+    const column: Record<string, string | number | boolean> = {};
+    Object.keys(COLUMN_SETTINGS).forEach(key => {
+      const value = authored[key];
+      if (typeof value === COLUMN_SETTINGS[key]) {
+        column[key] = value as string | number | boolean;
+      }
+    });
+    // A column that names no field shows nothing; schema-driven forms seed
+    // such empty entries.
+    return typeof column.field === 'string' && column.field !== ''
+      ? [column as ColDef]
+      : [];
+  });
+}
 
-  const columnDefs =
-    (props.columnDefs as ColDef[] | undefined) ??
-    (columns ? deriveColumnDefs(columns) : undefined);
+/**
+ * The built-in `ag-grid-table` widget — registered like any other
+ * widget (see `registry.ts`). Fetches its `dataBinding` the same way
+ * `ChartWidget` does (see `useWidgetData`), then hands the rows to AG Grid
+ * through the themed `ThemedAgGridReact` wrapper, which also mirrors the grid
+ * in a right-to-left page. `columnDefs` can optionally be authored (custom
+ * headers, widths, pinning); when omitted, columns are derived one-to-one
+ * from the query's own result columns.
+ */
+export default function AgGridTableWidget(widgetProps: WidgetProps) {
+  const { props } = widgetProps;
+  const { result, error, loading } = useWidgetData(
+    TYPE,
+    widgetProps,
+    'This table widget has no dataBinding.',
+  );
+
+  const authoredKey = JSON.stringify(props.columnDefs ?? null);
+  const columnDefs = useMemo(() => {
+    const authored = sanitizeColumnDefs(props.columnDefs);
+    if (authored.length > 0) return authored;
+    return result ? deriveColumnDefs(result.columns) : undefined;
+    // `authoredKey` is the value of `props.columnDefs`, which is a new array
+    // on every render of an inline widget.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authoredKey, result]);
 
   return (
     <div
@@ -135,7 +148,7 @@ export default function AgGridTableWidget({
           <Typography.Text type="danger">{error}</Typography.Text>
         </Flex>
       )}
-      {!error && !rows && (
+      {!error && loading && (
         <Flex
           align="center"
           justify="center"
@@ -144,8 +157,8 @@ export default function AgGridTableWidget({
           <Loading position="inline-centered" size="s" />
         </Flex>
       )}
-      {!error && rows && columnDefs && (
-        <ThemedAgGridReact rowData={rows} columnDefs={columnDefs} />
+      {!error && result && columnDefs && (
+        <ThemedAgGridReact rowData={result.rows} columnDefs={columnDefs} />
       )}
     </div>
   );
