@@ -237,15 +237,22 @@ class FilterSelect(Widget):
     }
 
     @classmethod
-    def fetch_values(cls, props: dict[str, Any], context: Any) -> list[Any]:
+    def bound_dataset_id(cls, props: dict[str, Any]) -> int | None:
+        """
+        The dataset whose column values the filter lists: its own
+        ``datasetId``, the one ``fetch_values`` queries (see
+        ``superset.widgets.data.widget_dataset_id``).
+        """
         dataset_id = props.get("datasetId")
+        if isinstance(dataset_id, bool) or not isinstance(dataset_id, int):
+            return None
+        return dataset_id
+
+    @classmethod
+    def fetch_values(cls, props: dict[str, Any], context: Any) -> list[Any]:
+        dataset_id = cls.bound_dataset_id(props)
         column = props.get("column")
-        if (
-            isinstance(dataset_id, bool)
-            or not isinstance(dataset_id, int)
-            or not isinstance(column, str)
-            or not column
-        ):
+        if dataset_id is None or not isinstance(column, str) or not column:
             raise WidgetDataError("This filter has no dataset and column.")
         return fetch_column_values(dataset_id, column, context)
 

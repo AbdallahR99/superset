@@ -31,11 +31,39 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 from superset_core.widgets import MetricControl
 
 from superset.widgets.safety import column_defs_problem, echarts_option_problem
+
+
+class WidgetControls(BaseModel):
+    """
+    Base of every built-in control model: a definition names its dataset in
+    one place only, the one its widget type reads.
+
+    Unknown keys are otherwise ignored, so without this rule a definition
+    could carry a second dataset reference (``dataBinding`` on a filter,
+    ``datasetId`` beside a binding) that the widget never queries but a check
+    reading the props without the widget type would take for its dataset.
+    ``foreign_dataset_keys`` lists the references a model does not own; a
+    definition carrying one of them is refused.
+    """
+
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("dataBinding", "datasetId")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_foreign_dataset_keys(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            for key in cls.foreign_dataset_keys:
+                if values.get(key) is not None:
+                    raise ValueError(
+                        f"{key} is not a setting of this widget: its dataset "
+                        "is named in one place only."
+                    )
+        return values
 
 
 class DataBinding(MetricControl):
@@ -85,10 +113,11 @@ class DataBinding(MetricControl):
     )
 
 
-class MetricTileControls(BaseModel):
+class MetricTileControls(WidgetControls):
     """Controls for the ``metric-tile`` widget (a single "big number")."""
 
     model_config = ConfigDict(populate_by_name=True)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId",)
 
     data_binding: DataBinding = Field(
         alias="dataBinding",
@@ -122,10 +151,11 @@ class MetricTileControls(BaseModel):
     )
 
 
-class AgGridTableControls(BaseModel):
+class AgGridTableControls(WidgetControls):
     """Controls for the ``ag-grid-table`` widget (query results as a table)."""
 
     model_config = ConfigDict(populate_by_name=True)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId",)
 
     data_binding: DataBinding = Field(
         alias="dataBinding",
@@ -155,7 +185,7 @@ class AgGridTableControls(BaseModel):
         return value
 
 
-class MarkdownControls(BaseModel):
+class MarkdownControls(WidgetControls):
     """Controls for the ``markdown`` widget (rich text)."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -320,7 +350,7 @@ class EchartsChrome(BaseModel):
     )
 
 
-class EchartsControls(BaseModel):
+class EchartsControls(WidgetControls):
     """Controls for the ``echarts`` widget (a chart from a raw ECharts option).
 
     Not modeled field-by-field: ``echartsOptions`` is a near-raw ECharts
@@ -341,6 +371,7 @@ class EchartsControls(BaseModel):
     """
 
     model_config = ConfigDict(populate_by_name=True)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId",)
 
     data_binding: DataBinding = Field(
         alias="dataBinding",
@@ -444,7 +475,7 @@ class FilterScope(BaseModel):
     )
 
 
-class FilterSelectControls(BaseModel):
+class FilterSelectControls(WidgetControls):
     """Controls for the ``filter.select`` widget (a value/multi-select
     dashboard filter).
 
@@ -456,6 +487,7 @@ class FilterSelectControls(BaseModel):
     """
 
     model_config = ConfigDict(populate_by_name=True)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("dataBinding",)
 
     dataset_id: int = Field(
         alias="datasetId",
@@ -513,7 +545,7 @@ class FilterSelectControls(BaseModel):
     )
 
 
-class FilterBarControls(BaseModel):
+class FilterBarControls(WidgetControls):
     """Controls for the ``filter.bar`` widget — a plain arranging container
     for ``filter.*`` children; it holds no data of its own."""
 

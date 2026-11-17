@@ -117,6 +117,16 @@ def _as_guest(
     mocker.patch.object(sm, "is_editor", return_value=False)
 
 
+def _as_minter(mocker: MockerFixture, sm: SupersetSecurityManager) -> MagicMock:
+    """
+    A signed-in minting principal entitled to read the saved widget. Returns
+    the widget read rule's spy; the rule itself is tested in
+    ``tests/unit_tests/security/test_widget_data_access.py``.
+    """
+    mocker.patch.object(sm, "is_guest_user", return_value=False)
+    return mocker.patch("superset.commands.widget.utils.raise_for_widget_read")
+
+
 def test_widget_context_inline_flag() -> None:
     assert _inline().inline
     assert not _saved().inline
@@ -314,16 +324,18 @@ def test_validate_guest_token_resources_requires_saved_widget(
     find_by_uuid = mocker.patch(
         "superset.daos.saved_widget.SavedWidgetDAO.find_by_uuid", return_value=None
     )
+    readable = _as_minter(mocker, sm)
     resources: Any = [{"type": "widget", "id": WIDGET_UUID}]
     with pytest.raises(ValidationError):
         sm.validate_guest_token_resources(resources)
 
-    # A widget type that queries no data grants none: existing is enough, and
-    # the token records that it is bound to no dataset.
-    find_by_uuid.return_value = MagicMock(
-        widget_type="markdown", props_dict={"content": "# hi"}
-    )
+    # A widget type that queries no data grants no data: the token records
+    # that it is bound to no dataset. The minter must still be a reader of
+    # the widget, since the token hands a guest its definition.
+    note = MagicMock(widget_type="markdown", props_dict={"content": "# hi"})
+    find_by_uuid.return_value = note
     sm.validate_guest_token_resources(resources)
+    readable.assert_called_once_with(note)
     assert resources == [{"type": "widget", "id": WIDGET_UUID, "dataset_id": None}]
     sm.validate_guest_token_resources([])
 
@@ -351,6 +363,7 @@ def test_minting_rejects_a_data_widget_without_a_dataset(
         "superset.daos.saved_widget.SavedWidgetDAO.find_by_uuid",
         return_value=MagicMock(widget_type=widget_type, props_dict=props),
     )
+    _as_minter(mocker, sm)
     mocker.patch.object(sm, "can_access_datasource", return_value=True)
     mocker.patch(
         "superset.daos.datasource.DatasourceDAO.get_datasource",
@@ -380,6 +393,7 @@ def test_minting_records_the_widgets_dataset_and_ignores_a_sent_one(
         "superset.daos.datasource.DatasourceDAO.get_datasource",
         return_value=_datasource(),
     )
+    _as_minter(mocker, sm)
     mocker.patch.object(sm, "can_access_datasource", return_value=True)
     resources: Any = [{"type": "widget", "id": WIDGET_UUID, "dataset_id": 99}]
 

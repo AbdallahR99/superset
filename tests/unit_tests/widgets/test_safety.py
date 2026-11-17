@@ -192,6 +192,61 @@ def test_echarts_option_reports_the_offending_path() -> None:
     assert problem == "echartsOptions.series[1].tooltip.formatter contains HTML markup"
 
 
+@pytest.mark.parametrize(
+    "link",
+    [
+        [{"xAxisIndex": "all"}],
+        [{"xAxisIndex": [0, 1]}, {"yAxisName": "price"}],
+        {"xAxisIndex": "all"},
+        [],
+    ],
+)
+def test_axis_pointer_link_is_a_list_of_axis_references(link: Any) -> None:
+    """
+    ``axisPointer.link`` groups axes whose pointers move together. It shares
+    a name with ``title.link`` but is never opened as a URL, so the link rule
+    does not apply to it.
+    """
+    option = {
+        "axisPointer": {"link": link},
+        "tooltip": {"axisPointer": {"type": "cross", "link": link}},
+        "xAxis": [{"type": "category"}, {"type": "category"}],
+    }
+
+    assert echarts_option_problem(option) is None
+    assert (
+        Echarts.validate_control_values(
+            {"dataBinding": BINDING, "echartsOptions": option}
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        # A string is what a component reading ``link`` as a URL would open.
+        {"axisPointer": {"link": "https://example.com"}},
+        {"axisPointer": {"link": "javascript:alert(1)"}},
+        {"axisPointer": {"link": ["javascript:alert(1)"]}},
+        {"axisPointer": {"link": [{"xAxisIndex": "javascript:alert(1)"}]}},
+        {"axisPointer": {"link": [{"xAxisName": "<img src=x onerror=1>"}]}},
+        {"axisPointer": {"link": [{"onclick": "alert(1)"}]}},
+        # The exemption is for the axis pointer only: every other ``link`` is
+        # still a URL, including one nested below an axis pointer.
+        {"axisPointer": {"label": {"link": [{"xAxisIndex": "all"}]}}},
+        {"title": {"link": [{"xAxisIndex": "all"}]}},
+        {"title": {"link": ["https://example.com"]}},
+        {"series": [{"type": "treemap", "data": [{"link": "data:text/html,x"}]}]},
+        {"axisPointer": {"sublink": [{"xAxisIndex": "all"}]}},
+    ],
+)
+def test_the_axis_pointer_exemption_does_not_loosen_the_link_rule(
+    option: dict[str, Any],
+) -> None:
+    assert echarts_option_problem(option) is not None
+
+
 SAFE_COLUMNS: list[dict[str, Any]] = [
     {
         "field": "state",
@@ -231,6 +286,8 @@ UNSAFE_COLUMNS: dict[str, Any] = {
     "number_as_text": [{"field": "a", "width": "120"}],
     "boolean_as_number": [{"field": "a", "width": True}],
     "text_as_boolean": [{"field": "a", "hide": "true"}],
+    "unknown_column_type": [{"field": "a", "type": "myCustomType"}],
+    "unknown_cell_data_type": [{"field": "a", "cellDataType": "currency"}],
     "unknown_sort": [{"field": "a", "sort": "sideways"}],
     "unknown_pinned": [{"field": "a", "pinned": "top"}],
     "not_an_object": ["field"],

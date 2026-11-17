@@ -21,6 +21,8 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
+from superset_core.widgets import Widget
+
 from superset import security_manager
 from superset.commands.base import BaseCommand
 from superset.commands.widget.exceptions import (
@@ -42,7 +44,7 @@ from superset.models.saved_widget import SavedWidget
 from superset.utils import json
 from superset.utils.core import get_user_id
 from superset.utils.decorators import on_error, transaction
-from superset.widgets.data import props_dataset_id
+from superset.widgets.data import widget_dataset_id
 
 # Bounds of the saved-widget list. A caller that names no page size gets the
 # largest page, so a short list still arrives in one call.
@@ -51,8 +53,14 @@ MAX_LIST_PAGE_SIZE = 100
 MAX_LIST_PAGE = 100000
 
 
-def _props_attributes(props: dict[str, Any]) -> dict[str, Any]:
-    return {"props": json.dumps(props), "dataset_id": props_dataset_id(props)}
+def _props_attributes(
+    widget_cls: type[Widget], props: dict[str, Any]
+) -> dict[str, Any]:
+    """The stored props and the dataset the widget type reads from them."""
+    return {
+        "props": json.dumps(props),
+        "dataset_id": widget_dataset_id(widget_cls, props),
+    }
 
 
 class CreateSavedWidgetCommand(BaseCommand):
@@ -60,25 +68,27 @@ class CreateSavedWidgetCommand(BaseCommand):
 
     def __init__(self, data: dict[str, Any]) -> None:
         self._properties = data.copy()
+        self._widget_cls: type[Widget] | None = None
 
     @transaction(on_error=partial(on_error, reraise=SavedWidgetCreateFailedError))
     def run(self) -> SavedWidget:
         self.validate()
+        assert self._widget_cls is not None
         return SavedWidgetDAO.create(
             attributes={
                 "widget_type": self._properties["widget_type"],
                 "title": self._properties.get("title"),
-                **_props_attributes(self._properties["props"]),
+                **_props_attributes(self._widget_cls, self._properties["props"]),
             }
         )
 
     def validate(self) -> None:
         if security_manager.is_guest_user():
             raise SavedWidgetForbiddenError()
-        validate_widget_props(
+        self._widget_cls = validate_widget_props(
             self._properties.get("widget_type"), self._properties.get("props")
         )
-        raise_for_widget_authoring(self._properties["props"])
+        raise_for_widget_authoring(self._widget_cls, self._properties["props"])
 
 
 class UpdateSavedWidgetCommand(BaseCommand):
@@ -88,6 +98,7 @@ class UpdateSavedWidgetCommand(BaseCommand):
         self._ref = ref
         self._properties = data.copy()
         self._model: SavedWidget | None = None
+        self._widget_cls: type[Widget] | None = None
 
     @transaction(on_error=partial(on_error, reraise=SavedWidgetUpdateFailedError))
     def run(self) -> SavedWidget:
@@ -95,7 +106,10 @@ class UpdateSavedWidgetCommand(BaseCommand):
         assert self._model is not None
         attributes: dict[str, Any] = {}
         if "props" in self._properties:
-            attributes.update(_props_attributes(self._properties["props"]))
+            assert self._widget_cls is not None
+            attributes.update(
+                _props_attributes(self._widget_cls, self._properties["props"])
+            )
         if "title" in self._properties:
             attributes["title"] = self._properties["title"]
         return SavedWidgetDAO.update(self._model, attributes=attributes)
@@ -106,8 +120,10 @@ class UpdateSavedWidgetCommand(BaseCommand):
             raise SavedWidgetNotFoundError(self._ref)
         raise_for_widget_ownership(self._model)
         if "props" in self._properties:
-            validate_widget_props(self._model.widget_type, self._properties["props"])
-            raise_for_widget_authoring(self._properties["props"])
+            self._widget_cls = validate_widget_props(
+                self._model.widget_type, self._properties["props"]
+            )
+            raise_for_widget_authoring(self._widget_cls, self._properties["props"])
 
 
 class DeleteSavedWidgetCommand(BaseCommand):

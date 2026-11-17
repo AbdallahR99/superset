@@ -181,6 +181,10 @@ _DOM_EVENTS = frozenset(
 )
 
 _LINK_KEYS = frozenset({"link", "sublink"})
+# ``axisPointer.link`` shares the name but not the meaning: it is a list of
+# axis references (``{"xAxisIndex": "all"}``) that move their pointers
+# together, and nothing opens it as a URL.
+_AXIS_LINK_PARENT = "axisPointer"
 
 
 def _is_event_handler(key: str) -> bool:
@@ -202,8 +206,30 @@ def _echarts_key_problem(key: Any, path: str, depth: int) -> str | None:
     return None
 
 
-def _echarts_value_problem(key: str, value: Any, path: str) -> str | None:
-    """Rules that depend on the key a value sits under."""
+def _is_axis_link(key: str, parent: str | None) -> bool:
+    return key == "link" and parent == _AXIS_LINK_PARENT
+
+
+def _axis_link_problem(value: Any, path: str) -> str | None:
+    """
+    An ``axisPointer.link`` is a list of axis-reference objects (or one such
+    object). Their contents are checked by the walk like any other JSON; the
+    shape is fixed here so that a string, which a component reading ``link``
+    as a URL would open, cannot sit under this exemption.
+    """
+    groups = value if isinstance(value, list) else [value]
+    if not all(isinstance(group, dict) for group in groups):
+        return f"{path} must be a list of axis references"
+    return None
+
+
+def _echarts_value_problem(
+    key: str, value: Any, path: str, parent: str | None = None
+) -> str | None:
+    """
+    Rules that depend on the key a value sits under, and for ``link`` on the
+    component that holds it (``parent``, the nearest enclosing key).
+    """
     if _is_formatter(key):
         # A template, or the per-unit templates of a time axis.
         templates = list(value.values()) if isinstance(value, dict) else [value]
@@ -211,6 +237,8 @@ def _echarts_value_problem(key: str, value: Any, path: str) -> str | None:
             return f"{path} must be a text template"
         if any(_FUNCTION_SOURCE.search(template) for template in templates):
             return f"{path} must be a text template, not a function"
+    if _is_axis_link(key, parent):
+        return _axis_link_problem(value, path)
     if key in _LINK_KEYS and (
         not isinstance(value, str) or not _SAFE_LINK.match(_URL_NOISE.sub("", value))
     ):
@@ -245,7 +273,8 @@ def echarts_option_problem(option: Any, root: str = "echartsOptions") -> str | N
     code (``graphic``, ``dataView``, ``renderItem``, ``extraCssText``, DOM
     event handlers such as ``onclick``), a ``toolbox`` only names built-in
     canvas features, a ``formatter`` is a text template rather than function
-    source, ``link`` / ``sublink`` are ordinary links, and no string holds
+    source, ``link`` / ``sublink`` are ordinary links (``axisPointer.link``,
+    a list of axis references and not a URL, is the exception), and no string holds
     markup or a script URL (which rules out HTML tooltips and HTML rich text).
     The walk is iterative and bounded in depth and size.
 
@@ -256,9 +285,11 @@ def echarts_option_problem(option: Any, root: str = "echartsOptions") -> str | N
     if not isinstance(option, dict):
         return f"{root} must be an object"
     seen = 0
-    stack: list[tuple[Any, str, int]] = [(option, root, 0)]
+    # Each entry also carries the nearest enclosing key, which a list passes
+    # on to its items, so a rule can tell which component a value belongs to.
+    stack: list[tuple[Any, str, int, str | None]] = [(option, root, 0, None)]
     while stack:
-        value, path, depth = stack.pop()
+        value, path, depth, parent = stack.pop()
         seen += 1
         if seen > MAX_OPTION_NODES:
             return f"{root} holds more than {MAX_OPTION_NODES} values"
@@ -270,7 +301,7 @@ def echarts_option_problem(option: Any, root: str = "echartsOptions") -> str | N
             return f"{root} is nested deeper than {MAX_OPTION_DEPTH} levels"
         if isinstance(value, list):
             stack.extend(
-                (item, f"{path}[{index}]", depth + 1)
+                (item, f"{path}[{index}]", depth + 1, parent)
                 for index, item in enumerate(value)
             )
             continue
@@ -278,10 +309,10 @@ def echarts_option_problem(option: Any, root: str = "echartsOptions") -> str | N
             child_path = f"{path}.{key}"
             if problem := (
                 _echarts_key_problem(key, path, depth)
-                or _echarts_value_problem(key, child, child_path)
+                or _echarts_value_problem(key, child, child_path, parent)
             ):
                 return problem
-            stack.append((child, child_path, depth + 1))
+            stack.append((child, child_path, depth + 1, key))
     return None
 
 
@@ -323,7 +354,15 @@ AG_GRID_COLUMN_SETTINGS: dict[str, type] = {
     "lockPosition": bool,
 }
 
+# Settings that name something accept only the built-in names. A ``type`` or
+# ``cellDataType`` of any other name refers to a definition registered on the
+# grid (``columnTypes`` / ``dataTypeDefinitions``), which a stored widget has
+# no way to supply; the renderer keeps the same names and drops the rest.
 _COLUMN_ENUMS: dict[str, frozenset[str]] = {
+    "type": frozenset({"numericColumn", "rightAligned"}),
+    "cellDataType": frozenset(
+        {"text", "number", "boolean", "date", "dateString", "object"}
+    ),
     "sort": frozenset({"asc", "desc"}),
     "pinned": frozenset({"left", "right"}),
 }

@@ -39,11 +39,10 @@ from superset.commands.widget.utils import load_saved_widget, validate_widget_pr
 from superset.exceptions import QueryObjectValidationError, SupersetSecurityException
 from superset.widgets.data import (
     FilterValidationError,
-    find_sql_in_props,
     get_table,
-    props_dataset_id,
     raise_for_widget_sql,
     validate_guest_inline_props,
+    widget_dataset_id,
     WidgetContext,
     WidgetDataError,
     WidgetDatasetMissingError,
@@ -67,7 +66,7 @@ def resolve_widget(
         return (
             widget_cls,
             props,
-            WidgetContext(props_dataset_id(props), str(saved.uuid)),
+            WidgetContext(widget_dataset_id(widget_cls, props), str(saved.uuid)),
         )
 
     spec = selector.get("widget")
@@ -76,7 +75,7 @@ def resolve_widget(
     inline_props = spec.get("props")
     widget_cls = validate_widget_props(spec.get("type"), inline_props)
     assert isinstance(inline_props, dict)
-    context = WidgetContext(props_dataset_id(inline_props))
+    context = WidgetContext(widget_dataset_id(widget_cls, inline_props))
     if security_manager.is_guest_user():
         # Default deny: a guest may only send an inline definition for a
         # dataset its token grants through an explicit ``dataset`` resource,
@@ -89,10 +88,11 @@ def resolve_widget(
         ):
             raise SavedWidgetForbiddenError()
         validate_guest_inline_props(inline_props, get_table(context.dataset_id))
-    elif find_sql_in_props(inline_props):
+    else:
         # SQL needs the caller's own read access to the dataset, as an ad-hoc
-        # SQL metric does in Explore. Only looked up when the definition does
-        # carry SQL, so a SQL-free request costs no extra dataset read here.
+        # SQL metric does in Explore. Whether a dimension is a column or a SQL
+        # expression is only known against the dataset's own columns, so the
+        # dataset is always the reference.
         raise_for_widget_sql(
             inline_props,
             get_table(context.dataset_id) if context.dataset_id is not None else None,

@@ -33,8 +33,8 @@ from superset.models.saved_widget import SavedWidget
 from superset.utils.core import get_user_id
 from superset.widgets.data import (
     get_table,
-    props_dataset_id,
     raise_for_widget_sql,
+    widget_dataset_id,
     WidgetDataError,
     WidgetSqlNotAllowedError,
 )
@@ -53,14 +53,17 @@ def validate_widget_props(widget_type: Any, props: Any) -> type[Widget]:
     return widget_cls
 
 
-def raise_for_widget_authoring(props: dict[str, Any]) -> None:
+def raise_for_widget_authoring(widget_cls: type[Widget], props: dict[str, Any]) -> None:
     """
     What an author must be entitled to before a definition is stored: read
     access to the dataset it binds, and the right to write SQL when it carries
     any. A saved widget is later served to guests on the strength of its uuid
     alone, so the definition must never reach further than its author could.
+
+    The dataset is the one the widget type reads (``widget_dataset_id``), so
+    the check cannot be pointed at another dataset by a stray key in the props.
     """
-    dataset_id = props_dataset_id(props)
+    dataset_id = widget_dataset_id(widget_cls, props)
     datasource = None
     if dataset_id is not None:
         try:
@@ -94,7 +97,9 @@ def raise_for_widget_read(widget: SavedWidget) -> None:
     user_id = get_user_id()
     if user_id is not None and widget.created_by_fk == user_id:
         return
-    dataset_id = props_dataset_id(widget.props_dict)
+    dataset_id = widget_dataset_id(
+        registry.get(str(widget.widget_type)), widget.props_dict
+    )
     if dataset_id is None:
         raise SavedWidgetForbiddenError()
     try:

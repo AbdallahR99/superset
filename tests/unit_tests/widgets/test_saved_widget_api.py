@@ -364,6 +364,10 @@ def test_minting_for_a_widget_whose_dataset_was_deleted_is_a_validation_error(
         "superset.daos.saved_widget.SavedWidgetDAO.find_by_uuid",
         return_value=_saved_widget(),
     )
+    # An admin minter: the widget read rule lets it through, so the missing
+    # dataset is what the request fails on.
+    mocker.patch.object(security_manager, "is_guest_user", return_value=False)
+    mocker.patch.object(security_manager, "is_admin", return_value=True)
 
     with pytest.raises(ValidationError, match="does not exist"):
         security_manager.validate_guest_token_resources(

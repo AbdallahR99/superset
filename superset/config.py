@@ -3478,6 +3478,12 @@ GUEST_TOKEN_JWT_AUDIENCE: Callable[[], str] | str | None = None
 
 GUEST_TOKEN_VALIDATOR_HOOK = None
 
+# Refuse to mint a guest token with a `widget` or `dataset` resource on a dataset
+# protected by row-level security unless a rule in the token covers that dataset,
+# and refuse a minter who is restricted by row-level security on it. Set to False
+# only when GUEST_TOKEN_VALIDATOR_HOOK enforces an equivalent policy.
+GUEST_TOKEN_WIDGET_RLS_GUARD = True
+
 # Enables coarse-grained, runtime revocation of outstanding guest tokens.
 #
 # When True, every minted guest token carries a revocation version, and tokens

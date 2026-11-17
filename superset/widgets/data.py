@@ -44,13 +44,16 @@ A guest is not the widget's author. The rows a guest reads are narrowed by the
 ``rls`` rules of its token plus the RLS rules that apply to the guest role
 (``GUEST_ROLE_NAME``), never by the author's own role rules. Minting therefore
 refuses a ``widget`` or ``dataset`` resource on an RLS-protected dataset unless
-the token carries a rule covering it or the deployment installs
-``GUEST_TOKEN_VALIDATOR_HOOK`` to decide (see
-``SupersetSecurityManager._raise_for_guest_token_widget_rls``).
+the token carries a rule covering it, and refuses one from a minting principal
+whose own rows of that dataset are narrowed by RLS (see
+``SupersetSecurityManager._raise_for_guest_token_widget_rls``). A deployment
+that decides the row scope of its tokens some other way turns the guard off
+with ``GUEST_TOKEN_WIDGET_RLS_GUARD = False``.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
@@ -112,6 +115,12 @@ SQL_BEARING_KEYS = frozenset(
 
 JINJA_MARKERS = ("{{", "{%", "{#")
 
+# A column reference that cannot be anything but a name: the query layer
+# compiles a dimension that is not a column of the dataset as raw SQL, so a
+# string outside this shape is SQL when the dataset is not at hand to say
+# otherwise.
+_PLAIN_IDENTIFIER = re.compile(r"[^\W\d]\w*")
+
 # Upper bound on the rows a guest's inline definition may ask for.
 GUEST_INLINE_ROW_LIMIT = 10000
 
@@ -165,13 +174,50 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def props_dataset_id(props: Any) -> int | None:
-    """The dataset props read: ``dataBinding.datasetId`` or ``datasetId``."""
+    """
+    The dataset props read when their widget type is not known:
+    ``dataBinding.datasetId`` or ``datasetId``.
+
+    Every check that has the widget type goes through ``widget_dataset_id``
+    instead, which asks the type. This guess is only for a definition whose
+    type is not registered, and for a type that reads data without declaring
+    where its dataset lives.
+    """
     if not isinstance(props, dict):
         return None
     binding = props.get("dataBinding")
     if isinstance(binding, dict):
         return _int_or_none(binding.get("datasetId"))
     return _int_or_none(props.get("datasetId"))
+
+
+def widget_dataset_id(widget_cls: type[Widget] | None, props: Any) -> int | None:
+    """
+    The dataset a definition of ``widget_cls`` reads.
+
+    The widget type is the authority: a type that declares
+    ``bound_dataset_id(props)`` (every built-in that reads data does, with the
+    same lookup its ``fetch_data`` / ``fetch_values`` uses) is asked, a type
+    that reads no data binds none whatever its props hold, and only an
+    unregistered type or one that reads data without declaring its dataset
+    falls back to ``props_dataset_id``. Authoring, minting and read checks all
+    resolve the dataset here, so they are run against the dataset the widget
+    queries.
+
+    :param widget_cls: The registered widget type, when there is one
+    :param props: The widget definition
+    :returns: The dataset id, or ``None`` when the definition binds none
+    """
+    if not isinstance(props, dict):
+        return None
+    if widget_cls is None:
+        return props_dataset_id(props)
+    resolver = getattr(widget_cls, "bound_dataset_id", None)
+    if callable(resolver):
+        return _int_or_none(resolver(props))
+    if not widget_queries_data(widget_cls):
+        return None
+    return props_dataset_id(props)
 
 
 def _is_scalar(value: Any) -> bool:
@@ -370,20 +416,35 @@ def _sql_in_filter(adhoc: Any, path: str) -> str | None:
     return None
 
 
-def _sql_in_binding(binding: dict[str, Any]) -> str | None:
+def _not_a_column(value: Any, columns: set[str] | None) -> bool:
+    """
+    Whether ``value`` may reach the query layer as something other than a
+    column of the dataset. With the dataset's columns at hand only one of them
+    is a name; without them only a plain identifier is taken for one.
+    """
+    if not isinstance(value, str):
+        return True
+    if columns is not None:
+        return value not in columns
+    return _PLAIN_IDENTIFIER.fullmatch(value) is None
+
+
+def _sql_in_binding(binding: dict[str, Any], columns: set[str] | None) -> str | None:
     for index, metric in enumerate(binding.get("metrics") or []):
         if found := _sql_in_metric(metric, f"dataBinding.metrics[{index}]"):
             return found
     for index, dimension in enumerate(binding.get("dimensions") or []):
-        if not isinstance(dimension, str):
-            return f"dataBinding.dimensions[{index}] is not a column name"
+        if _not_a_column(dimension, columns):
+            return f"dataBinding.dimensions[{index}] is not a column of the dataset"
     for index, adhoc in enumerate(binding.get("filters") or []):
         if found := _sql_in_filter(adhoc, f"dataBinding.filters[{index}]"):
             return found
     return _scan_for_sql(binding, "dataBinding")
 
 
-def find_sql_in_props(props: Any) -> str | None:
+def find_sql_in_props(
+    props: Any, datasource: BaseDatasource | None = None
+) -> str | None:
     """
     Describe the first place a widget definition carries SQL or template code,
     or return ``None`` when it is SQL-free.
@@ -393,17 +454,34 @@ def find_sql_in_props(props: Any) -> str | None:
     names, authored filters are SIMPLE ``WHERE`` comparisons on a named column
     with a known operator, and nothing in the binding holds a SQL expression,
     an ``extras.where`` / ``having`` clause or a Jinja marker.
+
+    A dimension is the one place a bare string is SQL: the query layer groups
+    by a string that is not a column of the dataset as a raw SQL expression.
+    So with ``datasource`` given, a dimension (and the ``column`` of a values
+    widget) is a name only when the dataset has that column; without it, only
+    when it is a plain identifier, which is the most that can be said from the
+    text alone. Pass the datasource whenever the answer decides what a
+    principal may store or run.
+
+    :param props: The widget definition
+    :param datasource: The dataset the definition reads, when it is known
+    :returns: A description of the SQL found, or ``None``
     """
     if not isinstance(props, dict):
         return None
+    columns = (
+        {str(name) for name in datasource.column_names}
+        if datasource is not None
+        else None
+    )
     binding = props.get("dataBinding")
-    if isinstance(binding, dict) and (found := _sql_in_binding(binding)):
+    if isinstance(binding, dict) and (found := _sql_in_binding(binding, columns)):
         return found
     column = props.get("column")
     if column is not None and (
-        not isinstance(column, str) or _scan_for_sql(column, "column")
+        _not_a_column(column, columns) or _scan_for_sql(column, "column")
     ):
-        return "column is not a column name"
+        return "column is not a column of the dataset"
     return None
 
 
@@ -432,9 +510,9 @@ def user_may_author_widget_sql(datasource: BaseDatasource | None) -> bool:
 
 def raise_for_widget_sql(props: Any, datasource: BaseDatasource | None) -> None:
     """Reject a SQL-bearing definition from a caller who may not author SQL."""
-    if (found := find_sql_in_props(props)) and not user_may_author_widget_sql(
-        datasource
-    ):
+    if (
+        found := find_sql_in_props(props, datasource)
+    ) and not user_may_author_widget_sql(datasource):
         raise WidgetSqlNotAllowedError(
             f"This widget definition is not allowed for you: {found}."
         )
@@ -510,7 +588,7 @@ def validate_guest_inline_props(
 
     # Membership alone does not rule out an operator the query layer renders
     # from text or a template marker in a comparator; the structural rule does.
-    if found := find_sql_in_props(props):
+    if found := find_sql_in_props(props, datasource):
         raise WidgetSqlNotAllowedError(
             f"Guest widget definitions cannot carry SQL: {found}."
         )
@@ -559,17 +637,23 @@ class DataBindingWidget(Widget):
     """``fetch_data`` for any widget whose props carry a ``dataBinding``."""
 
     @classmethod
+    def bound_dataset_id(cls, props: dict[str, Any]) -> int | None:
+        """The dataset the binding queries (see ``widget_dataset_id``)."""
+        binding = props.get("dataBinding")
+        return (
+            _int_or_none(binding.get("datasetId"))
+            if isinstance(binding, dict)
+            else None
+        )
+
+    @classmethod
     def fetch_data(
         cls,
         props: dict[str, Any],
         filters: list[dict[str, Any]],
         context: Any,
     ) -> dict[str, Any]:
-        dataset_id = (
-            _int_or_none(props["dataBinding"].get("datasetId"))
-            if isinstance(props.get("dataBinding"), dict)
-            else None
-        )
+        dataset_id = cls.bound_dataset_id(props)
         if dataset_id is None:
             raise WidgetDataError("This widget has no data binding.")
         # Authorization keys on the context, so the dataset queried must be the

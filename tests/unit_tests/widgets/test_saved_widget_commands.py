@@ -44,9 +44,11 @@ from superset.exceptions import SupersetSecurityException
 from superset.widgets.data import (
     props_dataset_id,
     validate_guest_inline_props,
+    widget_dataset_id,
     WidgetContext,
     WidgetDataError,
 )
+from superset.widgets.registry import registry
 from superset.widgets.schemas import WidgetDataPostSchema
 
 DATASET_ID = 17
@@ -103,6 +105,97 @@ def test_props_dataset_id(props: Any, expected: int | None) -> None:
     assert props_dataset_id(props) == expected
 
 
+@pytest.mark.parametrize(
+    "widget_type, props, expected",
+    [
+        # A filter reads its own datasetId, whatever else the props hold.
+        ("filter.select", {"dataBinding": {"datasetId": 1}, "datasetId": 2}, 2),
+        ("filter.select", {"dataBinding": {}, "datasetId": 2}, 2),
+        ("filter.select", {"dataBinding": {"datasetId": 1}}, None),
+        # A data-bound widget reads its binding.
+        ("echarts", {"dataBinding": {"datasetId": 1}, "datasetId": 2}, 1),
+        ("metric-tile", {"datasetId": 2}, None),
+        # A type that reads no data binds none.
+        ("markdown", {"content": "x", "datasetId": 2}, None),
+        ("filter.bar", {"dataBinding": {"datasetId": 1}}, None),
+    ],
+)
+def test_the_widget_type_decides_which_dataset_a_definition_reads(
+    widget_type: str, props: dict[str, Any], expected: int | None
+) -> None:
+    """
+    SECURITY.md row "Gamma" (an author needs access to the dataset a widget
+    binds); principal: Gamma author or a custom ``can_grant_guest_token`` role.
+    The dataset every check is run against is the one the widget type queries,
+    so a stray key cannot point the check at another dataset.
+    """
+    assert widget_dataset_id(registry.get(widget_type), props) == expected
+
+
+def test_a_filter_is_authored_against_the_dataset_it_queries(
+    mocker: MockerFixture,
+) -> None:
+    """The check a stray ``dataBinding`` used to move to another dataset."""
+    from superset.commands.widget.utils import raise_for_widget_authoring
+
+    sm = _security(mocker, "superset.commands.widget.utils", guest=False)
+    get_table = mocker.patch(
+        "superset.commands.widget.utils.get_table", return_value=_datasource()
+    )
+    mocker.patch("superset.commands.widget.utils.raise_for_widget_sql")
+    filter_cls = registry.get("filter.select")
+    assert filter_cls is not None
+
+    raise_for_widget_authoring(
+        filter_cls, {"dataBinding": {"datasetId": 1}, "datasetId": 2, "column": "ssn"}
+    )
+
+    get_table.assert_called_once_with(2)
+    sm.raise_for_access.assert_called_once_with(datasource=get_table.return_value)
+
+
+@pytest.mark.parametrize(
+    "widget_type, props",
+    [
+        (
+            "filter.select",
+            {"dataBinding": {"datasetId": 1}, "datasetId": 2, "column": "state"},
+        ),
+        ("filter.select", {"dataBinding": {}, "datasetId": 2, "column": "state"}),
+        ("echarts", {**BAR_PROPS, "echartsOptions": {}, "datasetId": 99}),
+        ("metric-tile", {**BAR_PROPS, "datasetId": DATASET_ID}),
+        ("ag-grid-table", {**BAR_PROPS, "datasetId": 99}),
+        ("markdown", {"content": "x", "datasetId": 99}),
+        ("markdown", {"content": "x", "dataBinding": {"datasetId": 99}}),
+        ("filter.bar", {"dataBinding": {"datasetId": 99}}),
+    ],
+)
+def test_props_naming_a_dataset_the_widget_does_not_read_are_refused(
+    widget_type: str, props: dict[str, Any]
+) -> None:
+    from superset.commands.widget.utils import validate_widget_props
+
+    with pytest.raises(WidgetInvalidError) as excinfo:
+        validate_widget_props(widget_type, props)
+    assert "named in one place only" in str(excinfo.value.errors)
+
+
+@pytest.mark.parametrize(
+    "widget_type, props",
+    [
+        ("filter.select", {"datasetId": 2, "column": "state", "dataBinding": None}),
+        ("echarts", {**BAR_PROPS, "echartsOptions": {}, "datasetId": None}),
+        ("markdown", {"content": "x"}),
+    ],
+)
+def test_props_naming_their_dataset_once_are_accepted(
+    widget_type: str, props: dict[str, Any]
+) -> None:
+    from superset.commands.widget.utils import validate_widget_props
+
+    validate_widget_props(widget_type, props)
+
+
 def test_selector_schema_requires_exactly_one() -> None:
     schema = WidgetDataPostSchema()
     assert schema.load({"id": "x"}) == {"id": "x", "filters": []}
@@ -114,6 +207,7 @@ def test_selector_schema_requires_exactly_one() -> None:
 
 def test_resolve_inline_for_user(mocker: MockerFixture) -> None:
     _security(mocker, "superset.commands.widget.data", guest=False)
+    mocker.patch("superset.commands.widget.data.get_table", return_value=_datasource())
     widget_cls, props, context = resolve_widget(
         {"widget": {"type": "echarts", "props": BAR_PROPS}}
     )
@@ -333,7 +427,7 @@ def test_create_rejects_guests_and_invalid_props(mocker: MockerFixture) -> None:
         ).validate()
     authoring.assert_not_called()
     CreateSavedWidgetCommand({"widget_type": "echarts", "props": BAR_PROPS}).validate()
-    authoring.assert_called_once_with(BAR_PROPS)
+    authoring.assert_called_once_with(registry.get("echarts"), BAR_PROPS)
 
 
 def test_update_requires_owner_or_admin(mocker: MockerFixture) -> None:
