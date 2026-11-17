@@ -737,7 +737,7 @@ def responsive_problems(ctx: Ctx, page: Page, locale: str, seen: dict[Any, Any])
     found: dict[str, str] = {}
     for width, height in ((1024, 800), (390, 844)):
         page.set_viewport_size({"width": width, "height": height})
-        sizes = {}
+        sizes: dict[str, str] = {}
         details: dict[str, Any] = {"scroll_width/client_width": sizes}
         for path in ("/welcome/", "/dashboard/list/", dashboard_path(ctx, "budget")):
             goto(page, path, 2500)
