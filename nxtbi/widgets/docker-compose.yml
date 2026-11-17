@@ -1,0 +1,200 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Isolated runtime for the Widget Framework (Dashboard V2, saved widgets, embedding).
+# Read nxtbi/widgets/README.md first. From the repository root:
+#
+#   docker build --target superset -t nxtbi/superset-fork:widgets .   # the image is not built here
+#   python nxtbi/widgets/scripts/gen_env.py                           # once: nxtbi/widgets/.env
+#   docker compose -f nxtbi/widgets/docker-compose.yml up -d
+#   python nxtbi/widgets/scripts/widgets_e2e.py
+#
+# Web UI  http://localhost:8089     optional: flag-off web http://localhost:8099 (profile
+# "flag-off"), MCP http://localhost:5009/mcp (profile "mcp").
+#
+# This project shares nothing with the main demo (nxtbi/docker-compose.yml, project
+# "nxtbi-superset"): its own project name, image tag, ports, volumes and .env. Every
+# published port is bound to 127.0.0.1. Values come from nxtbi/widgets/.env by
+# interpolation; no secret is written in this file.
+name: nxtbi-widgets
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-superset: &superset
+  image: nxtbi/superset-fork:widgets
+  environment: &superset-env
+    SUPERSET_ENV: production
+    FLASK_DEBUG: "false"
+    DEV_MODE: "false"
+    PYTHONUNBUFFERED: "1"
+    DATABASE_HOST: db
+    DATABASE_PORT: "5432"
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    POSTGRES_DB: superset
+    POSTGRES_USER: superset
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python nxtbi/widgets/scripts/gen_env.py}
+    EXAMPLES_PASSWORD: ${EXAMPLES_PASSWORD:?run python nxtbi/widgets/scripts/gen_env.py}
+    SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?run python nxtbi/widgets/scripts/gen_env.py}
+    GUEST_TOKEN_JWT_SECRET: ${GUEST_TOKEN_JWT_SECRET:?run python nxtbi/widgets/scripts/gen_env.py}
+    MCP_JWT_SECRET: ${MCP_JWT_SECRET:?run python nxtbi/widgets/scripts/gen_env.py}
+    SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL:-http://localhost:8089}
+    MCP_SERVICE_URL: ${MCP_SERVICE_URL:-http://localhost:5009}
+    NXTBI_WIDGETS_AUTH: ${NXTBI_WIDGETS_AUTH:-db}
+    NXTBI_WIDGETS_DASHBOARD_V2: ${NXTBI_WIDGETS_DASHBOARD_V2:-on}
+    NXTBI_WIDGETS_EXTENSIONS: ${NXTBI_WIDGETS_EXTENSIONS:-off}
+    NXTBI_WIDGETS_CORS_ORIGINS: ${NXTBI_WIDGETS_CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
+    NXTBI_WIDGETS_GUEST_DASHBOARD_READ: ${NXTBI_WIDGETS_GUEST_DASHBOARD_READ:-off}
+    # Read only when NXTBI_WIDGETS_AUTH=keycloak (see config/superset_config.py).
+    NXTBI_MAIN_CONFIG: /app/nxtbi-main-config/superset_config.py
+    KEYCLOAK_BROWSER_URL: ${KEYCLOAK_BROWSER_URL:-http://localhost:8180}
+    KEYCLOAK_INTERNAL_URL: ${KEYCLOAK_INTERNAL_URL:-http://host.docker.internal:8180}
+    KEYCLOAK_REALM: ${KEYCLOAK_REALM:-nxtbi}
+    KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-nxtbi-superset}
+    KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+    KEYCLOAK_SCOPE: ${KEYCLOAK_SCOPE:-openid groups}
+    NXTBI_PLATFORM_ADMINS: ${NXTBI_PLATFORM_ADMINS:-}
+  volumes:
+    - ./config:/app/pythonpath:ro
+    - ./bootstrap:/app/nxtbi-widgets/bootstrap:ro
+    # The main demo's configuration, read-only, as the source of the Keycloak settings.
+    - ../config:/app/nxtbi-main-config:ro
+    - superset_home:/app/superset_home
+  # Keycloak, when used, runs on the host loopback, outside this compose project.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  restart: unless-stopped
+  logging: *logging
+
+x-web: &web
+  <<: *superset
+  command: ["/usr/bin/run-server.sh"]
+  depends_on:
+    superset-init: {condition: service_completed_successfully}
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:8088/health"]
+    interval: 15s
+    timeout: 10s
+    start_period: 60s
+    retries: 10
+
+x-web-env: &web-env
+  SUPERSET_PORT: "8088"
+  SERVER_WORKER_AMOUNT: "2"
+  SERVER_THREADS_AMOUNT: "20"
+  GUNICORN_TIMEOUT: "120"
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python nxtbi/widgets/scripts/gen_env.py}
+      EXAMPLES_PASSWORD: ${EXAMPLES_PASSWORD:?run python nxtbi/widgets/scripts/gen_env.py}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-nxtbi-widgets.sh:ro
+    healthcheck:
+      # TCP on purpose: the temporary server that runs the init script only listens on
+      # the unix socket, so this cannot pass before the examples database exists.
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -U $$POSTGRES_USER -d examples -tAc 'select 1' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 30
+    restart: unless-stopped
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
+
+  # One-shot: migrations, admin, roles, the two example datasets the upstream
+  # Playwright specs need, the WidgetGuest role and the row-level-security demo.
+  # Runs on every `up` and converges (see bootstrap/init.sh).
+  superset-init:
+    <<: *superset
+    command: ["bash", "/app/nxtbi-widgets/bootstrap/init.sh"]
+    environment:
+      <<: *superset-env
+      WIDGETS_ADMIN_USERNAME: ${WIDGETS_ADMIN_USERNAME:-admin}
+      WIDGETS_ADMIN_PASSWORD: ${WIDGETS_ADMIN_PASSWORD:?run python nxtbi/widgets/scripts/gen_env.py}
+      WIDGETS_GAMMA_USERNAME: ${WIDGETS_GAMMA_USERNAME:-widgets_gamma}
+      WIDGETS_GAMMA_PASSWORD: ${WIDGETS_GAMMA_PASSWORD:?run python nxtbi/widgets/scripts/gen_env.py}
+      WIDGETS_FORCE_SEED: ${WIDGETS_FORCE_SEED:-no}
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck: {disable: true}
+    restart: "no"
+
+  superset:
+    <<: *web
+    environment:
+      <<: [*superset-env, *web-env]
+    ports:
+      - "127.0.0.1:8089:8088"
+
+  # The same application and metadata database with the DASHBOARD_V2 flag off, to
+  # prove that every gated route answers 404. Started only on request:
+  #   docker compose -f nxtbi/widgets/docker-compose.yml --profile flag-off up -d superset-flag-off
+  superset-flag-off:
+    <<: *web
+    profiles: ["flag-off"]
+    environment:
+      <<: [*superset-env, *web-env]
+      NXTBI_WIDGETS_DASHBOARD_V2: "off"
+      SUPERSET_PUBLIC_URL: ${SUPERSET_FLAG_OFF_URL:-http://localhost:8099}
+      SERVER_WORKER_AMOUNT: "1"
+    ports:
+      - "127.0.0.1:8099:8088"
+
+  # Model Context Protocol server (streamable HTTP at /mcp, bearer token required).
+  #   docker compose -f nxtbi/widgets/docker-compose.yml --profile mcp up -d superset-mcp
+  superset-mcp:
+    <<: *superset
+    profiles: ["mcp"]
+    command: ["superset", "mcp", "run", "--host", "0.0.0.0", "--port", "5009"]
+    ports:
+      - "127.0.0.1:5009:5009"
+    depends_on:
+      superset: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5009/health"]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 10
+
+volumes:
+  db_data:
+  redis_data:
+  superset_home:

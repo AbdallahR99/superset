@@ -1,0 +1,4 @@
+# Secrets and local state of the isolated Widget Framework stack.
+.env
+__pycache__/
+*.pyc
