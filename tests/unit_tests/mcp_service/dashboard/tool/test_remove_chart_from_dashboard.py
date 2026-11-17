@@ -550,8 +550,10 @@ async def test_removal_repairs_truncated_parents_on_surviving_charts(
 @patch("superset.commands.dashboard.update.UpdateDashboardCommand")
 @patch("superset.security_manager.raise_for_editorship")
 @patch("superset.daos.dashboard.DashboardDAO.find_by_id")
+@patch("superset.db.session")
 @pytest.mark.asyncio
 async def test_json_metadata_cleanup(
+    mock_session: Mock,
     mock_find_by_id: Mock,
     mock_raise_for_editorship: Mock,
     mock_update_cmd_cls: Mock,
@@ -579,6 +581,10 @@ async def test_json_metadata_cleanup(
     updated_dashboard = _mock_dashboard(
         id=1, slices=[chart_20], json_metadata=json.dumps(metadata)
     )
+    mock_session.execute.return_value.scalar_one_or_none.return_value = (
+        updated_dashboard.json_metadata
+    )
+    mock_session.execute.return_value.rowcount = 1
     mock_find_by_id.side_effect = [dashboard, updated_dashboard]
     mock_raise_for_editorship.return_value = None
 

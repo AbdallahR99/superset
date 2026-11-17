@@ -111,20 +111,27 @@ def test_classic_update_without_a_document_keeps_the_stored_one(
     assert _metadata(session)["v2_document"] == _stored(3, "kept")
 
 
-def test_classic_update_cannot_roll_back_a_v2_save_made_after_it_loaded(
-    session: Session, v2_dashboard: Any
+@pytest.mark.parametrize("loaded_as_classic", [False, True])
+def test_classic_update_keeps_a_document_written_after_loading(
+    session: Session, v2_dashboard: Any, loaded_as_classic: bool
 ) -> None:
-    """The session loaded revision 3; a Dashboard v2 save then stored revision
-    4. The classic update writes its own keys around the revision-4 document."""
+    """A V2 save or an import stores a document after the session loads the row."""
     from superset.daos.dashboard import DashboardDAO
     from superset.models.dashboard import Dashboard
+
+    if loaded_as_classic:
+        v2_dashboard.json_metadata = json.dumps({"color_scheme": "old"})
+        session.flush()
 
     table = Dashboard.__table__
     newer = json.dumps({"color_scheme": "old", "v2_document": _stored(4, "newer")})
     session.execute(
         table.update().where(table.c.id == V2_ID).values(json_metadata=newer)
     )
-    assert json.loads(v2_dashboard.json_metadata)["v2_document"]["revision"] == 3
+    loaded = json.loads(v2_dashboard.json_metadata)
+    assert loaded.get("v2_document") == (
+        None if loaded_as_classic else _stored(3, "kept")
+    )
 
     DashboardDAO.set_dash_metadata(
         v2_dashboard, {"color_scheme": "new", "v2_document": _stored(3, "kept")}
@@ -170,9 +177,7 @@ def test_classic_update_fails_rather_than_overwrite_when_it_keeps_losing(
     assert _metadata(session)["color_scheme"] == "old"
 
 
-def test_classic_dashboards_are_written_without_extra_queries(
-    mocker: MockerFixture, session: Session
-) -> None:
+def test_classic_dashboard_update_does_not_create_a_document(session: Session) -> None:
     from superset.daos.dashboard import DashboardDAO
     from superset.models.dashboard import Dashboard
 
@@ -180,8 +185,6 @@ def test_classic_dashboards_are_written_without_extra_queries(
     dashboard = Dashboard(id=7, dashboard_title="Classic", slices=[])
     session.add(dashboard)
     session.flush()
-    read = mocker.spy(storage, "read_current_json_metadata")
-
     DashboardDAO.set_dash_metadata(
         dashboard, {"color_scheme": "new", "v2_document": _stored(1, "smuggled")}
     )
@@ -189,7 +192,6 @@ def test_classic_dashboards_are_written_without_extra_queries(
     metadata = json.loads(dashboard.json_metadata)
     assert metadata["color_scheme"] == "new"
     assert "v2_document" not in metadata
-    read.assert_not_called()
 
 
 def test_json_metadata_schema_accepts_and_does_not_judge_a_document() -> None:
@@ -333,8 +335,8 @@ def test_classic_writer_fails_rather_than_overwrite_when_it_keeps_losing(
 
 
 @pytest.mark.parametrize(("write", "expected"), CLASSIC_WRITERS)
-def test_classic_writer_of_a_classic_dashboard_runs_no_extra_queries(
-    mocker: MockerFixture, session: Session, write: Any, expected: tuple[str, Any]
+def test_classic_writer_of_a_classic_dashboard_does_not_create_a_document(
+    session: Session, write: Any, expected: tuple[str, Any]
 ) -> None:
     from superset.models.dashboard import Dashboard
 
@@ -342,12 +344,11 @@ def test_classic_writer_of_a_classic_dashboard_runs_no_extra_queries(
     dashboard = Dashboard(id=7, dashboard_title="Classic", slices=[])
     session.add(dashboard)
     session.flush()
-    read = mocker.spy(storage, "read_current_json_metadata")
-
     write(dashboard)
 
-    assert json.loads(dashboard.json_metadata)[expected[0]] == expected[1]
-    read.assert_not_called()
+    metadata = json.loads(dashboard.json_metadata)
+    assert metadata[expected[0]] == expected[1]
+    assert "v2_document" not in metadata
 
 
 def test_mcp_metadata_overrides_cannot_name_the_document() -> None:
@@ -598,6 +599,8 @@ def test_import_over_a_v2_dashboard_moves_past_the_stored_revision(
 @pytest.mark.parametrize(
     ("document", "message"),
     [
+        ("invalid", "document.nodes must be an object"),
+        ({"nodes": []}, "document.nodes must be an object"),
         (
             {"nodes": {"root": {"type": "grid", "children": ["ghost"]}}},
             "unknown children",
@@ -622,16 +625,24 @@ def test_import_over_a_v2_dashboard_moves_past_the_stored_revision(
         ),
     ],
 )
+@pytest.mark.parametrize("overwrite", [False, True])
 def test_import_of_an_invalid_document_fails(
-    import_session: Session, document: dict[str, Any], message: str
+    import_session: Session, document: Any, message: str, overwrite: bool
 ) -> None:
     from superset.commands.dashboard.importers.v1.utils import import_dashboard
     from superset.models.dashboard import Dashboard
 
-    with pytest.raises(ImportFailedError, match=message):
-        import_dashboard(_import_config(document))
+    if overwrite:
+        existing = import_dashboard(_import_config(_stored(1, "previous")))
+        before = _metadata(import_session, existing.id)
 
-    assert import_session.query(Dashboard).count() == 0
+    with pytest.raises(ImportFailedError, match=message):
+        import_dashboard(_import_config(document), overwrite=overwrite)
+
+    if overwrite:
+        assert _metadata(import_session, existing.id) == before
+    else:
+        assert import_session.query(Dashboard).count() == 0
 
 
 def test_import_without_a_document_is_untouched(import_session: Session) -> None:
@@ -833,25 +844,34 @@ def test_copy_carries_no_document_for_a_caller_who_may_not_read_it(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("document_added_after_load", [False, True])
 def test_legacy_import_drops_a_document_from_the_file_and_keeps_the_stored_one(
-    session: Session, mocker: MockerFixture
+    session: Session, mocker: MockerFixture, document_added_after_load: bool
 ) -> None:
     from superset.commands.dashboard.importers.v0 import import_dashboard
     from superset.models.dashboard import Dashboard
 
     Dashboard.metadata.create_all(session.get_bind())  # pylint: disable=no-member
     mocker.patch("superset.commands.dashboard.importers.v0.migrate_dashboard")
-    session.add(
-        Dashboard(
-            id=V2_ID,
-            dashboard_title="Existing",
-            slices=[],
-            json_metadata=json.dumps(
-                {"remote_id": 555, "v2_document": _stored(3, "kept")}
-            ),
-        )
+    initial_metadata = {"remote_id": 555}
+    persisted_metadata = {**initial_metadata, "v2_document": _stored(3, "kept")}
+    existing = Dashboard(
+        id=V2_ID,
+        dashboard_title="Existing",
+        slices=[],
+        json_metadata=json.dumps(
+            initial_metadata if document_added_after_load else persisted_metadata
+        ),
     )
+    session.add(existing)
     session.flush()
+    if document_added_after_load:
+        table = Dashboard.__table__
+        session.execute(
+            table.update()
+            .where(table.c.id == V2_ID)
+            .values(json_metadata=json.dumps(persisted_metadata))
+        )
 
     def from_file(remote_id: int) -> Dashboard:
         return Dashboard(
