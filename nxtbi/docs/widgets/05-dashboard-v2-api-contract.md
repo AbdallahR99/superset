@@ -25,7 +25,7 @@ The gate is the first of the app's `before_request` hooks: it is inserted ahead 
   "id": 12,
   "uuid": "6f0c...",
   "dashboard_title": "Sales",
-  "changed_on": "2026-01-01T10:00:00",
+  "changed_on": "2026-01-01T10:00:00+00:00", // UTC with an explicit offset
   "revision": 3,                       // integer, see section 4
   "document": {
     "version": 1,
@@ -40,6 +40,7 @@ The gate is the first of the app's `before_request` hooks: it is inserted ahead 
 
 - `revision` travels **beside** `document`, never inside it. A `revision` key sent inside `document` is ignored.
 - `embedded.allowed_domains` is omitted for embedded guests.
+- `changed_on` is the time of the last write in ISO 8601, converted to UTC and sent **with an explicit offset**. The builder still reads a value without a designator as UTC, for answers from a server that predates the offset.
 - Every successful response also carries the revision as a header: `ETag: "3"`. The body field is the one to rely on; reading the header cross-origin needs `ETag` in the CORS `expose_headers`.
 
 ## 3. Endpoints
@@ -73,7 +74,7 @@ There is no V2 delete route: a V2 dashboard is deleted through `DELETE /api/v1/d
 
 - `uuid` is a client-generated UUID that becomes the dashboard's uuid. Generate one per unsaved document and send the same value on every retry of that create.
 - First request: `201`, as without a uuid.
-- A repeat by **the same caller** whose dashboard already exists under that uuid: nothing is written; the answer is `200 {id, result}` with the dashboard **as stored** (its current revision and document, which may be newer than the body that was re-sent). Adopt `id` and `revision` from it exactly as from a 201.
+- A repeat by **the same caller** whose dashboard already exists under that uuid: nothing is written; the answer is `200 {id, result}` with the dashboard **as stored** (its current revision and document, which may be newer than the body that was re-sent). Adopt `id`. Adopt `revision` and continue with an update only when the stored dashboard is still the one this client created (revision 1, or a document this client sent under that uuid); otherwise treat the answer as a conflict and let the author choose between reloading and overwriting, because another session has saved since.
 - The uuid belongs to a dashboard the caller did not create, to one that is not a V2 dashboard, or to one in the trash (soft-deleted, the caller's own included): `422 {message}`. Generate a new uuid.
 - Two creates racing on one uuid: one answers 201, the other 200.
 
@@ -110,6 +111,7 @@ The classic `GET /api/v1/dashboard/<id>` does not return the `v2_document` key i
 ## 4. Revision semantics (optimistic concurrency)
 
 - Create stores revision **1**. Each successful PUT stores `base revision + 1`. A document stored before revisions existed reads as revision **0**.
+- The revision of one dashboard only ever moves forward, and a number is never used for two different documents. The writers other than this API that replace the document (version restore, import with overwrite) store it at `stored revision + 1`, read from the row at the time of their write and written with the same compare-and-swap; none of them removes a document, so the numbering cannot start over (section 6.1). A builder holding a revision from before such a write gets a 409 on its next save.
 - A PUT must name the revision it was based on, in either form:
   - header `If-Match: "3"` (`W/"3"` and a bare `3` are accepted), or
   - body field `"base_revision": 3` (a JSON integer, not a string).
@@ -121,7 +123,10 @@ The classic `GET /api/v1/dashboard/<id>` does not return the `v2_document` key i
   ```
 
   with `ETag: "4"`. The client has to reload (`GET`), merge or discard its changes, and save again on the new revision. A base revision ahead of the stored one is also a 409.
-- The write is a compare-and-swap: `UPDATE dashboards SET json_metadata = :new WHERE id = :id AND json_metadata = :value_read`, and the save succeeds only when that statement matched one row. Of two saves racing from the same base exactly one is stored, on SQLite, PostgreSQL and MySQL alike; a row lock is taken where the database has one, but correctness does not depend on it.
+- The write is a compare-and-swap: `UPDATE dashboards SET json_metadata = :new WHERE id = :id AND json_metadata = :value_read`, and the save succeeds only when that statement matched one row. Of two saves racing from the same base exactly one is stored; a row lock is taken where the database has one, but correctness rests on the comparison being exact, not on the lock.
+  - SQLite and PostgreSQL compare text byte by byte, so the statement is exact as written.
+  - MySQL and MariaDB compare text by the column's collation, which by default ignores case, accents and trailing spaces. There the condition is `CAST(CONVERT(json_metadata USING utf8mb4) AS BINARY) = CAST(CONVERT(:value_read USING utf8mb4) AS BINARY)` (`superset/dashboard_v2/storage.py`, `_unchanged_condition`), a byte comparison independent of the column's and the connection's character set.
+  - **What is verified:** the behaviour of the swap, of the retries and of every writer in section 6.1 is covered by unit tests on SQLite. For MySQL only the SQL text the condition compiles to is tested. The statement has **not been executed against a MySQL or MariaDB server**, and no test runs concurrent sessions on PostgreSQL or MySQL; treat both as unverified until an integration run on those databases exists.
 - The `revision` (and the whole `result`) of a `200`/`201` is produced inside the transaction that stored it; for a PUT it is always `base revision + 1`, never a later writer's revision. A client may treat `result.revision !== base + 1` as a bug.
 - A save the database aborts because of a concurrent transaction (serialization failure, deadlock, lock timeout, `database is locked`) is answered **409** as well. `current_revision` is then the stored revision if it could be read, and is otherwise absent together with the `ETag` header. Handle it like any other 409.
 - Changing the title through this PUT bumps the revision like any other save. Changes made through the classic dashboard API (properties modal: title, slug, owners, colours, ...) never change the revision or the document.
@@ -134,11 +139,11 @@ The classic `GET /api/v1/dashboard/<id>` does not return the `v2_document` key i
 | 200 / 201 | success | `{id?, result}` + `ETag` |
 | 400 | body is not strict JSON (malformed, not an object, duplicate object keys such as two nodes with one id, `NaN`/`Infinity`, nesting deeper than the value-depth limit + 8); schema error (missing `document`/`dashboard_title`, unknown field, non-integer `base_revision`); malformed `If-Match` (`*`, lists, non-numeric); `If-Match` and `base_revision` disagree | `{message}` |
 | 401 | not authenticated | |
-| 403 | no route permission; no access to the dashboard (GET); not an editor (PUT). Editorship is checked before the revision. | `{message}` |
+| 403 | no route permission; no access to the dashboard (GET); not an editor (PUT). Editorship is checked before the revision, the revision before the document, the document before the authoring rule. | `{message}` |
 | 404 | flag off; no such dashboard; the dashboard is not visible to the caller (PUT); the dashboard has no V2 document | `{message}` |
 | 409 | stale or unknown base revision; the save lost a database-level race (section 4) | `{message, current_revision?}` + `ETag` when `current_revision` is present |
 | 413 | request body larger than `DASHBOARD_V2_MAX_DOCUMENT_BYTES` | `{message}` |
-| 422 | the document is invalid (section 6); the `uuid` of a create is taken (section 3.1) | `{message}`; for widget props also `{errors: {<node id>: [{loc, message}]}}` |
+| 422 | the document is invalid (section 6); the caller may not author a data definition the document adds (section 6.2); the `uuid` of a create is taken (section 3.1) | `{message}`; for widget props and refused data definitions also `{errors: {<node id>: [{loc, message}]}}` |
 | 428 | PUT without `If-Match` and without `base_revision` | `{message}` |
 
 ## 6. Document validation (422)
@@ -147,7 +152,7 @@ Applied on every POST and PUT, server-side, with an iterative walk (no recursion
 
 - `document.nodes` is an object; `document.version`, when present, is `1`.
 - A `root` node exists and has a `children` array.
-- Node ids match `^[A-Za-z0-9_-]{1,64}$`.
+- Node ids match `^[A-Za-z0-9_-]{1,64}$` and are none of the reserved names `__proto__`, `constructor`, `prototype`, `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable`, `toLocaleString`, `toString`, `valueOf`, `__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` (the member names of JavaScript's `Object.prototype`, under which a client keeping nodes in a plain object would lose the node). `root` and the ids the builder generates (`node_<n>`, `node_<n>_<suffix>`) are unaffected.
 - Each node is an object with a non-empty string `type` (at most 128 characters). `layout`, `props` and `style`, when present, are objects. Other node keys are dropped.
 - `children`, when present, is an array of distinct ids of existing nodes.
 - The nodes form one tree rooted at `root`: no cycle or self-reference, no node under two parents, no node unreachable from `root`.
@@ -161,7 +166,8 @@ Applied on every POST and PUT, server-side, with an iterative walk (no recursion
   | `extensions.<publisher>.<name>.<type>` without a backend `@widget` | the `ENABLE_EXTENSIONS` flag is on and the extension `<publisher>.<name>` is installed and not refused by `EXTENSION_DENYLIST` / `EXTENSION_VERSION_POLICY` | optional | plain JSON only, within the limits below |
 
   A frontend-only extension widget must therefore register its view under the id `extensions.<publisher>.<name>.<type>`; any other id is unknown to the server.
-- Props of a registry widget are validated **only where present**. A required prop that is simply missing (a freshly placed chart without `dataBinding`, a `dataBinding` without `datasetId`, an empty markdown block, `props` absent or `{}`) is not an error, so an unconfigured widget can be saved. A prop that is present with a wrong type or a value the control model refuses is a 422 with per-node `errors`. Props the control model does not know (`collapsed`, `expandedRowSpan`, `title`, ...) are kept as they are.
+- Props of a registry widget are validated **only where present**. A required prop that is simply missing (a freshly placed chart without `dataBinding`, a `dataBinding` without `datasetId`, an empty markdown block, `props` absent or `{}`) is not an error, so an unconfigured widget can be saved. A prop that is present with a wrong type or a value the control model refuses is a 422 with per-node `errors`. Props the control model does not know (`collapsed`, `expandedRowSpan`, `title`, ...) are kept as they are, with one exception: a built-in widget names its dataset in one place only, the one its type reads. A `dataBinding` on `filter.select`, a top-level `datasetId` on `echarts` / `metric-tile` / `ag-grid-table`, and either of them on `markdown` / `filter.bar` is a 422 (`"... is not a setting of this widget: its dataset is named in one place only."`); `null` is accepted.
+- Free-form JSON of a widget is checked by the control model as well (`03-backend-security.md` section 5.6). Two rules a client is likely to meet: in `echartsOptions`, `link` / `sublink` must be an http(s), mailto or relative link, except `axisPointer.link`, which is a list of axis references; in `columnDefs`, `type` accepts `numericColumn` / `rightAligned` and `cellDataType` accepts `text` / `number` / `boolean` / `date` / `dateString` / `object`, and any other name is a 422.
 - `layout`/`props`/`style` hold plain JSON only: string keys, finite numbers.
 - Limits, each a config key with a default:
 
@@ -169,7 +175,7 @@ Applied on every POST and PUT, server-side, with an iterative walk (no recursion
 |---|---|---|
 | `DASHBOARD_V2_MAX_NODES` | 500 | nodes per document, root included |
 | `DASHBOARD_V2_MAX_DEPTH` | 16 | distance of the deepest node from the root |
-| `DASHBOARD_V2_MAX_DOCUMENT_BYTES` | 1048576 | request body (413) and stored document (422) |
+| `DASHBOARD_V2_MAX_DOCUMENT_BYTES` | 1048576 | request body (413) and document (422), both in UTF-8 bytes: the document is measured as its compact JSON serialisation with non-ASCII text unescaped, so a character costs the same in both checks. (The column itself holds the ASCII-escaped form, which can be larger; the limit is not applied to that.) |
 | `DASHBOARD_V2_MAX_VALUE_DEPTH` | 32 | nesting inside one `layout`/`props`/`style` value |
 
 The four limits are declared in `superset/config.py`. The builder reads the two it enforces itself from the bootstrap payload instead of hardcoding them:
@@ -187,14 +193,34 @@ The Dashboard V2 API is the only writer of the document during normal use.
 
 | Path | What happens to `v2_document` |
 |---|---|
-| Classic `PUT /api/v1/dashboard/<id>` and `POST /api/v1/dashboard/` (properties modal, `json_metadata`) | An incoming `v2_document` key is **ignored**. The stored document and its revision are carried forward unchanged, re-read from the database at write time. No error is raised, so the modal can keep sending back the `json_metadata` it loaded. |
+| Classic `PUT /api/v1/dashboard/<id>` (properties modal, `json_metadata`) | An incoming `v2_document` key is **ignored**. The stored document and its revision are carried forward unchanged, re-read from the database at write time. No error is raised, so the modal can keep sending back the `json_metadata` it loaded. |
+| Classic `POST /api/v1/dashboard/` | An incoming `v2_document` key is **dropped** before anything is stored, by `DashboardPostSchema` and again by `CreateDashboardCommand` for callers that build the properties themselves. The classic create never produces a V2 dashboard. No error is raised. |
 | `PUT /api/v1/dashboard/<id>/filters`, `/chart_customizations`, `/colors` | Same compare-and-swap as the classic update (`DashboardDAO.metadata_keeping_v2_document`): the writer changes its own key and the document is taken from the row at write time, so a V2 save made after the writer loaded the dashboard is kept. A writer that keeps losing the swap fails instead of overwriting. |
 | MCP `update_dashboard`, `generate_dashboard` (`json_metadata_overrides`) | A `v2_document` key in the overrides is refused by the request schema. `update_dashboard` and `remove_chart_from_dashboard` store through the same compare-and-swap. |
-| Copy / "Save as" (`POST /api/v1/dashboard/<id>/copy/`) | The **source's stored** document is copied to the new dashboard at revision 1; a `v2_document` in the request's `json_metadata` is ignored. |
+| Copy / "Save as" (`POST /api/v1/dashboard/<id>/copy/`) | The **source's stored** document is copied to the new dashboard at revision 1; a `v2_document` in the request's `json_metadata` is ignored. The metadata the copy is seeded with never holds the document: it is added once, and only for a caller who passes the read rule of section 3.2 (copying needs editorship, which passes it). |
 | Export | `metadata.v2_document` is part of the exported dashboard YAML only for a caller who may read the document (section 3.2); for anyone else the key is left out and the rest of the dashboard is exported as usual. The CLI export runs as an admin and always includes it. |
 | Restore from the trash (`POST /api/v1/dashboard/<uuid>/restore`) | Rewrites `json_metadata` only to drop filters with missing semantic views; the document is carried through unchanged. The row is invisible to every other writer until the restore commits. |
-| Version restore (dashboard `restore_version` route, flag `VERSION_HISTORY`) | Editors only. Reverts `json_metadata` as a whole, so the document **and its revision** go back to the snapshot's; this path does not validate the document again or move the revision forward. |
-| Import | `metadata.v2_document` goes through the full validation of this section (types, props, limits). An invalid document fails the import. A `revision` inside the file is ignored: a new dashboard gets revision 1, an overwritten V2 dashboard gets its stored revision + 1 (open builders then get a 409 on their next save). |
+| Version restore (dashboard `restore_version` route, flag `VERSION_HISTORY`) | Editors only. The other metadata keys go back to the snapshot's. The snapshot's document is stored like a save of it: validated by the rules in force at the time of the restore (section 6), checked against the authoring rule relative to the stored document (section 6.2), and stamped with the **stored revision + 1**, whatever revision the snapshot held, so every open builder gets a 409 on its next save. A snapshot without a document leaves the stored document and revision as they are. A snapshot whose document no longer validates (a widget type uninstalled since, lowered limits, a tightened safety rule) or brings back a data definition the restoring user may not author is **refused as a whole** with `422 {message}` naming the reason, and the dashboard is left unchanged; restore a different version or fix the dashboard in the builder. |
+| Import | `metadata.v2_document` goes through the full validation of this section (types, props, limits) and, when the import runs as a user, the authoring rule of section 6.2 (an import without a user, such as the CLI or example loading, is trusted). An invalid or refused document fails the import. A `revision` inside the file is ignored: a new dashboard gets revision 1, an overwritten V2 dashboard gets the revision **stored at the time of the write** + 1, written by compare-and-swap (open builders then get a 409 on their next save). A file **without** `metadata.v2_document` (or with `null`) that overwrites a V2 dashboard leaves the stored document and its revision untouched: an import never removes a document, so the dashboard stays a V2 dashboard and its revision numbers never start over. To replace the document, import one. |
+| Legacy import (pre-1.0 JSON format, `superset/commands/dashboard/importers/v0.py`) | The format predates the document: a `v2_document` in the file is dropped, and an overwritten V2 dashboard keeps its stored document and revision (compare-and-swap, as for the classic update). |
+
+### 6.2 Authoring rule for data definitions
+
+A document save is also a save of every widget definition in it, so POST, PUT, import and version restore apply the saved-widget authoring rule (`raise_for_widget_authoring`, `superset/commands/widget/utils.py`; see `03-backend-security.md` section 5) to the data definitions the write **adds**:
+
+- A node is checked when it binds a dataset, as its widget type reads it (`widget_dataset_id`: `props.dataBinding.datasetId`, or `props.datasetId` for `filter.select`), and its definition is not already in the stored document. A definition is the node's `type` together with its `dataBinding`, `datasetId` and `column` props.
+- A checked node needs: the dataset exists, the caller can read it, and, when the definition carries SQL, the caller may author SQL against that dataset.
+- A definition the stored document already holds is **not** checked again, whichever node carries it. An editor without access to a dataset can therefore keep, move, resize, restyle, retitle and duplicate the widgets bound to it and edit everything around them; what they cannot do is point a widget at that dataset, or change its metrics, dimensions, filters or SQL.
+- A create has no stored document, so every binding in it is checked.
+
+A refusal is `422` with the nodes named, in the shape of a widget props error:
+
+```json
+{ "message": "You are not allowed to store some of the widget definitions.",
+  "errors": { "node_4": [ { "loc": ["dataBinding"], "message": "You don't have access to the dataset this widget reads." } ] } }
+```
+
+`loc` is `["dataBinding"]`, or `["datasetId"]` for a node without a `dataBinding` prop. Nothing is written.
 
 ## 7. Frontend checklist
 
@@ -203,7 +229,9 @@ The Dashboard V2 API is the only writer of the document during normal use.
 3. On 409: do not retry blindly. Tell the user, reload, and keep `current_revision` only as information.
 4. On 422 show `message`; if `errors` is present, map each key to its node.
 5. Hide the menu entry and the routes when the `DashboardV2` flag is off; the backend returns 404 regardless.
-6. Send a `uuid` with every create of one unsaved document and treat `200` like `201` (section 3.1).
+6. Send a `uuid` with every create of one unsaved document; a `200` adopts the id, and the revision only under the rule in section 3.1.
 7. A 409 may come without `current_revision` (section 4); do not require the field.
 8. Read the node and depth limits from `bootstrap_data.common.conf` (section 6).
 9. Do not send or expect `v2_document` through the classic dashboard API (section 6.1).
+10. A 422 with `errors` can be an authoring refusal (section 6.2) as well as a props error; show it on the node the same way.
+11. Never generate a reserved node id (section 6).

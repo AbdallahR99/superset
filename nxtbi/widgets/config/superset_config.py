@@ -334,6 +334,16 @@ def nxtbi_widgets_guest_token_validator(body: dict[str, Any]) -> bool:
 
 GUEST_TOKEN_VALIDATOR_HOOK = nxtbi_widgets_guest_token_validator
 
+# Superset's own mint-time check for `widget` and `dataset` resources stays on. It is
+# not switched off by the hook above: the two overlap on purpose (the hook also looks
+# at the `datasets` claim), and the built-in check adds what a hook cannot see from
+# the request body alone: RLS on the tables a virtual dataset reads, and a minting
+# account that is itself restricted by RLS on the dataset, which is refused. The
+# service account that mints tokens must therefore read every row of the datasets it
+# grants (no RLS rule applies to its roles) or be an admin. Only a deployment that
+# decides the row scope of its tokens entirely in its own hook sets this to False.
+GUEST_TOKEN_WIDGET_RLS_GUARD = True
+
 # CORS for host applications that render widgets (the standalone React example runs on
 # http://localhost:5173). The origins and exposed headers of Superset's own default are
 # repeated, because setting CORS_OPTIONS replaces that default as a whole.

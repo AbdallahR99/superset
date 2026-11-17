@@ -25,11 +25,18 @@
 #   bash nxtbi/widgets/scripts/run_upstream_playwright.sh -- --grep "conflict"
 #   HEADED=1 bash nxtbi/widgets/scripts/run_upstream_playwright.sh           # watch the browser
 #
-# How the upstream suite takes its target and login:
-#   playwright.config.ts          PLAYWRIGHT_BASE_URL (default http://localhost:8088)
-#   playwright/global-setup.ts    PLAYWRIGHT_ADMIN_USERNAME / PLAYWRIGHT_ADMIN_PASSWORD,
+# How the suite takes its target and login:
+#   playwright.widgets.config.ts  the upstream playwright.config.ts with absolute paths
+#                                 and this stack's sign-in; PLAYWRIGHT_BASE_URL
+#   playwright.widgets.global-setup.ts
+#                                 PLAYWRIGHT_ADMIN_USERNAME / PLAYWRIGHT_ADMIN_PASSWORD,
 #                                 signs in through the login form once and stores the
 #                                 session in playwright/.auth/user.json (git-ignored)
+# The upstream global setup is not used: it recognises a finished login by a cookie
+# named "session", and this stack names its session cookie differently
+# (SESSION_COOKIE_NAME in nxtbi/widgets/config/superset_config.py), so it times out
+# on a login that succeeded. The stack's own setup reads the name from
+# PLAYWRIGHT_SESSION_COOKIE_NAME, which this script takes from that configuration.
 # The base URL and the admin credentials come from nxtbi/widgets/.env; the password is
 # handed to Playwright through the environment and never printed. The login form
 # exists only with NXTBI_WIDGETS_AUTH=db.
@@ -73,6 +80,10 @@ if [ "$(env_value NXTBI_WIDGETS_AUTH)" = "keycloak" ]; then
   exit 2
 fi
 
+# The name the stack gives its session cookie, read from its configuration.
+SESSION_COOKIE_NAME="$(sed -n 's/^SESSION_COOKIE_NAME *= *"\([^"]*\)".*/\1/p' \
+  "$WIDGETS_DIR/config/superset_config.py" | tail -n 1)"
+
 if ! curl -fsS "${BASE_URL%/}/health" >/dev/null 2>&1; then
   echo "${BASE_URL%/}/health does not answer. Start the stack:" >&2
   echo "  docker compose -f nxtbi/widgets/docker-compose.yml up -d" >&2
@@ -103,6 +114,7 @@ fi
 export PLAYWRIGHT_BASE_URL="$BASE_URL"
 export PLAYWRIGHT_ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 export PLAYWRIGHT_ADMIN_PASSWORD="$ADMIN_PASSWORD"
+export PLAYWRIGHT_SESSION_COOKIE_NAME="${SESSION_COOKIE_NAME:-session}"
 # Never open the HTML report in a browser at the end of a failed run.
 export PLAYWRIGHT_HTML_OPEN=never
 if [ "${HEADED:-0}" != "1" ]; then
@@ -111,5 +123,5 @@ fi
 
 cd "$REPO_ROOT/superset-frontend"
 echo "Playwright dashboard-v2 specs against $PLAYWRIGHT_BASE_URL as $PLAYWRIGHT_ADMIN_USERNAME"
-exec npx --no-install playwright test "${SPECS[@]}" \
+exec npx --no-install playwright test "${SPECS[@]}"   --config="$HERE/playwright.widgets.config.ts" \
   --project=chromium --workers=1 --retries=0 --reporter=list "${EXTRA[@]}"

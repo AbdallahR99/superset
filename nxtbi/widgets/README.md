@@ -149,14 +149,19 @@ git-ignored. The script deletes the dashboards and widgets it creates.
 
 | Group | What is checked | Needs |
 |---|---|---|
-| a | builder: place chart, AG Grid table, metric, filter and markdown widgets, save, reload, state restored | browser |
-| b | two editors: the second save gets the conflict dialog, the stored document and revision are untouched | browser |
-| c | a structured filter narrows widget data (API); in the builder a filter value and a chart click refetch with a filter | browser for c2 |
+| a | builder: place chart, AG Grid table, metric, filter and markdown widgets (each block's control form has to render), save, reload, every widget shows real content (table rows, a painted chart, a number), an edit made in the control form reaches the widget and the server | browser |
+| b | two editors: the second save gets the conflict dialog, the stored document and revision are untouched; "reload" shows the other editor's block and writes nothing; the next save is accepted | browser |
+| c | a structured filter narrows widget data (API); in the builder a filter value and a chart click refetch with a filter, and the table and the metric tile on screen show the narrowed data | browser for c2 |
 | d | a saved widget and the same definition sent inline return the same rows and values | |
 | e | standalone React example with the Superset session and with guest tokens: widgets render, a host filter changes data, the second provider is not refetched, RTL switch; CORS preflight | example app (section 7) |
 | f | guest token for widget A refused for widget B; dashboard token with `datasets` refused for inline widgets; inline grant per dataset; SQL in a guest definition refused; SQL authoring rule for Gamma; RLS in widget data; widget token bound to its dataset; guest role limits; flag off answers 404 | flag-off web for f7 |
 | g | saved widget CRUD; Dashboard V2 create, read, update, idempotent create; stale revision 409, missing revision 428; cyclic, orphaned, too deep, too large documents 422; oversized body 413; malformed body 400 | |
-| h | Arabic: builder mirrored, AG Grid RTL, charts LTR; MCP: tool list, `list_widget_types`, `get_widget_data` | browser for h1, MCP for h2 |
+| h | Arabic: builder mirrored, all five widgets rendered with content, AG Grid RTL, charts LTR; MCP: tool list, `list_widget_types`, `get_widget_data` | browser for h1, MCP for h2 |
+
+Every browser check also fails when a page it drove threw an uncaught error or broke
+the Content Security Policy of the stack (the browser reports both to the console only;
+`Ctx.expect_no_page_problems` collects them). The policy has no `'unsafe-eval'`, so
+this is what catches a library that compiles code at run time.
 
 The flag-off server is the same application on the same database with
 `NXTBI_WIDGETS_DASHBOARD_V2=off`, on http://localhost:8099:
@@ -205,10 +210,26 @@ HEADED=1 bash nxtbi/widgets/scripts/run_upstream_playwright.sh
 ```
 
 Sets `PLAYWRIGHT_BASE_URL` and `PLAYWRIGHT_ADMIN_USERNAME` / `PLAYWRIGHT_ADMIN_PASSWORD`
-from `nxtbi/widgets/.env`, which is how `playwright.config.ts` and
-`playwright/global-setup.ts` take the target and the login. Needs
-`npx playwright install chromium` once in `superset-frontend`, and the database login
-form (`NXTBI_WIDGETS_AUTH=db`).
+from `nxtbi/widgets/.env` and runs the upstream specs and page objects, unchanged,
+through `scripts/playwright.widgets.config.ts`: the upstream `playwright.config.ts`
+with absolute paths and this stack's sign-in (`scripts/playwright.widgets.global-setup.ts`).
+The upstream global setup cannot be used here. It recognises a finished login by a
+cookie named `session`; this stack names its session cookie `nxtbi_widgets_session`
+(`SESSION_COOKIE_NAME` in `config/superset_config.py`), so the upstream setup times out
+on a login that succeeded. The runner reads the name from the configuration and passes
+it as `PLAYWRIGHT_SESSION_COOKIE_NAME`. Needs `npx playwright install chromium` once in
+`superset-frontend`, and the database login form (`NXTBI_WIDGETS_AUTH=db`).
+
+### Rebuilding the frontend the stack serves
+
+The web containers serve the bundle in the volume `nxtbi_widgets_fe_assets` and read
+its asset manifest once, at start. A production rebuild renames the entry files (content
+hashes), so after one the web container has to be restarted, or every page stays on the
+loading logo with a 404 for `spa.<hash>.entry.js`:
+
+```bash
+docker restart nxtbi-widgets-superset-1
+```
 
 ## 7. The standalone example app against this stack
 
@@ -280,3 +301,4 @@ with `nxtbi/docker-compose.yml`: that deletes the main demo's metadata database.
 | `scripts/example_app.py` | starts the example app against this stack |
 | `scripts/migration_cycle.sh`, `scripts/migration_config.py` | migration cycle |
 | `scripts/run_upstream_playwright.sh` | upstream Dashboard V2 specs |
+| `scripts/playwright.widgets.config.ts`, `scripts/playwright.widgets.global-setup.ts` | Playwright configuration and sign-in for this stack, used by the runner |

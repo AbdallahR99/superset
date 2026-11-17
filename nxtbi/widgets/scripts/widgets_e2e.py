@@ -400,6 +400,7 @@ class Ctx:
         self._playwright: Any = None
         self._browser: Any = None
         self._storage: Any = None
+        self._page_problems: dict[int, list[str]] = {}
 
     def _dataset_id(self, table_name: str) -> int:
         query = f"(filters:!((col:table_name,opr:eq,value:{table_name})),columns:!(id,table_name))"
@@ -509,7 +510,46 @@ class Ctx:
             storage_state=self._storage if signed_in else None,
         )
         context.set_default_timeout(15_000)
+        self._watch(context)
         return context
+
+    def _watch(self, context: Any) -> None:
+        """Record what no page of a context may do: throw, or break the page's CSP.
+
+        A Content Security Policy violation is logged by the browser as a console
+        error and does not fail anything by itself; a script that needs `eval` then
+        dies with an uncaught EvalError. Both are collected per context and asserted
+        by `expect_no_page_problems`.
+        """
+        problems: list[str] = []
+        self._page_problems[id(context)] = problems
+
+        def on_console(message: Any) -> None:
+            text = message.text or ""
+            if "Content Security Policy" in text or "EvalError" in text:
+                problems.append(f"console {message.type}: {text[:400]}")
+
+        def attach(page: Any) -> None:
+            page.on(
+                "pageerror",
+                lambda error: problems.append(f"uncaught: {str(error)[:400]}"),
+            )
+            page.on("console", on_console)
+
+        context.on("page", attach)
+
+    def page_problems(self, context: Any) -> list[str]:
+        """Uncaught errors and CSP violations of the pages of a context so far."""
+        return list(self._page_problems.get(id(context), []))
+
+    def expect_no_page_problems(self, context: Any, what: str) -> None:
+        """Fail when a page of the context threw or violated its CSP."""
+        problems = self.page_problems(context)
+        expect(
+            not problems,
+            f"{what}: {len(problems)} uncaught error(s) or Content Security Policy "
+            f"violation(s) in the page: {problems[:3]}",
+        )
 
     def close(self) -> None:
         """Stop the browser."""
@@ -645,11 +685,14 @@ SELECTORS = {
     "props_json": '[data-test="inspector-props"]',
     "props_apply": '[data-test="inspector-props-apply"]',
     "props_error": '[data-test="inspector-props-validation-error"]',
+    "control_panel": '[data-test="schema-control-panel"]',
 }
 # data-test values built from a prefix and an id at run time.
 SELECTOR_PREFIXES = ["palette-", "widget-content-", "chart-"]
 GRID_ITEM = ".grid-stack-item"
-WIDGET_ROOT = "[data-superset-widget]"
+WIDGET_ROOT = "[data-superset-widget]"  # the embed package's root, not the builder's
+# A widget's content area in the builder; the root grid has one too and is not a widget.
+BUILDER_WIDGET = '[data-test^="widget-content-"]:not([data-test="widget-content-root"])'
 SAVED_URL = re.compile(r"/dashboard/v2/(\d+)/?(?:[?#].*)?$")
 
 
@@ -790,6 +833,20 @@ def place_block(
         state="attached",
     ).get_attribute("data-node-id")
     expect(node_id, f"the inspector names no node after placing {widget_type}")
+    # Selecting a block renders its control form from the server's JSON Schema. This
+    # is where a validator that needs `eval` takes the page down under the stack's
+    # Content Security Policy, so the form has to be there before anything else.
+    # (The inspector keeps the Form / JSON choice from one block to the next.)
+    need(
+        page,
+        f'{SELECTORS["props_tabs"]} [data-node-key="form"] [role="tab"]',
+        "Form tab of the inspector",
+    ).click()
+    need(
+        page,
+        SELECTORS["control_panel"],
+        f"control form of the new {widget_type} block (rendered from its JSON Schema)",
+    )
     need(
         page,
         f'{SELECTORS["props_tabs"]} [data-node-key="json"] [role="tab"]',
@@ -839,21 +896,113 @@ def filters_text(payload: dict[str, Any]) -> str:
     return json.dumps([query.get("filters") or [] for query in queries])
 
 
-def rendered_summary(page: Any) -> dict[str, Any]:
-    """What the widgets of the page look like to a reader."""
+def rendered_summary(page: Any, widget: str = BUILDER_WIDGET) -> dict[str, Any]:
+    """What the widgets of a page look like to a reader.
+
+    ``widget`` selects one widget: a content area in the builder (the default), the
+    root element of the embed package (``WIDGET_ROOT``) in a host application.
+    """
     return page.evaluate(
-        """() => ({
-          widgets: document.querySelectorAll('[data-superset-widget]').length,
+        """(widget) => ({
+          widgets: document.querySelectorAll(widget).length,
           gridRoots: document.querySelectorAll('.ag-root-wrapper').length,
           gridRtl: document.querySelectorAll('.ag-root-wrapper.ag-rtl, .ag-rtl .ag-root').length,
-          gridRows: document.querySelectorAll('.ag-center-cols-container .ag-row').length,
+          gridRows: document.querySelectorAll('.ag-root-wrapper .ag-row').length,
           canvases: document.querySelectorAll('[data-test^="chart-"] canvas').length,
           chartDirections: [...document.querySelectorAll('[data-test^="chart-"] canvas')]
             .map(c => getComputedStyle(c).direction),
           dir: document.documentElement.getAttribute('dir'),
           lang: document.documentElement.getAttribute('lang'),
-        })"""
+        })""",
+        widget,
     )
+
+
+def painted_fraction(page: Any, selector: str) -> float:
+    """Share of a canvas's pixels that are not blank: 0 for a chart that drew nothing."""
+    return float(
+        page.evaluate(
+            """(selector) => {
+              const canvas = document.querySelector(selector);
+              if (!canvas || !canvas.width || !canvas.height) return 0;
+              const copy = document.createElement('canvas');
+              copy.width = canvas.width; copy.height = canvas.height;
+              const context = copy.getContext('2d');
+              context.drawImage(canvas, 0, 0);
+              const { data } = context.getImageData(0, 0, copy.width, copy.height);
+              let painted = 0;
+              for (let i = 0; i < data.length; i += 4) {
+                const blank = data[i + 3] === 0
+                  || (data[i] > 245 && data[i + 1] > 245 && data[i + 2] > 245);
+                if (!blank) painted += 1;
+              }
+              return painted / (data.length / 4);
+            }""",
+            selector,
+        )
+    )
+
+
+def table_values(page: Any, node_id: str, column: str) -> list[str]:
+    """Distinct values of one column in the rows an AG Grid widget shows."""
+    return list(
+        page.evaluate(
+            """([root, column]) => [...new Set(
+              [...document.querySelectorAll(`${root} .ag-row [col-id="${column}"]`)]
+                .map(cell => cell.innerText.trim()))].sort()""",
+            [content(node_id), column],
+        )
+    )
+
+
+def expect_widgets_rendered(
+    page: Any, nodes: dict[str, str], what: str
+) -> dict[str, Any]:
+    """Every widget kind of the brief shows real content, not just a frame.
+
+    ``nodes`` maps a widget type to its node id. Table rows, a painted chart, a
+    number in the tile, the markdown text and the filter's select are each looked
+    at; the summary of the page is returned.
+    """
+    for widget_type, node_id in nodes.items():
+        need(page, content(node_id), f"{what}: content of the {widget_type} widget")
+    table = nodes["ag-grid-table"]
+    need(page, f"{content(table)} .ag-root-wrapper", f"{what}: AG Grid")
+    rows = wait_until(
+        page, lambda: page.locator(f"{content(table)} .ag-row").count(), 30_000
+    )
+    expect(rows, f"{what}: the table widget shows no rows")
+    genders = wait_until(page, lambda: table_values(page, table, "gender"))
+    expect(
+        genders == ["boy", "girl"],
+        f"{what}: the table's gender column shows {genders}, expected boy and girl",
+    )
+    chart = f"{content(nodes['echarts'])} canvas"
+    need(page, chart, f"{what}: chart canvas")
+    painted = wait_until(page, lambda: painted_fraction(page, chart) > 0.05, 30_000)
+    expect(
+        painted,
+        f"{what}: the chart canvas is blank ({painted_fraction(page, chart):.1%} painted)",
+    )
+    tile = page.locator(content(nodes["metric-tile"])).first
+    digits = wait_until(page, lambda: re.search(r"\d", tile.inner_text() or ""))
+    expect(digits, f"{what}: metric tile shows no number: {tile.inner_text()[:80]!r}")
+    markdown_text = page.locator(content(nodes["markdown"])).first.inner_text()
+    expect(
+        f"{PREFIX} heading" in markdown_text,
+        f"{what}: markdown widget shows {markdown_text[:80]!r}",
+    )
+    need(
+        page,
+        f"{content(nodes['filter.select'])} .ant-select",
+        f"{what}: select of the filter widget",
+    )
+    summary = rendered_summary(page)
+    expect(
+        summary["widgets"] == len(nodes),
+        f"{what}: {summary['widgets']} widgets on the canvas, expected {len(nodes)}",
+    )
+    return summary
 
 
 # --------------------------------------------------------------------------------- checks
@@ -970,32 +1119,7 @@ def builder_build_save_reload(ctx: Ctx) -> dict[str, Any]:
             count,
             f"after the reload {page.locator(GRID_ITEM).count()} grid items, expected {len(placed)}",
         )
-        for widget_type, node_id in placed.items():
-            need(
-                page,
-                content(node_id),
-                f"content of the {widget_type} widget after the reload",
-            )
-        need(
-            page,
-            f"{content(placed['ag-grid-table'])} .ag-root-wrapper",
-            "AG Grid in the table widget",
-        )
-        need(
-            page,
-            f"{content(placed['echarts'])} canvas",
-            "chart canvas in the chart widget",
-        )
-        markdown_text = need(
-            page, content(placed["markdown"]), "markdown widget"
-        ).inner_text()
-        expect(
-            f"{PREFIX} heading" in markdown_text,
-            f"markdown widget shows {markdown_text[:80]!r}",
-        )
-        tile = page.locator(content(placed["metric-tile"])).first
-        digits = wait_until(page, lambda: re.search(r"\d", tile.inner_text() or ""))
-        expect(digits, f"metric tile shows no number: {tile.inner_text()[:80]!r}")
+        summary = expect_widgets_rendered(page, placed, "after the reload")
         expect(
             page.locator(SELECTORS["unsaved"]).count() == 0,
             "a freshly loaded dashboard is marked unsaved",
@@ -1004,11 +1128,59 @@ def builder_build_save_reload(ctx: Ctx) -> dict[str, Any]:
             need(page, SELECTORS["title"], "title field").input_value() == title,
             "title not restored",
         )
-        return {
-            "dashboard_id": dashboard_id,
-            "nodes": placed,
-            "summary": rendered_summary(page),
-        }
+        # Reopening a widget's control form on the restored dashboard: the form is
+        # built from the server's schema again, with the stored props as its data.
+        page.locator(content(placed["metric-tile"])).first.click()
+        tab = need(
+            page,
+            f'{SELECTORS["editor_panel"]} [data-node-key="properties"] [role="tab"]',
+            "Properties tab of the editor panel",
+        )
+        tab.click()
+        need(
+            page,
+            SELECTORS["control_panel"],
+            "control form of the restored metric tile",
+        )
+        # An edit made in the form (not the JSON tab) is validated by the form's own
+        # schema validator and by the server, reaches the widget, and is saved.
+        label = need(
+            page,
+            f"{SELECTORS['control_panel']} input#label",
+            "Label field of the metric tile's control form",
+        )
+        expect(
+            label.input_value() == "Births",
+            f"the form shows the label {label.input_value()!r}, the stored one is 'Births'",
+        )
+        label.fill("Births e2e")
+        tile = page.locator(content(placed["metric-tile"])).first
+        relabelled = wait_until(page, lambda: "Births e2e" in (tile.inner_text() or ""))
+        expect(
+            relabelled,
+            f"the form edit did not reach the metric tile: {tile.inner_text()[:80]!r}",
+        )
+        need(page, SELECTORS["unsaved"], "unsaved marker after the form edit")
+        need(page, SELECTORS["save"], "Save button").click()
+        need(
+            page,
+            SELECTORS["unsaved"],
+            "unsaved marker to disappear after the second save",
+            state="detached",
+        )
+        resaved = ctx.admin.json("GET", f"/api/v1/dashboard_v2/{dashboard_id}")[
+            "result"
+        ]
+        stored_label = resaved["document"]["nodes"][placed["metric-tile"]]["props"].get(
+            "label"
+        )
+        expect(
+            stored_label == "Births e2e" and resaved["revision"] == 2,
+            f"after the form edit the server holds label {stored_label!r} at revision "
+            f"{resaved['revision']}",
+        )
+        ctx.expect_no_page_problems(context, "building, saving and reloading")
+        return {"dashboard_id": dashboard_id, "nodes": placed, "summary": summary}
     finally:
         fail_shot(page, "a1-builder-build-save-reload")
         context.close()
@@ -1080,10 +1252,88 @@ def concurrent_edit(ctx: Ctx) -> dict[str, Any]:
             again["revision"] == stored["revision"],
             "a save was retried silently after the dialog",
         )
+
+        # Saving again is refused again: the tab still holds the stale revision.
+        need(two, SELECTORS["save"], "Save button of editor two").click()
+        need(two, SELECTORS["conflict_dialog"], "conflict dialog on the second attempt")
+        # "Reload" gives up editor two's work and shows what the server holds.
+        two.locator(SELECTORS["conflict_reload"]).first.click()
+        need(
+            two,
+            SELECTORS["conflict_dialog"],
+            "conflict dialog to close after reload",
+            state="hidden",
+        )
+        shown = wait_until(
+            two,
+            lambda: (
+                "from editor one"
+                in (two.locator(SELECTORS["canvas"]).first.inner_text() or "")
+            ),
+        )
+        canvas_text = two.locator(SELECTORS["canvas"]).first.inner_text()
+        expect(
+            shown,
+            f"after 'reload' editor two does not show editor one's block: {canvas_text[:200]!r}",
+        )
+        expect(
+            "from editor two" not in canvas_text,
+            "after 'reload' editor two still shows its own discarded block",
+        )
+        expect(
+            two.locator(GRID_ITEM).count() == 2,
+            f"after 'reload' editor two shows {two.locator(GRID_ITEM).count()} blocks, expected 2",
+        )
+        need(
+            two,
+            SELECTORS["unsaved"],
+            "unsaved marker of editor two to disappear after the reload",
+            state="detached",
+        )
+        untouched = ctx.admin.json("GET", f"/api/v1/dashboard_v2/{dashboard_id}")[
+            "result"
+        ]
+        expect(
+            untouched["revision"] == after_first["revision"],
+            f"'reload' wrote to the server: revision {untouched['revision']}",
+        )
+
+        # The next save starts from the revision just loaded and is accepted.
+        place_block(two, "markdown", {"content": "editor two, second try"}, 3)
+        need(two, SELECTORS["save"], "Save button of editor two").click()
+        need(
+            two,
+            SELECTORS["unsaved"],
+            "unsaved marker of editor two to disappear after its accepted save",
+            state="detached",
+        )
+        expect(
+            two.locator(SELECTORS["conflict_dialog"]).count() == 0
+            or not two.locator(SELECTORS["conflict_dialog"]).first.is_visible(),
+            "the save after a reload ran into the conflict dialog again",
+        )
+        final = ctx.admin.json("GET", f"/api/v1/dashboard_v2/{dashboard_id}")["result"]
+        final_text = json.dumps(final["document"])
+        expect(
+            final["revision"] == after_first["revision"] + 1,
+            f"the accepted save stored revision {final['revision']}, "
+            f"expected {after_first['revision'] + 1}",
+        )
+        expect(
+            "from editor one" in final_text and "editor two, second try" in final_text,
+            "the accepted save does not hold both editors' blocks",
+        )
+        expect(
+            "from editor two" not in final_text,
+            "the block discarded by 'reload' reached the server",
+        )
+        ctx.expect_no_page_problems(first, "editor one")
+        ctx.expect_no_page_problems(second, "editor two")
         return {
             "dashboard_id": dashboard_id,
             "revision_after_first": after_first["revision"],
             "revision_after_conflict": again["revision"],
+            "revision_after_reload_and_save": final["revision"],
         }
     finally:
         fail_shot(two, "b1-concurrent-edit-conflict-dialog")
@@ -1167,6 +1417,17 @@ def filter_and_cross_filter(ctx: Ctx) -> dict[str, Any]:
             not any('"boy"' in filters_text(p) for p in payloads),
             "a request carries the filter value before anything was picked",
         )
+        table = NODE_IDS["ag-grid-table"]
+        tile = page.locator(content(NODE_IDS["metric-tile"])).first
+        unfiltered = wait_until(
+            page, lambda: table_values(page, table, "gender") == ["boy", "girl"]
+        )
+        expect(
+            unfiltered,
+            f"before any filter the table shows genders {table_values(page, table, 'gender')}",
+        )
+        total = wait_until(page, lambda: re.sub(r"\D", "", tile.inner_text() or ""))
+        expect(total, f"metric tile shows no number: {tile.inner_text()[:80]!r}")
 
         before = len(payloads)
         select = need(
@@ -1192,15 +1453,44 @@ def filter_and_cross_filter(ctx: Ctx) -> dict[str, Any]:
         targets = sorted(
             {json.dumps(p.get("queries", [{}])[0].get("columns")) for p in filtered}
         )
+        # What the reader sees, not only what was requested: the table keeps the
+        # rows of the picked value and the tile's number gets smaller.
+        narrowed = wait_until(
+            page, lambda: table_values(page, table, "gender") == ["boy"]
+        )
+        expect(
+            narrowed,
+            f"after picking 'boy' the table shows genders {table_values(page, table, 'gender')}",
+        )
+        boys = wait_until(
+            page,
+            lambda: (
+                (shown := re.sub(r"\D", "", tile.inner_text() or ""))
+                and shown != total
+                and shown
+            ),
+        )
+        expect(
+            boys and 0 < int(boys) < int(total),
+            f"after picking 'boy' the metric tile shows {tile.inner_text()[:40]!r}, "
+            f"it showed {total} before",
+        )
 
         # Clear the filter widget, then cross-filter by clicking a bar of the chart.
         clear = page.locator(
             f"{content(NODE_IDS['filter.select'])} .ant-select-clear"
         ).first
-        if clear.count():
-            select.hover()
-            clear.click(force=True)
-            page.wait_for_timeout(1500)
+        expect(clear.count(), "the filter widget offers no way to clear its value")
+        select.hover()
+        clear.click(force=True)
+        restored = wait_until(
+            page, lambda: table_values(page, table, "gender") == ["boy", "girl"]
+        )
+        expect(
+            restored,
+            "after clearing the filter the table shows genders "
+            f"{table_values(page, table, 'gender')}",
+        )
         canvas = need(page, f"{content(NODE_IDS['echarts'])} canvas", "chart canvas")
         rect = canvas.bounding_box()
         expect(rect, "chart canvas has no size")
@@ -1229,8 +1519,28 @@ def filter_and_cross_filter(ctx: Ctx) -> dict[str, Any]:
             f"{len(payloads) - before} chart data requests, none with a gender filter: "
             "cross-filtering did not reach another widget",
         )
+        crossed_to = wait_until(
+            page,
+            lambda: (
+                len(values := table_values(page, table, "gender")) == 1 and values[0]
+            ),
+        )
+        expect(
+            crossed_to in ("boy", "girl"),
+            "after the chart click the table still shows genders "
+            f"{table_values(page, table, 'gender')}",
+        )
+        expect(
+            f'"{crossed_to}"' in filters_text(crossed[-1]),
+            f"the table shows {crossed_to!r} but the request filtered on "
+            f"{filters_text(crossed[-1])}",
+        )
+        ctx.expect_no_page_problems(context, "filtering and cross-filtering")
         return {
             "dashboard_id": created["id"],
+            "tile_total": int(total),
+            "tile_filtered": int(boys),
+            "cross_filtered_to": crossed_to,
             "filter_requests": len(filtered),
             "filter_targets": targets,
             "cross_filter_requests": len(crossed),
@@ -1420,7 +1730,7 @@ def example_run(ctx: Ctx, url: str, guest: bool, name: str) -> dict[str, Any]:
                 f"session mode: {with_cookie} of {len(headers)} data "
                 "requests carry the session cookie",
             )
-        summary = rendered_summary(page)
+        summary = rendered_summary(page, WIDGET_ROOT)
         expect(summary["widgets"] >= 3, f"only {summary['widgets']} widgets rendered")
         expect(summary["canvases"] >= 1, "no chart canvas rendered")
         providers = page.locator(
@@ -1558,6 +1868,7 @@ def example_run(ctx: Ctx, url: str, guest: bool, name: str) -> dict[str, Any]:
                 rtl_detail["grids"] == 0 or rtl_detail["gridRtl"] > 0,
                 "the AG Grid table is not in RTL mode after the switch",
             )
+        ctx.expect_no_page_problems(context, "the example app")
         return {
             "url": url,
             "mode": "guest" if guest else "session",
@@ -2701,7 +3012,7 @@ def arabic_rtl(ctx: Ctx) -> dict[str, Any]:
         )
         need(page, f"{content(NODE_IDS['echarts'])} canvas", f"chart canvas ({locale})")
         page.wait_for_timeout(1500)
-        summary = rendered_summary(page)
+        summary = expect_widgets_rendered(page, NODE_IDS, f"locale {locale}")
         panel = need(
             page, SELECTORS["editor_panel"], f"editor panel ({locale})"
         ).bounding_box()
@@ -2749,6 +3060,7 @@ def arabic_rtl(ctx: Ctx) -> dict[str, Any]:
                 f"markdown widget direction under Arabic is {arabic['markdown_direction']!r}"
             )
         expect(not problems, " | ".join(problems))
+        ctx.expect_no_page_problems(context, "Arabic and English builder")
         return {"ar": arabic, "en": english}
     finally:
         fail_shot(page, "h1-arabic-rtl-builder-and-widgets")
