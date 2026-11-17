@@ -673,12 +673,64 @@ def mixed_language_table(ctx: Ctx, page: Page, locale: str) -> dict[str, Any]:
             "table_direction": table["direction"]}
 
 
+def check_mobile_filter_drawer(page: Page, width: int, rtl: bool) -> dict[str, str]:
+    """Open and dismiss the native filter drawer and check its viewport edge."""
+    header = "[data-test='dashboard-header-container']"
+    for control in (
+        "editable-title-input",
+        "fave-unfave-icon",
+        "refresh-button",
+        "edit-dashboard-button",
+        "actions-trigger",
+    ):
+        selector = f"{header} [data-test='{control}']"
+        expect(
+            page.locator(selector).is_visible(),
+            f"{width}px dashboard header: {control} is hidden",
+        )
+        rect = box(page, selector)
+        expect(
+            rect["left"] >= -TOL and rect["right"] <= width + TOL
+            and rect["right"] - rect["left"] > TOL,
+            f"{width}px dashboard header: {control} is clipped at {span(rect)}",
+        )
+
+    trigger = "[data-test='mobile-filters-trigger']"
+    trigger_rect = box(page, trigger)
+    page.locator(trigger).click()
+    drawer = page.get_by_role("dialog").filter(
+        has=page.locator("[data-test='filter-bar']")
+    )
+    drawer.wait_for()
+
+    def drawer_fits() -> bool:
+        rect = drawer.bounding_box()
+        if not rect:
+            return False
+        left, right = rect["x"], rect["x"] + rect["width"]
+        return (
+            left >= -TOL
+            and right <= width + TOL
+            and abs(right - width if rtl else left) <= TOL
+        )
+
+    edge = side(rtl)
+    expect(
+        wait_until(page, drawer_fits, 5_000),
+        f"Filter drawer is outside the {edge} edge at {width}px",
+    )
+    page.keyboard.press("Escape")
+    drawer.wait_for(state="hidden")
+    return {"trigger": span(trigger_rect), "drawer_edge": edge}
+
+
 def responsive_problems(ctx: Ctx, page: Page, locale: str, seen: dict[Any, Any]) -> dict[str, str]:
     """No horizontal page scroll, no colliding header controls, a usable nav at 1024px and 390px."""
     found: dict[str, str] = {}
     for width, height in ((1024, 800), (390, 844)):
         page.set_viewport_size({"width": width, "height": height})
         sizes = {}
+        details: dict[str, Any] = {"scroll_width/client_width": sizes}
         for path in ("/welcome/", "/dashboard/list/", dashboard_path(ctx, "budget")):
             goto(page, path, 2500)
             state = expect_direction(page, locale, f"{width}px {path}")
@@ -690,6 +742,16 @@ def responsive_problems(ctx: Ctx, page: Page, locale: str, seen: dict[Any, Any])
                 found[f"{width} {path} overlap"] = f"{width}px {path}: overlapping header controls {state['headerOverlaps'][:2]}"
             if state["headerClipped"]:
                 found[f"{width} {path} clipped"] = f"{width}px {path}: header controls outside their bar {state['headerClipped'][:2]}"
+            if width == 390 and path == dashboard_path(ctx, "budget"):
+                trigger = page.locator("[data-test='mobile-filters-trigger']")
+                if not trigger.is_visible():
+                    found[f"{width} {path} filters"] = (
+                        f"{width}px {path}: mobile filter trigger is missing"
+                    )
+                else:
+                    details["mobile_filters"] = check_mobile_filter_drawer(
+                        page, width, expected_dir(locale) == "rtl"
+                    )
         goto(page, "/welcome/", 1500)
         link = page.locator("#main-menu a[href='/chart/list/']").first
         if not link.is_visible():  # collapsed into a menu button
@@ -701,7 +763,8 @@ def responsive_problems(ctx: Ctx, page: Page, locale: str, seen: dict[Any, Any])
             found[f"{width} nav"] = f"{width}px: nav link 'Charts' {span(place)} is outside the viewport"
         link.click()
         page.wait_for_url(re.compile(r"/chart/list/"), timeout=20_000)
-        seen[width] = {"scroll_width/client_width": sizes, "nav_link": span(place)}
+        details["nav_link"] = span(place)
+        seen[width] = details
     page.set_viewport_size(VIEWPORTS["desktop"])
     return found
 

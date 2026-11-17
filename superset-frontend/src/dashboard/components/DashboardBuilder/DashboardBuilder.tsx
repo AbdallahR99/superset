@@ -73,8 +73,12 @@ import {
   DashboardStandaloneMode,
 } from 'src/dashboard/util/constants';
 import FilterBar from 'src/dashboard/components/nativeFilters/FilterBar';
+import FilterBarSettings from 'src/dashboard/components/nativeFilters/FilterBar/FilterBarSettings';
 import { useUiConfig } from 'src/components/UiConfigContext';
-import { isMobileConsumptionEnabled, useIsMobile } from 'src/hooks/useIsMobile';
+import {
+  isMobileConsumptionEnabled,
+  useIsSmallScreen,
+} from 'src/hooks/useIsMobile';
 import ResizableSidebar from 'src/components/ResizableSidebar';
 import {
   BUILDER_SIDEPANEL_WIDTH,
@@ -538,26 +542,11 @@ const DashboardBuilder = () => {
   const dispatch = useDispatch();
   const uiConfig = useUiConfig();
   const theme = useTheme();
-  // Standalone/embedded consumers (standalone=1/2/3) render their own chrome
-  // and may hide DashboardHeader entirely (see hideDashboardHeader below),
-  // which is the only place the mobile filter drawer's trigger lives. Rather
-  // than leave native filters unreachable in that case, standalone views
-  // always get the desktop layout -- matching the pre-existing behavior the
-  // docs already promise for embedded dashboards.
-  const standaloneMode = getUrlParam(URL_PARAMS.standalone);
-  const isMobileViewport = useIsMobile();
-  const isNotMobile =
-    !isMobileViewport || standaloneMode !== DashboardStandaloneMode.None;
+  const standaloneMode =
+    getUrlParam(URL_PARAMS.standalone) ?? DashboardStandaloneMode.None;
+  const isSmallScreen = useIsSmallScreen();
+  const isMobileViewport = isSmallScreen && isMobileConsumptionEnabled();
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
-
-  // Reset the drawer's open state when leaving mobile mode so it doesn't
-  // reopen unexpectedly if the viewport later shrinks back below the
-  // breakpoint (the drawer unmounts on desktop, but its state persists).
-  useEffect(() => {
-    if (isNotMobile) {
-      setMobileFiltersOpen(false);
-    }
-  }, [isNotMobile]);
 
   const dashboardId = useSelector<RootState, string>(
     ({ dashboardInfo }) => `${dashboardInfo.id}`,
@@ -701,7 +690,28 @@ const DashboardBuilder = () => {
     ELEMENT_ON_SCREEN_OPTIONS,
   );
 
-  const showFilterBar = isNotMobile && !editMode && nativeFiltersEnabled;
+  // The vertical sidebar takes up most of a phone screen. Reuse the drawer
+  // in the regular dashboard view even with mobile consumption mode off.
+  // Standalone dashboards may hide the header that hosts the drawer trigger.
+  const useMobileFilters =
+    isSmallScreen &&
+    (isMobileViewport ||
+      filterBarOrientation === FilterBarOrientation.Vertical) &&
+    standaloneMode === DashboardStandaloneMode.None &&
+    !isEmbedded() &&
+    !hideDashboardHeader &&
+    !editMode;
+  const showFilterBar = !useMobileFilters && !editMode && nativeFiltersEnabled;
+  const showMobileFilters =
+    useMobileFilters &&
+    nativeFiltersEnabled &&
+    (hasFilters || !isMobileViewport);
+
+  useEffect(() => {
+    if (!showMobileFilters) {
+      setMobileFiltersOpen(false);
+    }
+  }, [showMobileFilters]);
 
   const offset =
     FILTER_BAR_HEADER_HEIGHT +
@@ -715,7 +725,7 @@ const DashboardBuilder = () => {
   const draggableStyle = useMemo(
     () => ({
       marginInlineStart:
-        !isNotMobile ||
+        useMobileFilters ||
         dashboardFiltersOpen ||
         editMode ||
         !nativeFiltersEnabled ||
@@ -724,7 +734,7 @@ const DashboardBuilder = () => {
           : -32,
     }),
     [
-      isNotMobile,
+      useMobileFilters,
       dashboardFiltersOpen,
       editMode,
       filterBarOrientation,
@@ -758,8 +768,9 @@ const DashboardBuilder = () => {
       <>
         {!hideDashboardHeader && (
           <DashboardHeader
+            stackActions={useMobileFilters && !isMobileViewport}
             onOpenMobileFilters={
-              !isNotMobile && nativeFiltersEnabled && hasFilters
+              showMobileFilters && !isVersionPreviewActive
                 ? () => setMobileFiltersOpen(true)
                 : undefined
             }
@@ -788,9 +799,9 @@ const DashboardBuilder = () => {
     ),
     [
       hideDashboardHeader,
-      isNotMobile,
-      nativeFiltersEnabled,
-      hasFilters,
+      useMobileFilters,
+      isMobileViewport,
+      showMobileFilters,
       showFilterBar,
       filterBarOrientation,
       hideFilterBar,
@@ -840,7 +851,6 @@ const DashboardBuilder = () => {
       topLevelTabs,
       uiConfig.hideTab,
       uiConfig.hideNav,
-      isNotMobile,
       theme,
     ],
   );
@@ -1091,13 +1101,15 @@ const DashboardBuilder = () => {
           `}
         />
       )}
-      {/* Mobile filters drawer */}
-      {!isNotMobile && nativeFiltersEnabled && hasFilters && (
+      {/* Required and default filters initialize while the drawer is closed. */}
+      {showMobileFilters && (
         <Drawer
           title={t('Filters')}
+          extra={!isMobileViewport && <FilterBarSettings />}
           placement="left"
           onClose={() => setMobileFiltersOpen(false)}
-          open={mobileFiltersOpen}
+          open={mobileFiltersOpen && !isVersionPreviewActive}
+          forceRender
           width="85vw"
           styles={{
             body: {

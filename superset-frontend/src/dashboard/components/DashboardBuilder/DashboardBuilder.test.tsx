@@ -30,13 +30,14 @@ import {
   waitFor,
 } from 'spec/helpers/testing-library';
 import { addAlpha, FeatureFlag } from '@superset-ui/core';
+import type { PageHeaderWithActionsProps } from '@superset-ui/core/components/PageHeaderWithActions';
 import { supersetTheme } from '@apache-superset/core/theme';
 import {
   OPEN_FILTER_BAR_WIDTH,
   CLOSED_FILTER_BAR_WIDTH,
 } from 'src/dashboard/constants';
 import DashboardBuilder from 'src/dashboard/components/DashboardBuilder/DashboardBuilder';
-import { useIsMobile } from 'src/hooks/useIsMobile';
+import { useIsSmallScreen } from 'src/hooks/useIsMobile';
 import useStoredSidebarWidth from 'src/components/ResizableSidebar/useStoredSidebarWidth';
 import {
   fetchFaveStar,
@@ -101,8 +102,10 @@ jest.mock('@superset-ui/core/components/Select/AsyncSelect', () => {
   return MockAsyncSelect;
 });
 jest.mock('@superset-ui/core/components/PageHeaderWithActions', () => {
-  const MockPageHeaderWithActions = () => (
-    <div data-test="mock-page-header-with-actions" />
+  const MockPageHeaderWithActions = ({
+    leftPanelItems,
+  }: Pick<PageHeaderWithActionsProps, 'leftPanelItems'>) => (
+    <div data-test="mock-page-header-with-actions">{leftPanelItems}</div>
   );
   MockPageHeaderWithActions.displayName = 'MockPageHeaderWithActions';
   return {
@@ -204,7 +207,7 @@ jest.mock('src/dashboard/components/Header/HeadlessAutoRefresh', () => {
 });
 jest.mock('src/hooks/useIsMobile', () => ({
   ...jest.requireActual('src/hooks/useIsMobile'),
-  useIsMobile: jest.fn().mockReturnValue(false),
+  useIsSmallScreen: jest.fn().mockReturnValue(false),
 }));
 jest.mock('src/dashboard/util/isEmbedded', () => ({
   isEmbedded: jest.fn(() => false),
@@ -439,7 +442,9 @@ describe('DashboardBuilder', () => {
   });
 
   test('leaves tab bars in the grid unpinned in the mobile viewport', async () => {
-    (useIsMobile as jest.Mock).mockReturnValue(true);
+    const originalFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.MobileConsumptionMode]: true };
+    jest.mocked(useIsSmallScreen).mockReturnValue(true);
     const rectSpy = mockHeaderHeight(120);
     try {
       const { findByTestId } = setup();
@@ -449,7 +454,8 @@ describe('DashboardBuilder', () => {
       );
     } finally {
       rectSpy.mockRestore();
-      (useIsMobile as jest.Mock).mockReturnValue(false);
+      window.featureFlags = originalFlags;
+      jest.mocked(useIsSmallScreen).mockReturnValue(false);
     }
   });
 
@@ -866,6 +872,35 @@ describe('DashboardBuilder', () => {
     expect(queryByTestId('dashboard-filters-panel')).not.toBeInTheDocument();
   });
 
+  test('moves the vertical filter bar into a drawer on a phone with mobile consumption disabled', () => {
+    const originalFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.MobileConsumptionMode]: false };
+    jest.mocked(useIsSmallScreen).mockReturnValue(true);
+    jest.spyOn(useNativeFiltersModule, 'useNativeFilters').mockReturnValue({
+      showDashboard: true,
+      missingInitialFilters: [],
+      dashboardFiltersOpen: true,
+      toggleDashboardFiltersOpen: jest.fn(),
+      nativeFiltersEnabled: true,
+      hasFilters: true,
+    });
+    try {
+      const { getByTestId, queryByTestId } = setup();
+      expect(queryByTestId('dashboard-filters-panel')).not.toBeInTheDocument();
+      // Required and default filters initialize even while the drawer is closed.
+      expect(getByTestId('mock-filter-bar')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      fireEvent.click(getByTestId('mobile-filters-trigger'));
+      expect(
+        within(screen.getByRole('dialog')).getByTestId('mock-filter-bar'),
+      ).toBeVisible();
+    } finally {
+      window.featureFlags = originalFlags;
+      jest.mocked(useIsSmallScreen).mockReturnValue(false);
+    }
+  });
+
   test('should keep the vertical filter bar reachable on a narrow standalone view (?standalone=2) even in mobile mode', () => {
     // Regression test: standalone=2 (HideNavAndTitle) suppresses
     // DashboardHeader, which is the only place the mobile filter drawer's
@@ -873,8 +908,10 @@ describe('DashboardBuilder', () => {
     // a narrow standalone dashboard would lose the drawer trigger AND the
     // always-visible desktop sidebar, leaving native filters unreachable.
     const originalHref = window.location.href;
+    const originalFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.MobileConsumptionMode]: true };
     window.history.replaceState({}, '', '/?standalone=2');
-    (useIsMobile as jest.Mock).mockReturnValueOnce(true);
+    jest.mocked(useIsSmallScreen).mockReturnValueOnce(true);
     jest.spyOn(useNativeFiltersModule, 'useNativeFilters').mockReturnValue({
       showDashboard: true,
       missingInitialFilters: [],
@@ -891,6 +928,7 @@ describe('DashboardBuilder', () => {
       );
     } finally {
       window.history.replaceState({}, '', originalHref);
+      window.featureFlags = originalFlags;
     }
   });
 
