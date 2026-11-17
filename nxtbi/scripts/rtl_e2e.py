@@ -673,7 +673,9 @@ def mixed_language_table(ctx: Ctx, page: Page, locale: str) -> dict[str, Any]:
             "table_direction": table["direction"]}
 
 
-def check_mobile_filter_drawer(page: Page, width: int, rtl: bool) -> dict[str, str]:
+def check_mobile_filter_drawer(
+    page: Page, width: int, rtl: bool, *, touch: bool = False
+) -> dict[str, str]:
     """Open and dismiss the native filter drawer and check its viewport edge."""
     header = "[data-test='dashboard-header-container']"
     for control in (
@@ -697,7 +699,10 @@ def check_mobile_filter_drawer(page: Page, width: int, rtl: bool) -> dict[str, s
 
     trigger = "[data-test='mobile-filters-trigger']"
     trigger_rect = box(page, trigger)
-    page.locator(trigger).click()
+    if touch:
+        page.locator(trigger).tap()
+    else:
+        page.locator(trigger).click()
     drawer = page.get_by_role("dialog").filter(
         has=page.locator("[data-test='filter-bar']")
     )
@@ -719,7 +724,10 @@ def check_mobile_filter_drawer(page: Page, width: int, rtl: bool) -> dict[str, s
         wait_until(page, drawer_fits, 5_000),
         f"Filter drawer is outside the {edge} edge at {width}px",
     )
-    page.keyboard.press("Escape")
+    if touch:
+        drawer.locator(".ant-drawer-close").tap()
+    else:
+        page.keyboard.press("Escape")
     drawer.wait_for(state="hidden")
     return {"trigger": span(trigger_rect), "drawer_edge": edge}
 
@@ -807,6 +815,61 @@ def theme_and_responsive(ctx: Ctx, page: Page, locale: str) -> dict[str, Any]:
         page.evaluate("() => localStorage.setItem('superset-theme-mode', 'default')")
     expect(not problems, " | ".join(problems))
     return detail
+
+
+@check("10b-touch-dashboard")
+def touch_dashboard(ctx: Ctx, _page: Page, locale: str) -> dict[str, Any]:
+    """Use the device-width viewport on direct and in-app dashboard visits."""
+    viewport = VIEWPORTS["mobile"]
+    width = viewport["width"]
+    rtl = expected_dir(locale) == "rtl"
+    context = ctx.browser.new_context(
+        viewport=viewport,
+        is_mobile=True,
+        has_touch=True,
+        storage_state=ctx.context.storage_state(),
+    )
+    context.set_default_timeout(15_000)
+    page = context.new_page()
+
+    def check_layout() -> dict[str, str]:
+        state = expect_direction(page, locale, "mobile dashboard")
+        expect(state["clientWidth"] == width, f"Device width: {state['clientWidth']}")
+        expect(not state["hscroll"], f"Dashboard scroll width: {state['scrollWidth']}")
+        expect(
+            not state["headerClipped"], f"Clipped controls: {state['headerClipped']}"
+        )
+        expect(not state["headerOverlaps"], f"Overlaps: {state['headerOverlaps']}")
+        page.locator("[data-test='mobile-filters-trigger']").wait_for()
+        return check_mobile_filter_drawer(page, width, rtl, touch=True)
+
+    try:
+        goto(page, dashboard_path(ctx, "budget"), 1800)
+        direct = check_layout()
+        goto(page, "/dashboard/list/")
+        list_width = page.evaluate("() => document.documentElement.clientWidth")
+        viewport_meta = page.locator("meta[name='viewport']")
+        list_tag_count = viewport_meta.count()
+        page.evaluate("() => { window.__rtlTouchDashboardProbe = true; }")
+        page.get_by_role("link", name=re.compile("Budget Execution")).first.tap()
+        page.locator("[data-test='dashboard-header-container']").wait_for()
+        expect(
+            page.evaluate("() => window.__rtlTouchDashboardProbe === true"),
+            "The dashboard link did not navigate within the SPA",
+        )
+        linked = check_layout()
+        page.go_back()
+        page.wait_for_function(
+            "width => document.documentElement.clientWidth === width",
+            arg=list_width,
+        )
+        expect(
+            viewport_meta.count() == list_tag_count,
+            "Dashboard viewport metadata remained after navigation",
+        )
+        return {"direct": direct, "linked": linked, "list_width": list_width}
+    finally:
+        context.close()
 
 
 @check("11-download-as-image")

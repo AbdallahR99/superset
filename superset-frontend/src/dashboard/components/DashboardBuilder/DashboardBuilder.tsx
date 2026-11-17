@@ -23,6 +23,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -631,6 +632,31 @@ const DashboardBuilder = () => {
     uiConfig.hideTitle ||
     standaloneMode === DashboardStandaloneMode.HideNavAndTitle ||
     isReport;
+  const isResponsiveDashboard =
+    standaloneMode === DashboardStandaloneMode.None &&
+    !isEmbedded() &&
+    !hideDashboardHeader &&
+    !editMode;
+
+  // Entering the dashboard through the SPA does not render a new document.
+  // Scope the device-width viewport to this page when the app has none.
+  useLayoutEffect(() => {
+    if (
+      !isResponsiveDashboard ||
+      document.head.querySelector('meta[name="viewport"]')
+    ) {
+      return undefined;
+    }
+    const viewport = document.createElement('meta');
+    viewport.name = 'viewport';
+    viewport.content = 'width=device-width, initial-scale=1';
+    document.head.append(viewport);
+    return () => {
+      // Clearing the override restores the default viewport before removal.
+      viewport.content = '';
+      viewport.remove();
+    };
+  }, [isResponsiveDashboard]);
 
   const [barTopOffset, setBarTopOffset] = useState(0);
   // The visible bottom includes global navigation until it scrolls away.
@@ -694,13 +720,10 @@ const DashboardBuilder = () => {
   // in the regular dashboard view even with mobile consumption mode off.
   // Standalone dashboards may hide the header that hosts the drawer trigger.
   const useMobileFilters =
+    isResponsiveDashboard &&
     isSmallScreen &&
     (isMobileViewport ||
-      filterBarOrientation === FilterBarOrientation.Vertical) &&
-    standaloneMode === DashboardStandaloneMode.None &&
-    !isEmbedded() &&
-    !hideDashboardHeader &&
-    !editMode;
+      filterBarOrientation === FilterBarOrientation.Vertical);
   const showFilterBar = !useMobileFilters && !editMode && nativeFiltersEnabled;
   const showMobileFilters =
     useMobileFilters &&
