@@ -45,6 +45,17 @@ Dashboard V2’s UUID idempotency to make a retry return the same dashboard.
 The model receives no dashboard write tool, SQL execution tool, or approval
 capability.
 
+After approval, Copilot shows **Dashboard saved** with an **Open dashboard**
+button. Dashboard lists and recent activity link to the V2 builder for saved
+V2 documents. Classic ID and slug bookmarks redirect there after the normal
+access checks. For example, the demo's `/dashboard/test/` opens the saved
+**Demo Sales Dashboard** at `/dashboard/v2/49/`.
+
+For a classic **Big Number Total** chart with one saved metric and no active
+filters, the chart's **Share → Embed with Widget SDK** action exports a React
+`MetricTile` using the viewer's Superset session. Other chart configurations
+can be built as native V2 widgets, then shared from **Embed widget**.
+
 ## Start with the existing NxtBI stack
 
 Run from the repository root. Use the existing demo environment and keep the
@@ -75,9 +86,10 @@ docker compose -p nxtbi-superset \
 The Superset image overlay defaults to the verified upstream-sync base image
 referenced in [Git state](git-state.md). Build that base locally first or
 set `NXTBI_COPILOT_SUPERSET_BASE_IMAGE` to the corresponding packaged fork
-image. The Copilot feature flag is off in the base deployment. The overlay
-enables Dashboard V2 and Extensions in the initializer and web service. The
-native initializer synchronizes the extension permissions. When refreshing
+image. Rebuild the base from this checkout to include changes to the classic
+chart share menus. The Copilot feature flag is off in the base deployment.
+The overlay enables Dashboard V2 and Extensions in the initializer and web
+service. The native initializer synchronizes the extension permissions. When refreshing
 web only on a stack that enables Extensions for the first time, run
 `superset init` inside the feature-enabled web container to sync permissions.
 
@@ -124,10 +136,31 @@ python nxtbi/copilot/tests/standalone_e2e.py
 
 Verification logs are under the ignored `nxtbi/out/copilot/` directory.
 
-Conversation state is scoped to the mounted browser panel. Saved dashboards
-persist in the existing Superset metadata database. Available host context
+Open **History** in the Superset Copilot panel to resume a recent conversation
+after closing the panel or navigating to a dashboard. Copilot shows the ten
+most recently updated conversations for the signed-in account. It stores chat
+text and saved dashboard links encrypted in Superset's metadata database.
+Interactive previews and unsaved proposals are session state. The original panel
+held conversations from before history was enabled in memory. Saved dashboards
+persist in the metadata database. Available host context
 depends on the installed Superset extension API. Filter interactions use the
 Widget preview provider and native dashboard controls. Classic dashboard
 filter state is outside the Copilot adapter. The standalone app uses a
 separate demonstration identity and catalog. GovAI was the verified model
 provider. An optional Ollama smoke run reached the agent time limit.
+
+## Main demo update
+
+The demo on port 8088 runs `nxtbi/superset-fork:copilot-demo-polish-20261118`
+with image digest `sha256:b040b8d394231aadb25dbdf29099d2848ca9c33560e5032c9a9b5b79e5620d7b`.
+The rollout recreated only the web container. The database fingerprints,
+service settings and mounts matched the snapshot from before rollout.
+The previous image is tagged `nxtbi/superset-fork:main-demo-pre-copilot-polish`.
+The matching extension manifest is in the ignored
+`nxtbi/out/copilot/demo-polish-rollback-manifest.json` on the demo host.
+
+The final image passed all 34 live smoke checks. Chromium verified the
+original saved dashboard and its six widgets, a new Copilot save and retry,
+history in a fresh signed-in session, English desktop and Arabic mobile,
+and a Widget SDK snippet from **Allocated Budget** in the classic dashboard
+and in Explore.

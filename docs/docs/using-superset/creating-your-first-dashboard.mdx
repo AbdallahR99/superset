@@ -608,3 +608,21 @@ When saving or adding a chart to a dashboard from Explore, you can select which 
 - [Dashboard Customization](https://docs.preset.io/docs/dashboard-customization) - Advanced dashboard styling and layout options
 - [Blog: BI Dashboard Best Practices](https://preset.io/blog/bi-dashboard-best-practices/)
   :::
+
+### Reopen a Dashboard V2 dashboard
+
+With Dashboard V2 enabled, select a saved dashboard in **Dashboards** to open
+its widgets in the V2 builder. Bookmarks using its dashboard ID or slug also
+open the builder.
+
+### Embed a metric tile in a React app
+
+With Dashboard V2 enabled, open the chart menu on a classic dashboard or in
+Explore and select **Share → Embed with Widget SDK**. For a **Big Number Total**
+with one saved dataset metric and no active filters, copy the React component
+into a host that has `@apache-superset/widgets` installed. The tile uses the
+viewer’s Superset session and dataset permissions. The SDK formats the metric.
+
+For other chart configurations, use the **Open Dashboard V2** link in the dialog
+to create a widget. Its **Embed widget** action can provide an inline definition
+or a saved widget ID.

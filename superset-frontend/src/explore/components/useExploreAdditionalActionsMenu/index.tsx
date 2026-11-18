@@ -73,6 +73,7 @@ import { Slice } from 'src/types/Chart';
 import { ChartState, ExplorePageInitialData } from 'src/explore/types';
 import { ReportObject } from 'src/features/reports/types';
 import ViewQueryModal from '../controls/ViewQueryModal';
+import WidgetSdkEmbed from '../WidgetSdkEmbed';
 import EmbedCodeContent from '../EmbedCodeContent';
 import { useDashboardsMenuItems } from './DashboardsSubMenu';
 import { useExploreDataExport } from './useExploreDataExport';
@@ -1095,6 +1096,14 @@ export const useExploreAdditionalActionsMenu = (
         },
       },
     ];
+
+    if (isFeatureEnabled(FeatureFlag.DashboardV2)) {
+      shareChildren.push({
+        key: 'widget_sdk_embed',
+        label: <WidgetSdkEmbed formData={latestQueryFormData} />,
+        onClick: () => setIsDropdownVisible(false),
+      });
+    }
 
     if (isFeatureEnabled(FeatureFlag.EmbeddableCharts)) {
       shareChildren.push({

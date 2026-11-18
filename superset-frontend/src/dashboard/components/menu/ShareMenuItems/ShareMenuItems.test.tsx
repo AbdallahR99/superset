@@ -390,3 +390,29 @@ test('Should render "Embed code" with data-test attribute', () => {
   );
   expect(screen.getByTestId('embed-code-button')).toBeInTheDocument();
 });
+
+test('opens a native SDK snippet with iframe embedding disabled', async () => {
+  window.featureFlags = { DASHBOARD_V2: true, EMBEDDABLE_CHARTS: false };
+  render(
+    <MenuWrapper
+      mode="inline"
+      openKeys={['share']}
+      forceSubMenuRender
+      shareProps={{
+        ...createProps(),
+        latestQueryFormData: {
+          datasource: '12__table',
+          viz_type: 'big_number_total',
+          metric: 'allocated',
+        },
+      }}
+    />,
+    { useRedux: true },
+  );
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Embed with Widget SDK' }),
+  );
+  expect(
+    await screen.findByText(/import \{ MetricTile, SupersetProvider \}/),
+  ).toBeInTheDocument();
+});

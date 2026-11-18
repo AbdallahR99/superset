@@ -27,6 +27,7 @@ import {
 } from '@superset-ui/core';
 import { Menu, MenuItem } from '@superset-ui/core/components/Menu';
 import { getDashboardPermalink } from 'src/utils/urlUtils';
+import WidgetSdkEmbed from 'src/explore/components/WidgetSdkEmbed';
 import EmbedCodeContent from 'src/explore/components/EmbedCodeContent';
 import { ModalTrigger } from '@superset-ui/core/components';
 import { MenuKeys, RootState } from 'src/dashboard/types';
@@ -159,6 +160,13 @@ export const useShareMenuItems = (props: ShareMenuItemProps): MenuItem => {
       onClick: onShareByEmail,
     },
   ];
+
+  if (sliceExists && isFeatureEnabled(FeatureFlag.DashboardV2)) {
+    children.push({
+      key: 'widget_sdk_embed',
+      label: <WidgetSdkEmbed formData={latestQueryFormData} />,
+    });
+  }
 
   // Add embed code option if feature is enabled and chart data exists
   if (isEmbedCodeEnabled && sliceExists) {
