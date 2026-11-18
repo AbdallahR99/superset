@@ -65,6 +65,7 @@ export interface Dashboard {
   id: number;
   published: boolean;
   url: string;
+  layout_thumbnail_url?: string;
   thumbnail_url?: string | null;
   editors?: Subject[];
   // Bare subject ids from a deployment's EXTRA_EDITORS_RESOLVER.

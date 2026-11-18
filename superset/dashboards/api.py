@@ -338,6 +338,7 @@ BASE_LIST_COLUMNS = [
     "changed_by.id",
     "changed_by_name",
     "changed_on_utc",
+    "layout_thumbnail_url",
     "changed_on_delta_humanized",
     "created_on_delta_humanized",
     "created_by.first_name",
@@ -569,6 +570,24 @@ class DashboardRestApi(
               $ref: '#/components/responses/500'
         """
         return super().get_list(**kwargs)
+
+    def _handle_columns_args(
+        self,
+        args: dict[str, Any],
+        default_select_columns: list[str],
+        default_response_columns: list[str],
+    ) -> tuple[list[str], list[str]]:
+        """Eagerly load the preview inputs without serializing raw layout documents."""
+        selected, response = super()._handle_columns_args(
+            args, default_select_columns, default_response_columns
+        )
+        if "layout_thumbnail_url" in selected and current_app.config.get(
+            "DASHBOARD_LAYOUT_THUMBNAILS"
+        ):
+            selected = list(
+                dict.fromkeys([*selected, "position_json", "json_metadata"])
+            )
+        return selected, response
 
     def pre_get_list(self, data: dict[str, Any]) -> None:
         """Attach ``extra_editors`` to each row, matching the single-object GET."""

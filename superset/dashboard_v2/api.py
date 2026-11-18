@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from functools import wraps
+from hashlib import sha256
 from typing import Any
 
 from flask import g, request, Response
@@ -62,8 +63,10 @@ from superset.dashboard_v2.schemas import (
 from superset.extensions import event_logger
 from superset.views.base_api import BaseSupersetApi, statsd_metrics
 
-# One entity tag holding a revision: "3", W/"3" or a bare 3.
-_IF_MATCH_PATTERN = re.compile(r'^(?:W/)?"?(\d{1,18})"?$')
+# A revision, optionally followed by a read digest and compression coding.
+_IF_MATCH_PATTERN = re.compile(
+    r'^(?:W/)?"?(\d{1,18})(?:-[0-9a-f]{16})?(?::(?:gzip|br|deflate|zstd))?"?$'
+)
 
 
 def revision_etag(revision: int) -> str:
@@ -171,7 +174,16 @@ def dashboard_response(
     if with_id:
         payload["id"] = result["id"]
     response = api.response(status, **payload)
-    response.headers["ETag"] = revision_etag(result["revision"])
+    revision = result["revision"]
+    if request.method in {"GET", "HEAD"}:
+        # The document revision stays unchanged when publication or permissions
+        # change. Revalidation must identify the entire current representation.
+        digest = sha256(response.get_data()).hexdigest()[:16]
+        response.set_etag(f"{revision}-{digest}")
+        response.cache_control.private = True
+        response.cache_control.no_cache = True
+    else:
+        response.headers["ETag"] = revision_etag(revision)
     return response
 
 
@@ -236,7 +248,7 @@ class DashboardV2RestApi(BaseSupersetApi):
               description: Dashboard v2 created
               headers:
                 ETag:
-                  description: The document revision, quoted
+                  description: Validator for the caller's dashboard representation
                   schema:
                     type: string
               content:
@@ -387,7 +399,7 @@ class DashboardV2RestApi(BaseSupersetApi):
               description: Dashboard v2
               headers:
                 ETag:
-                  description: The document revision, quoted
+                  description: Validator for the caller's dashboard representation
                   schema:
                     type: string
               content:

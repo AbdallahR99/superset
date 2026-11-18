@@ -50,6 +50,11 @@ test('loads and displays saved dashboard changes when history opens', async () =
   render(<DashboardHistory uuid="uuid-49" />);
   expect(fetchMock.callHistory.calls(activity)).toHaveLength(0);
   await userEvent.click(screen.getByRole('button', { name: 'History' }));
-  await userEvent.click(await screen.findByText(/Jane Smith/));
+  const savedVersion = await screen.findByText(/Jane Smith/);
+  expect(savedVersion.textContent?.split(' · ')).toEqual([
+    expect.stringMatching(/Mar 25, 2026/),
+    'Jane Smith',
+  ]);
+  await userEvent.click(savedVersion);
   expect(screen.getByText('Changed the dashboard title')).toBeVisible();
 });

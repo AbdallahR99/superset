@@ -18,7 +18,7 @@
  */
 import { lazy, Suspense, useMemo, useSyncExternalStore } from 'react';
 import { chat, dashboard, navigation, sqlLab } from '@apache-superset/core';
-import { CopilotPanel } from '@nxtbi/copilot';
+import { CopilotIcon, CopilotPanel } from '@nxtbi/copilot';
 import type { CopilotHost } from '@nxtbi/copilot';
 import '@nxtbi/copilot/styles.css';
 import {
@@ -78,6 +78,10 @@ function Trigger() {
 function Panel() {
   const mode = useSyncExternalStore(subscribeMode, chat.getDisplayMode);
   const locale = language();
+  const modeLabel =
+    mode === 'panel'
+      ? englishOrArabic('Float', 'عرض عائم')
+      : englishOrArabic('Dock', 'تثبيت');
   const direction =
     document.documentElement.dir === 'rtl' || locale.startsWith('ar')
       ? 'rtl'
@@ -147,41 +151,25 @@ function Panel() {
   return (
     <section
       id="nxtbi-copilot-panel"
+      className="nxtbi-copilot-shell"
+      data-mode={mode}
       aria-label={englishOrArabic('NxtBI Copilot', 'مساعد NxtBI')}
       lang={locale}
       dir={direction}
-      style={{
-        background: 'var(--ant-color-bg-container, Canvas)',
-        color: 'var(--ant-color-text, CanvasText)',
-        border:
-          mode === 'floating'
-            ? '1px solid var(--ant-color-border-secondary, #d8e0e0)'
-            : undefined,
-        borderRadius: mode === 'floating' ? 14 : undefined,
-        boxShadow:
-          mode === 'floating'
-            ? 'var(--ant-box-shadow-secondary, 0 12px 32px #122d3626)'
-            : undefined,
-        display: 'flex',
-        flexDirection: 'column',
-        height: mode === 'panel' ? '100%' : 'min(72dvh, 720px)',
-        minHeight: 0,
-        overflow: 'hidden',
-        width: mode === 'panel' ? '100%' : 'min(480px, calc(100vw - 32px))',
-      }}
     >
       <CopilotPanel
         host={host}
         headerActions={
           <button
             type="button"
+            className="nxtbi-copilot__icon-button"
+            aria-label={modeLabel}
+            title={modeLabel}
             onClick={() =>
               chat.setDisplayMode(mode === 'panel' ? 'floating' : 'panel')
             }
           >
-            {mode === 'panel'
-              ? englishOrArabic('Float', 'عرض عائم')
-              : englishOrArabic('Dock', 'تثبيت')}
+            <CopilotIcon name={mode === 'panel' ? 'float' : 'dock'} />
           </button>
         }
       />

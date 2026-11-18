@@ -415,6 +415,7 @@ WEBDRIVER_BASEURL_USER_FRIENDLY = f"{SUPERSET_PUBLIC_URL}/"
 ALERT_REPORTS_EXECUTORS = [FixedExecutor(_SERVICE_USER)]
 # THUMBNAIL_EXECUTORS keeps the upstream default (the current user). Rendering thumbnails
 # as a fixed Admin account would show every tenant the same unfiltered picture.
+DASHBOARD_LAYOUT_THUMBNAILS = True
 ALERT_REPORTS_NOTIFICATION_DRY_RUN = False
 EMAIL_REPORTS_SUBJECT_PREFIX = "[NxtBI] "
 SMTP_HOST = os.environ.get("SMTP_HOST", "host.docker.internal")

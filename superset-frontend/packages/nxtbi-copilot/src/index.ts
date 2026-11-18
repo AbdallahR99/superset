@@ -19,5 +19,6 @@
 
 export * from './a2ui';
 export * from './contracts';
+export { CopilotIcon } from './CopilotIcon';
 export { CopilotPanel } from './CopilotPanel';
 export { a2uiOperations, readAgUiEvents } from './stream';

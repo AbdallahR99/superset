@@ -18,10 +18,12 @@
  */
 
 /** @jest-environment node */
-import { readAgUiEvents } from './stream';
+import { fitAgUiInput, readAgUiEvents } from './stream';
+import type { AgUiRunInput } from './contracts';
 
 test('reads chunked UTF-8 and multiple AG-UI events per response', async () => {
-  const text = 'data: {"type":"TEXT_MESSAGE_CONTENT","delta":"مرحبا"}\r\n\r\n' +
+  const text =
+    'data: {"type":"TEXT_MESSAGE_CONTENT","delta":"مرحبا"}\r\n\r\n' +
     ': heartbeat\n\ndata: {"type":"RUN_FINISHED"}\n\n';
   const encoded = new TextEncoder().encode(text);
   const stream = new ReadableStream<Uint8Array>({
@@ -46,4 +48,22 @@ test('reads chunked UTF-8 and multiple AG-UI events per response', async () => {
 test('rejects non-stream responses', async () => {
   const events = readAgUiEvents(new Response('Unauthorized', { status: 401 }));
   await expect(events.next()).rejects.toThrow('401');
+});
+
+test('keeps the newest complete turns within the gateway byte budget', () => {
+  const input: AgUiRunInput = {
+    threadId: 'thread',
+    runId: 'run',
+    context: [],
+    state: {},
+    tools: [],
+    forwardedProps: {},
+    messages: [
+      { id: 'first', role: 'user', content: 'س'.repeat(3000) },
+      { id: 'reply', role: 'assistant', content: 'ب'.repeat(6500) },
+      { id: 'latest', role: 'user', content: 'م'.repeat(3000) },
+    ],
+  };
+  expect(fitAgUiInput(input).messages).toEqual(input.messages.slice(2));
+  expect(input.messages).toHaveLength(3);
 });

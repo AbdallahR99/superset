@@ -17,12 +17,36 @@
  * under the License.
  */
 
+import type { AgUiRunInput } from './contracts';
+
 export interface AgUiEvent {
   type: string;
   [key: string]: unknown;
 }
 
 const MAX_FRAME_LENGTH = 1024 * 1024;
+const MAX_REQUEST_LENGTH = 60_000;
+
+/** Keep the newest turns within the agent limit after the gateway escapes Unicode. */
+export function fitAgUiInput(input: AgUiRunInput): AgUiRunInput {
+  let { messages } = input;
+  const escapedSize = () => {
+    const serialized = JSON.stringify({ ...input, messages });
+    let size = serialized.length;
+    for (let index = 0; index < serialized.length; index += 1) {
+      if (serialized.charCodeAt(index) > 127) size += 5;
+    }
+    return size;
+  };
+  while (escapedSize() > MAX_REQUEST_LENGTH) {
+    const nextUser = messages.findIndex(
+      (message, index) => index > 0 && message.role === 'user',
+    );
+    if (nextUser < 0) throw new Error('Copilot input is too large');
+    messages = messages.slice(nextUser);
+  }
+  return { ...input, messages };
+}
 
 function parseFrame(frame: string): AgUiEvent | undefined {
   const data = frame
@@ -44,7 +68,9 @@ function parseFrame(frame: string): AgUiEvent | undefined {
 }
 
 /** Parse AG-UI SSE without losing boundaries across UTF-8 chunks. */
-export async function* readAgUiEvents(response: Response): AsyncGenerator<AgUiEvent> {
+export async function* readAgUiEvents(
+  response: Response,
+): AsyncGenerator<AgUiEvent> {
   if (!response.ok) throw new Error(`Copilot HTTP ${response.status}`);
   if (
     !response.body ||
@@ -62,13 +88,15 @@ export async function* readAgUiEvents(response: Response): AsyncGenerator<AgUiEv
       buffer += utf8.decode(value, { stream: !done });
       let separator = /\r?\n\r?\n/u.exec(buffer);
       while (separator) {
-        if (separator.index > MAX_FRAME_LENGTH) throw new Error('AG-UI event too large');
+        if (separator.index > MAX_FRAME_LENGTH)
+          throw new Error('AG-UI event too large');
         const event = parseFrame(buffer.slice(0, separator.index));
         buffer = buffer.slice(separator.index + separator[0].length);
         if (event) yield event;
         separator = /\r?\n\r?\n/u.exec(buffer);
       }
-      if (buffer.length > MAX_FRAME_LENGTH) throw new Error('AG-UI event too large');
+      if (buffer.length > MAX_FRAME_LENGTH)
+        throw new Error('AG-UI event too large');
       if (done) {
         const event = parseFrame(buffer);
         if (event) yield event;
@@ -88,7 +116,10 @@ export function a2uiOperations(event: AgUiEvent): unknown[] | undefined {
     typeof event.content !== 'object' ||
     !event.content ||
     !('a2ui_operations' in event.content)
-  ) return undefined;
+  )
+    return undefined;
   const operations = event.content.a2ui_operations;
-  return Array.isArray(operations) && operations.length <= 32 ? operations : undefined;
+  return Array.isArray(operations) && operations.length <= 32
+    ? operations
+    : undefined;
 }

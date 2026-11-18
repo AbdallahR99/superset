@@ -36,6 +36,25 @@
   outline-offset: 2px;
 }
 
+.nxtbi-copilot-shell {
+  display: flex;
+  flex-direction: column;
+  inline-size: 100%;
+  block-size: 100%;
+  min-block-size: 0;
+  overflow: hidden;
+  background: var(--ant-color-bg-container, Canvas);
+  color: var(--ant-color-text, CanvasText);
+}
+
+.nxtbi-copilot-shell[data-mode='floating'] {
+  inline-size: min(30rem, calc(100vw - 2rem));
+  block-size: min(72dvh, 45rem);
+  border: 1px solid var(--ant-color-border-secondary, #d8e0e0);
+  border-radius: 1rem;
+  box-shadow: var(--ant-box-shadow-secondary, 0 12px 32px #122d3626);
+}
+
 .nxtbi-copilot {
   --copilot-border: var(
     --nxtbi-copilot-border,
@@ -91,6 +110,10 @@
   letter-spacing: -0.015em;
 }
 
+.nxtbi-copilot__toolbar {
+  gap: 0.25rem;
+}
+
 .nxtbi-copilot__mark {
   display: grid;
   place-items: center;
@@ -135,10 +158,20 @@
 }
 
 .nxtbi-copilot__suggestions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 0.4rem;
   margin-block-start: 0.9rem;
+}
+
+.nxtbi-copilot__suggestions button {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  text-align: start;
+}
+
+.nxtbi-copilot__suggestions svg {
+  flex: none;
 }
 
 .nxtbi-copilot__message {
@@ -243,6 +276,7 @@
   min-inline-size: 0;
   min-block-size: 2.4rem;
   max-block-size: 8rem;
+  field-sizing: content;
   resize: block;
 }
 
@@ -282,6 +316,17 @@
   background: var(--copilot-tint);
 }
 
+.nxtbi-copilot .nxtbi-copilot__icon-button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  inline-size: 2.75rem;
+  min-block-size: 2.75rem;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 0.65rem;
+}
+
 .nxtbi-copilot .nxtbi-copilot__primary,
 .nxtbi-copilot .nxtbi-copilot__primary:not(:disabled):hover {
   color: white;
@@ -307,6 +352,15 @@
   border: 1px solid var(--copilot-border);
   border-radius: 0.65rem;
   background: var(--copilot-tint);
+}
+
+.nxtbi-copilot__saved p {
+  margin: 0.2rem 0 0;
+  color: var(--copilot-muted);
+}
+
+.nxtbi-copilot__feedback {
+  margin-block: 0.75rem;
 }
 
 .nxtbi-copilot__working {

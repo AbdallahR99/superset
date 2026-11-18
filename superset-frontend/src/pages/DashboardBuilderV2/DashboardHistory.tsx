@@ -39,12 +39,17 @@ function HistoryDialog({ uuid, onHide }: { uuid: string; onHide: () => void }) {
       footer={<Button onClick={onHide}>{t('Close')}</Button>}
     >
       <Flex vertical gap="small">
-        {activity.timeline.map(entry =>
-          entry.type === 'group' ? (
+        {activity.timeline.map(entry => {
+          if (entry.type !== 'group') {
+            return null;
+          }
+          const headline = groupHeadline(entry);
+          const timestamp = formatVersionDateTime(entry.issuedAt);
+          return (
             <details key={entry.transactionId}>
               <summary>
-                {groupHeadline(entry)} · {formatVersionDateTime(entry.issuedAt)}{' '}
-                · {formatAuthor(entry.changedBy)}
+                {headline !== timestamp && `${headline} · `}
+                {timestamp} · {formatAuthor(entry.changedBy)}
               </summary>
               <ul>
                 {entry.records.map(record => (
@@ -60,15 +65,15 @@ function HistoryDialog({ uuid, onHide }: { uuid: string; onHide: () => void }) {
                 ))}
               </ul>
             </details>
-          ) : null,
-        )}
+          );
+        })}
         {activity.error && (
           <div role="alert">
             {activity.error}{' '}
             <Button onClick={activity.refresh}>{t('Retry')}</Button>
           </div>
         )}
-        {activity.isLoading && <span role="status">{t('Loading…')}</span>}
+        {activity.isLoading && <output>{t('Loading…')}</output>}
         {!activity.isLoading &&
           !activity.error &&
           !activity.timeline.length && (

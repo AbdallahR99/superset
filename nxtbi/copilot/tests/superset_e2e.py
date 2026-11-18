@@ -260,11 +260,46 @@ def verify_proposal(page: Page, dataset: int, title: str) -> int:
         == dataset
     )
 
+    metric_widget = proposal.locator("fieldset").nth(metric_index)
+    dataset_choice = metric_widget.get_by_role("combobox", name="Dataset", exact=True)
+    metric_choice = metric_widget.get_by_role("combobox", name="Metric", exact=True)
+    expect(dataset_choice).to_have_value(str(dataset))
+    expect(
+        dataset_choice.get_by_role("option", name=re.compile("budget_execution"))
+    ).to_have_count(1)
+    alternate = next(
+        (
+            option
+            for option in dataset_choice.locator("option").evaluate_all(
+                "options => options.map(option => option.value)"
+            )
+            if option != str(dataset)
+        ),
+        None,
+    )
+    if alternate:
+        dataset_choice.select_option(alternate)
+        expect(proposal.get_by_role("button", name="Review and save")).to_be_disabled()
+        dataset_choice.select_option(str(dataset))
+    expect(metric_choice.locator('option[value="execution_rate"]')).to_have_count(1)
+    metric_choice.select_option("execution_rate")
+
+    chart_index = next(
+        index
+        for index, item in enumerate(draft["widgets"])
+        if item["type"] == "echarts"
+    )
+    dimension = (
+        proposal.locator("fieldset")
+        .nth(chart_index)
+        .get_by_role("combobox", name="Dimension", exact=True)
+    )
+    expect(dimension.locator('option[value="sector_en"]')).to_have_count(1)
+    dimension.select_option("sector_en")
+
     proposal.get_by_role("textbox", name="Dashboard title", exact=True).fill(title)
     widget_title = "Reviewed Budget Widget"
-    proposal.locator("fieldset").nth(metric_index).get_by_role(
-        "textbox", name="Widget title"
-    ).fill(widget_title)
+    metric_widget.get_by_role("textbox", name="Widget title").fill(widget_title)
     expect(proposal.get_by_role("button", name="Refresh previews")).to_be_enabled()
     proposal.get_by_role("button", name="Refresh previews").click()
     print(
@@ -332,9 +367,24 @@ def verify_proposal(page: Page, dataset: int, title: str) -> int:
     expect(
         panel.get_by_role("button", name="Open dashboard", exact=True)
     ).to_be_enabled()
+    publication = page.locator('[data-test="header-publish"]')
+    page.reload(wait_until="domcontentloaded")
+    expect(publication).to_have_text("Publish")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PUT"
+            and urlsplit(response.url).path == f"/api/v1/dashboard/{dashboard_id}"
+        )
+    ) as published:
+        publication.click()
+    assert published.value.ok, f"Publication HTTP {published.value.status}"
+    assert published.value.json()["result"]["published"] is True
+    expect(page.locator('[data-test="header-published"]')).to_have_text("Published")
+    page.reload()
+    expect(page.locator('[data-test="header-published"]')).to_have_text("Published")
     print(
         f"PASS approval 201, retry 200, dashboard {dashboard_id} reopened, "
-        "history restored",
+        "history restored, published across reload",
         flush=True,
     )
     return dashboard_id

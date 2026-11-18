@@ -47,7 +47,11 @@ The gate is the first of the app's `before_request` hooks: it is inserted ahead 
 - The builder changes publication via `PUT /api/v1/dashboard/<pk>` with
   `{ "published": true }` or `{ "published": false }`. This uses the existing
   dashboard authorization and leaves the V2 document and revision intact.
-- Every successful response also carries the revision as a header: `ETag: "3"`. The body field is the one to rely on; reading the header cross-origin needs `ETag` in the CORS `expose_headers`.
+- Writes carry the document revision as `ETag: "3"`. Reads include the
+  revision and a representation digest, such as `ETag: "3-7d6285e6d4a00f12"`,
+  so changes to permissions or publication invalidate cached reads. A client
+  can send either tag as `If-Match`, including a compression suffix. The JSON
+  `revision` is available to clients that cannot read response headers through CORS.
 
 ## 3. Endpoints
 

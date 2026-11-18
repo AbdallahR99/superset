@@ -1451,6 +1451,8 @@ CACHE_WARMUP_EXECUTORS = [ExecutorType.EDITOR]
 #
 # THUMBNAIL_EXECUTORS = [FixedExecutor("admin")]
 THUMBNAIL_EXECUTORS = [ExecutorType.CURRENT_USER]
+# Supply data-free layout illustrations in dashboard list responses.
+DASHBOARD_LAYOUT_THUMBNAILS = False
 
 # By default, thumbnail digests are calculated based on various parameters in the
 # chart/dashboard metadata, and in the case of user-specific thumbnails, the

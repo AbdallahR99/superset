@@ -210,10 +210,16 @@ function DashboardCard({
         }
         url={bulkSelectEnabled ? undefined : dashboard.url}
         linkComponent={Link}
-        imgURL={thumbnailUrl}
-        imgFallbackURL={assetUrl(
-          '/static/assets/images/dashboard-card-fallback.svg',
-        )}
+        imgURL={
+          dashboard.layout_thumbnail_url &&
+          dashboard.url.startsWith('/dashboard/v2/')
+            ? undefined
+            : thumbnailUrl
+        }
+        imgFallbackURL={
+          dashboard.layout_thumbnail_url ||
+          assetUrl('/static/assets/images/dashboard-card-fallback.svg')
+        }
         description={t('Modified %s', dashboard.changed_on_delta_humanized)}
         coverLeft={<SubjectPile subjects={dashboard.editors || []} />}
         actions={

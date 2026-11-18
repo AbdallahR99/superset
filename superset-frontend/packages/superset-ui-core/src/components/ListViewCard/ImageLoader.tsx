@@ -56,25 +56,43 @@ export function ImageLoader({
   const [imgSrc, setImgSrc] = useState<string>(fallback);
 
   useEffect(() => {
-    if (src) {
-      fetch(src)
-        .then(response => response.blob())
-        .then(blob => {
-          if (/image/.test(blob.type)) {
-            const imgURL = URL.createObjectURL(blob);
-            setImgSrc(imgURL);
+    let disposed = false;
+    let objectUrl: string | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let retries = 0;
+
+    async function loadImage() {
+      try {
+        const response = await fetch(src);
+        if (disposed) return;
+        // A cold thumbnail returns 202, then may return 404 during capture.
+        if (
+          response.status === 202 ||
+          (retries > 0 && response.status === 404)
+        ) {
+          if (retries < 6) {
+            timer = setTimeout(loadImage, Math.min(3000 * 2 ** retries, 30000));
+            retries += 1;
           }
-        })
-        .catch(errMsg => {
-          logging.error(errMsg);
-          setImgSrc(fallback);
-        });
+          return;
+        }
+        if (!response.ok) return;
+        const blob = await response.blob();
+        if (!disposed && blob.type.startsWith('image/')) {
+          objectUrl = URL.createObjectURL(blob);
+          setImgSrc(objectUrl);
+        }
+      } catch (error) {
+        if (!disposed) logging.error(error);
+      }
     }
 
+    setImgSrc(fallback);
+    if (src) void loadImage();
     return () => {
-      // theres a very brief period where isLoading is false and this component is about to unmount
-      // where the stale imgSrc is briefly rendered. Setting imgSrc to fallback smoothes the transition.
-      setImgSrc(fallback);
+      disposed = true;
+      clearTimeout(timer);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [src, fallback]);
 

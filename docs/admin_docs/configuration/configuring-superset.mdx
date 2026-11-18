@@ -919,3 +919,7 @@ Provider setup descriptions come from each registered provider's metadata.
 
 - [Blog: Feature Flags in Apache Superset](https://preset.io/blog/feature-flags-in-apache-superset-and-preset/)
   :::
+
+## Dashboard card previews
+
+Set `DASHBOARD_LAYOUT_THUMBNAILS = True` alongside the `THUMBNAILS` feature flag to show a schematic of the saved layout in dashboard list cards. The schematic contains only widget placement and types. Classic cards replace it with a screenshot when the thumbnail worker finishes. Dashboard V2 cards use the schematic directly.

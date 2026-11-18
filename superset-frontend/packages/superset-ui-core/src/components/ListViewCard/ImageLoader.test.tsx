@@ -18,10 +18,11 @@
  */
 import fetchMock from 'fetch-mock';
 
-import { render, screen } from '@superset-ui/core/spec';
+import { act, render, screen } from '@superset-ui/core/spec';
 import { ImageLoader, type BackgroundPosition } from './ImageLoader';
 
 global.URL.createObjectURL = jest.fn(() => '/local_url');
+global.URL.revokeObjectURL = jest.fn();
 const blob = new Blob([], { type: 'image/png' });
 
 beforeAll(() => {
@@ -85,4 +86,43 @@ describe('ImageLoader', () => {
       '/fallback',
     );
   });
+});
+
+test('retries a queued thumbnail and releases its image when removed', async () => {
+  jest.useFakeTimers();
+  const fetch = jest
+    .spyOn(global, 'fetch')
+    .mockResolvedValueOnce(new Response(null, { status: 202 }))
+    .mockResolvedValueOnce(new Response(null, { status: 404 }))
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      blob: async () => blob,
+    } as Response);
+  try {
+    const { unmount } = render(
+      <ImageLoader src="/queued" fallback="/layout" position="top" />,
+    );
+    await act(async () => {});
+    expect(screen.getByTestId('image-loader')).toHaveAttribute(
+      'src',
+      '/layout',
+    );
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(6000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId('image-loader')).toHaveAttribute(
+      'src',
+      '/local_url',
+    );
+    unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('/local_url');
+  } finally {
+    fetch.mockRestore();
+    jest.useRealTimers();
+  }
 });

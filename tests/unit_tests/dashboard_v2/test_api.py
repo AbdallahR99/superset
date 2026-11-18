@@ -218,7 +218,14 @@ def test_get_returns_the_revision(
 
     assert response.status_code == 200
     assert response.get_json()["result"]["revision"] == 1
-    assert response.headers["ETag"] == '"1"'
+    assert response.headers["ETag"].startswith('"1-')
+    assert response.cache_control.private
+    assert response.cache_control.no_cache
+
+    # Clients can replay either the read validator or a bare revision.
+    saved = _put(client, pk, make_document("edited"), if_match=response.headers["ETag"])
+    assert saved.status_code == 200
+    assert saved.headers["ETag"] == '"2"'
 
 
 def test_publication_uses_saved_dashboard_metadata_without_changing_document(
@@ -231,14 +238,30 @@ def test_publication_uses_saved_dashboard_metadata_without_changing_document(
     """The publication control and V2 status describe the same saved row."""
     pk = _create(client, "chart")
     path = f"{BASE}{pk}"
-    before = client.get(path).get_json()["result"]
+    before_response = client.get(path)
+    before = before_response.get_json()["result"]
     assert before["published"] is False
     assert before["can_edit"] is True
     assert before["can_publish"] is True
 
+    mocker.patch.dict(client.application.config, {"COMPRESS_MIN_SIZE": 1})
+    compressed = client.get(path, headers={"Accept-Encoding": "gzip"})
+    assert compressed.headers["Content-Encoding"] == "gzip"
+    revalidate = {
+        "Accept-Encoding": "gzip",
+        "If-None-Match": compressed.headers["ETag"],
+    }
+    assert client.get(path, headers=revalidate).status_code == 304
+
     updated = client.put(f"/api/v1/dashboard/{pk}", json={"published": True})
     assert updated.status_code == 200, updated.get_json()
-    after = client.get(path).get_json()["result"]
+    assert client.get(path, headers=revalidate).status_code == 200
+    after_response = client.get(
+        path, headers={"If-None-Match": before_response.headers["ETag"]}
+    )
+    assert after_response.status_code == 200
+    assert after_response.headers["ETag"] != before_response.headers["ETag"]
+    after = after_response.get_json()["result"]
     assert after["published"] is True
     assert after["revision"] == before["revision"]
     assert after["document"] == before["document"]
@@ -250,7 +273,9 @@ def test_publication_uses_saved_dashboard_metadata_without_changing_document(
     assert viewer["can_publish"] is False
 
 
-@pytest.mark.parametrize("if_match", ['"1"', 'W/"1"', "1"])
+@pytest.mark.parametrize(
+    "if_match", ['"1"', 'W/"1"', "1", '"1:gzip"', '"1-1234567890abcdef:zstd"']
+)
 def test_put_with_if_match_bumps_the_revision(
     client: Any,
     dashboard_v2_enabled: None,

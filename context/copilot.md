@@ -165,10 +165,35 @@ history in a fresh signed-in session, English desktop and Arabic mobile,
 and a Widget SDK snippet from **Allocated Budget** in the classic dashboard
 and in Explore.
 
-The demo now runs `nxtbi/superset-fork:dashboard-v2-toolbar-20261118` at
+The Dashboard V2 toolbar update used `nxtbi/superset-fork:dashboard-v2-toolbar-20261118` at
 `sha256:5aa8fa12f21820366b4c16ac841e3327a6f4c240bf88f50b76e4762f025a63d4`.
 The Copilot update image is the rollback tag for this version. The builder
 exposes Undo and Redo for in-session edits, History for saved changes, and
 Publish and Unpublish for the saved dashboard. The live browser test kept
 dashboard 49 in Draft and exercised both publication actions on a temporary
 dashboard. The focused checks passed 151 frontend and 93 backend tests.
+
+## Dashboard workflow and card previews
+
+The Copilot starter actions help find authorized datasets and dashboards or
+begin a proposal. In the proposal editor, pick a dataset, saved metric, and
+grouping column by name. Changing datasets clears the previous bindings.
+Refresh the widget previews, then review and save a draft. Open it in the
+builder and use **Publish** once the saved version is ready to share.
+
+The NxtBI demo uses `DASHBOARD_LAYOUT_THUMBNAILS` for immediate previews based
+on saved widget placement. Classic cards load a screenshot when available.
+V2 uses its layout preview. These layout previews contain no query results.
+
+The workflow update uses `nxtbi/superset-fork:copilot-workflow-20261118` and
+`nxtbi/copilot-agent:workflow-20261118`. The preceding web and agent images
+are `nxtbi/superset-fork:dashboard-v2-toolbar-20261118` and
+`nxtbi/copilot-agent:before-workflow-20261118`. The matching rollback extension
+manifest is in `nxtbi/out/copilot/workflow-rollback-manifest.json` on the demo host.
+
+On the final images, Chromium verified that the Planning user could discover
+datasets, edit metric and grouping selections, load real widget previews,
+approve a draft, reopen it through History, and publish it across a reload.
+Dashboard V2 read validators include publication and permission metadata,
+while writes keep their document revision precondition. The focused backend
+suite passed 102 tests and the agent suite passed 20 tests.

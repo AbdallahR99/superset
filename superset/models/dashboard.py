@@ -71,6 +71,7 @@ from superset.subjects.models import (
 from superset.tasks.thumbnails import cache_dashboard_thumbnail
 from superset.tasks.utils import get_current_user
 from superset.thumbnails.digest import get_dashboard_digest
+from superset.thumbnails.layout import layout_thumbnail
 from superset.utils import core as utils, json
 
 if TYPE_CHECKING:
@@ -432,6 +433,13 @@ class Dashboard(CoreDashboard, SoftDeleteMixin, AuditMixinNullable, ImportExport
 
     def __repr__(self) -> str:
         return f"Dashboard<{self.id or self.slug}>"
+
+    @property
+    def layout_thumbnail_url(self) -> str:
+        """List-card illustration for deployments using data-free previews."""
+        if not app.config.get("DASHBOARD_LAYOUT_THUMBNAILS"):
+            return ""
+        return layout_thumbnail(self.json_metadata, self.position_json, self.id)
 
     @property
     def uses_v2_builder(self) -> bool:

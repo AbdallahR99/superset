@@ -19,6 +19,7 @@
 
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type FormEvent,
@@ -40,14 +41,32 @@ import {
   type CopilotTextMessage,
   type DashboardProposal,
 } from './contracts';
-import { a2uiOperations, readAgUiEvents } from './stream';
+import { a2uiOperations, fitAgUiInput, readAgUiEvents } from './stream';
+import { CopilotIcon } from './CopilotIcon';
+
+const starterIcons = ['data', 'dashboard', 'search'] as const;
 
 const english = {
   title: 'NxtBI Copilot',
   welcome: 'What would you like to explore?',
   description:
-    'Find a dashboard, ask about your data, or draft a dashboard to review.',
-  suggestions: ['Find my dashboards', 'Draft a dashboard from my datasets'],
+    'Start with the data you can access and turn it into a dashboard.',
+  suggestions: {
+    data: {
+      label: 'Explore datasets',
+      prompt:
+        'Show me the datasets I can access and help me choose useful metrics.',
+    },
+    dashboard: {
+      label: 'Draft a dashboard',
+      prompt:
+        'Help me choose a dataset and draft a dashboard I can preview, save, and publish.',
+    },
+    search: {
+      label: 'Find my dashboards',
+      prompt: 'Find my dashboards',
+    },
+  },
   history: 'History',
   newChat: 'New chat',
   conversations: 'Recent conversations',
@@ -63,6 +82,7 @@ const english = {
   working: 'Working…',
   submit: 'Continue with these values.',
   streamError: 'The response ended early. Please try again.',
+  restorePrompt: 'Restore prompt',
   uiError: 'This interactive view could not be loaded.',
   proposal: 'Dashboard proposal',
   dashboardTitle: 'Dashboard title',
@@ -72,15 +92,30 @@ const english = {
   saved: 'Dashboard saved',
   saving: 'Saving…',
   openDashboard: 'Open dashboard',
+  publishHint: 'Open the dashboard to review and publish it.',
   saveError: 'Could not save this dashboard. Check your access and selections.',
 };
 
 const arabic: typeof english = {
   title: 'مساعد NxtBI',
   welcome: 'ما الذي تريد استكشافه؟',
-  description:
-    'اعثر على لوحة معلومات، أو اسأل عن بياناتك، أو جهّز مسودة لوحة لمراجعتها.',
-  suggestions: ['اعثر على لوحات معلوماتي', 'جهّز مسودة لوحة من مجموعات بياناتي'],
+  description: 'ابدأ بالبيانات المتاحة لك وحوّلها إلى لوحة معلومات.',
+  suggestions: {
+    data: {
+      label: 'استكشف مجموعات البيانات',
+      prompt:
+        'اعرض مجموعات البيانات المتاحة لي وساعدني في اختيار مقاييس مفيدة.',
+    },
+    dashboard: {
+      label: 'جهّز مسودة لوحة معلومات',
+      prompt:
+        'ساعدني في اختيار مجموعة بيانات وإعداد مسودة لوحة معلومات لمعاينتها وحفظها ونشرها.',
+    },
+    search: {
+      label: 'اعثر على لوحات معلوماتي',
+      prompt: 'اعثر على لوحات معلوماتي',
+    },
+  },
   history: 'السجل',
   newChat: 'محادثة جديدة',
   conversations: 'المحادثات الأخيرة',
@@ -96,6 +131,7 @@ const arabic: typeof english = {
   working: 'جارٍ العمل…',
   submit: 'المتابعة بهذه القيم.',
   streamError: 'انقطع الرد. يرجى المحاولة مرة أخرى.',
+  restorePrompt: 'استعادة الطلب',
   uiError: 'تعذّر تحميل هذه الواجهة التفاعلية.',
   proposal: 'اقتراح لوحة معلومات',
   dashboardTitle: 'عنوان لوحة المعلومات',
@@ -105,6 +141,7 @@ const arabic: typeof english = {
   saved: 'تم حفظ لوحة المعلومات',
   saving: 'جارٍ الحفظ…',
   openDashboard: 'فتح لوحة المعلومات',
+  publishHint: 'افتح لوحة المعلومات لمراجعتها ونشرها.',
   saveError: 'تعذّر حفظ اللوحة. تحقّق من صلاحياتك واختياراتك.',
 };
 
@@ -122,6 +159,19 @@ const MAX_MESSAGES = 16;
 const MAX_PROMPT = 3000;
 const MAX_ANSWER = 24000;
 const HISTORY_TIMEOUT = 8000;
+const SCROLL_MARGIN = 32;
+
+function canApprove(proposal: DashboardProposal): boolean {
+  return (
+    Boolean(proposal.title.trim()) &&
+    proposal.widgets.every(widget =>
+      Boolean(
+        widget.metric.trim() &&
+        (widget.type !== 'echarts' || widget.dimension?.trim()),
+      ),
+    )
+  );
+}
 
 function CopilotMark() {
   return (
@@ -172,6 +222,7 @@ export function CopilotPanel({
   const isArabic = host.locale?.startsWith('ar');
   const copy = isArabic ? arabic : english;
   const direction = host.direction ?? (isArabic ? 'rtl' : 'ltr');
+  const historyId = useId();
   const [threadId, setThreadId] = useState<string>(() => crypto.randomUUID());
   const [messages, setMessages] = useState<CopilotTextMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -180,6 +231,7 @@ export function CopilotPanel({
   const [savedDashboard, setSavedDashboard] =
     useState<CopilotConversation['savedDashboard']>();
   const [error, setError] = useState('');
+  const [failedPrompt, setFailedPrompt] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [conversations, setConversations] = useState<CopilotConversation[]>([]);
   const [historyStatus, setHistoryStatus] = useState<
@@ -194,6 +246,7 @@ export function CopilotPanel({
   const connection = useRef<AbortController>();
   const mutation = useRef<AbortController>();
   const viewport = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
   const composer = useRef<HTMLTextAreaElement>(null);
   const catalogs = host.catalog ? [host.catalog] : undefined;
   const { history: archive } = host;
@@ -208,9 +261,9 @@ export function CopilotPanel({
   );
 
   useEffect(() => {
-    if (!historyOpen && viewport.current)
+    if (!historyOpen && followLatest.current && viewport.current)
       viewport.current.scrollTop = viewport.current.scrollHeight;
-  }, [historyOpen, messages, surface, proposal, savedDashboard]);
+  }, [historyOpen, messages, surface, proposal, savedDashboard, error]);
 
   useEffect(() => {
     if (!archive || !historyOpen) return undefined;
@@ -256,6 +309,7 @@ export function CopilotPanel({
   }
 
   function switchConversation(conversation?: CopilotConversation) {
+    followLatest.current = true;
     setThreadId(conversation?.threadId ?? crypto.randomUUID());
     setMessages(conversation?.messages ?? []);
     setSavedDashboard(conversation?.savedDashboard);
@@ -265,6 +319,7 @@ export function CopilotPanel({
     setConfirming(false);
     setDraft('');
     setError('');
+    setFailedPrompt('');
     setHistorySaveFailed(false);
     setHistoryOpen(false);
     window.requestAnimationFrame(() => composer.current?.focus());
@@ -275,19 +330,28 @@ export function CopilotPanel({
     if (!text || connection.current || mutation.current) return;
     const controller = new AbortController();
     connection.current = controller;
-    const history = [
-      ...messages.slice(-(MAX_MESSAGES - 1)),
-      { id: crypto.randomUUID(), role: 'user' as const, content: text },
-    ];
+    const previous = messages.at(-1);
+    const retry =
+      failedPrompt === text &&
+      previous?.role === 'user' &&
+      previous.content === text;
+    const history = retry
+      ? messages
+      : [
+          ...messages.slice(-(MAX_MESSAGES - 1)),
+          { id: crypto.randomUUID(), role: 'user' as const, content: text },
+        ];
     const reply: CopilotTextMessage = {
       id: crypto.randomUUID(),
       role: 'assistant',
       content: '',
     };
     let complete = false;
+    followLatest.current = true;
     setMessages(history);
     setStreaming(true);
     setError('');
+    setFailedPrompt('');
     setDraft('');
     setProposal(undefined);
     setConfirming(false);
@@ -295,7 +359,7 @@ export function CopilotPanel({
     const promptSaved = remember(history);
     try {
       const response = await host.run(
-        {
+        fitAgUiInput({
           threadId,
           runId: crypto.randomUUID(),
           messages: wireHistory(history),
@@ -303,7 +367,7 @@ export function CopilotPanel({
           context: buildContext(host),
           state: {},
           forwardedProps: action ? { a2uiAction: action } : {},
-        },
+        }),
         controller.signal,
       );
       for await (const event of readAgUiEvents(response)) {
@@ -351,10 +415,19 @@ export function CopilotPanel({
           }
         }
       }
-      if (!complete && !controller.signal.aborted)
+      if (controller.signal.aborted) {
+        setProposal(undefined);
+      } else if (!complete) {
         throw new Error('Incomplete AG-UI run');
+      }
     } catch {
-      if (!controller.signal.aborted) setError(copy.streamError);
+      complete = false;
+      setProposal(undefined);
+      if (!controller.signal.aborted) {
+        setMessages(history);
+        setFailedPrompt(text);
+        setError(copy.streamError);
+      }
     } finally {
       await promptSaved;
       if (complete && reply.content && !controller.signal.aborted) {
@@ -373,7 +446,14 @@ export function CopilotPanel({
   }
 
   async function approve() {
-    if (!proposal || !host.approve || !confirming || mutation.current) return;
+    if (
+      !proposal ||
+      !host.approve ||
+      !confirming ||
+      mutation.current ||
+      !canApprove(proposal)
+    )
+      return;
     const controller = new AbortController();
     mutation.current = controller;
     setSaving(true);
@@ -416,11 +496,15 @@ export function CopilotPanel({
           {archive && (
             <button
               type="button"
+              className="nxtbi-copilot__icon-button"
+              aria-label={copy.history}
+              title={copy.history}
               aria-expanded={historyOpen}
+              aria-controls={historyOpen ? historyId : undefined}
               disabled={busy}
               onClick={() => setHistoryOpen(open => !open)}
             >
-              {copy.history}
+              <CopilotIcon name="history" />
             </button>
           )}
           {headerActions}
@@ -428,6 +512,7 @@ export function CopilotPanel({
       </header>
       {archive && historyOpen ? (
         <section
+          id={historyId}
           className="nxtbi-copilot__history"
           aria-label={copy.conversations}
         >
@@ -487,23 +572,33 @@ export function CopilotPanel({
         </section>
       ) : (
         <>
-          <div className="nxtbi-copilot__history" ref={viewport}>
+          <div
+            className="nxtbi-copilot__history"
+            ref={viewport}
+            onScroll={event => {
+              const { scrollHeight, scrollTop, clientHeight } =
+                event.currentTarget;
+              followLatest.current =
+                scrollHeight - scrollTop - clientHeight <= SCROLL_MARGIN;
+            }}
+          >
             {!messages.length && (
               <div className="nxtbi-copilot__welcome">
                 <h3>{copy.welcome}</h3>
                 <p>{copy.description}</p>
                 {host.approve && (
                   <div className="nxtbi-copilot__suggestions">
-                    {copy.suggestions.map(suggestion => (
+                    {starterIcons.map(icon => (
                       <button
                         type="button"
-                        key={suggestion}
+                        key={icon}
                         onClick={() => {
-                          setDraft(suggestion);
+                          setDraft(copy.suggestions[icon].prompt);
                           composer.current?.focus();
                         }}
                       >
-                        {suggestion}
+                        <CopilotIcon name={icon} />
+                        {copy.suggestions[icon].label}
                       </button>
                     ))}
                   </div>
@@ -583,7 +678,7 @@ export function CopilotPanel({
                   <button
                     className="nxtbi-copilot__primary"
                     type="button"
-                    disabled={streaming || !proposal.title.trim()}
+                    disabled={streaming || !canApprove(proposal)}
                     onClick={() => setConfirming(true)}
                   >
                     {copy.review}
@@ -598,7 +693,10 @@ export function CopilotPanel({
             )}
             {savedDashboard && (
               <div className="nxtbi-copilot__saved">
-                <strong role="status">{copy.saved}</strong>
+                <div>
+                  <strong role="status">{copy.saved}</strong>
+                  {host.navigate && <p>{copy.publishHint}</p>}
+                </div>
                 {host.navigate && (
                   <button
                     className="nxtbi-copilot__primary"
@@ -617,15 +715,28 @@ export function CopilotPanel({
               </p>
             )}
             {error && (
-              <p className="nxtbi-copilot__error" role="alert">
-                {error}
-              </p>
+              <div className="nxtbi-copilot__feedback">
+                <p className="nxtbi-copilot__error" role="alert">
+                  {error}
+                </p>
+                {failedPrompt && !draft && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraft(failedPrompt);
+                      composer.current?.focus();
+                    }}
+                  >
+                    {copy.restorePrompt}
+                  </button>
+                )}
+              </div>
             )}
           </div>
           <form className="nxtbi-copilot__composer" onSubmit={submit}>
             <textarea
               ref={composer}
-              rows={1}
+              rows={2}
               value={draft}
               aria-label={copy.placeholder}
               placeholder={copy.placeholder}

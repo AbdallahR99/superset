@@ -307,6 +307,17 @@ describe('thumbnail URL construction', () => {
     );
   });
 
+  test('uses a V2 layout preview without requesting a classic screenshot', () => {
+    const layout = 'data:image/svg+xml;base64,PHN2Zy8+';
+    renderCard({
+      ...mockDashboard,
+      url: '/dashboard/v2/49/',
+      layout_thumbnail_url: layout,
+    });
+    expect(screen.getByTestId('image-loader')).toHaveAttribute('src', layout);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   test('falls back to changed_on when changed_on_utc is absent', () => {
     renderCard({
       id: 3,

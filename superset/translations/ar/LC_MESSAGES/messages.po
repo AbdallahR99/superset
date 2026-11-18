@@ -23074,3 +23074,25 @@ msgstr ""
 
 msgid "You do not have access to this dashboard."
 msgstr "ليس لديك صلاحية الوصول إلى لوحة المعلومات هذه."
+
+msgid "Publish"
+msgstr "نشر"
+
+msgid "Unpublish"
+msgstr "إلغاء النشر"
+
+msgid "Save changes before publishing"
+msgstr "احفظ التغييرات قبل النشر"
+
+msgid "Dashboard published"
+msgstr "تم نشر لوحة المعلومات"
+
+msgid "Dashboard unpublished"
+msgstr "تم إلغاء نشر لوحة المعلومات"
+
+msgid ""
+"Could not change dashboard publication. Refresh to check its status, then "
+"try again."
+msgstr ""
+"تعذّر تغيير حالة نشر لوحة المعلومات. حدّث الصفحة للتحقق من حالتها، ثم "
+"حاول مرة أخرى."
