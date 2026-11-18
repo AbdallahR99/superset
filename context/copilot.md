@@ -220,7 +220,7 @@ suite passed 102 tests and the agent suite passed 20 tests.
 
 ## Evidence-based Copilot rollout
 
-The main demo at [port 8088](http://localhost:8088) runs
+The evidence-based rollout on the main demo used
 `nxtbi/superset-fork:copilot-analysis-polished-20261118` and
 `nxtbi/copilot-agent:analysis-polished-20261118`.
 The image digests are `sha256:e07f0e8aa0fd39aab67e2734fcf6fa39f5c971b11fc6ad762946c00be9d33089`
@@ -263,3 +263,19 @@ The broader Dashboard V2, Widgets, and Copilot backend run passed 622 of 655
 tests. All 33 failures reproduced on the previous image. The Dashboard V2
 fixtures lack an authenticated Flask user, and one widget schema test hits a
 timezone dependency error during MCP registration in the test environment.
+
+## Markdown quote rollout
+
+The main demo at [port 8088](http://localhost:8088) runs
+`nxtbi/superset-fork:copilot-4558abd734` at
+`sha256:7b7ad5f10e7fe14b3dcfc74a0cc95f124c7239aa1172bce8d0fcb48ac252b56b`.
+The image includes Copilot commit `4558abd734`. The rollout replaced only
+the web container. Database fingerprints, settings, mounts, and dependent
+container identities matched the pre-rollout snapshot. Chromium opened the
+same saved conversation and verified that the deployed stylesheet draws the
+1px quote border on the leading edge in both reading directions.
+All 34 live smoke checks passed on this image.
+
+The previous web image is `nxtbi/superset-fork:copilot-analysis-polished-20261118`.
+Its manifest and the web-only rollback script are in
+`nxtbi/out/copilot/quote-rollout-4558abd734/` on the demo host.
