@@ -181,9 +181,91 @@
   overflow-wrap: anywhere;
 }
 
-.nxtbi-copilot__message p {
+.nxtbi-copilot__message--user p {
   margin: 0;
   white-space: pre-wrap;
+}
+
+.nxtbi-copilot__markdown > * {
+  margin-block: 0;
+}
+
+.nxtbi-copilot__markdown > * + * {
+  margin-block-start: 0.75rem;
+}
+
+.nxtbi-copilot__markdown :is(h1, h2, h3, h4, h5, h6) {
+  color: inherit;
+  font-size: 1em;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.nxtbi-copilot__markdown :is(h1, h2) {
+  font-size: 1.15em;
+}
+
+.nxtbi-copilot__markdown :is(ul, ol) {
+  padding-inline-start: 1.5rem;
+}
+
+.nxtbi-copilot__markdown blockquote {
+  margin-inline: 0;
+  padding-inline-start: 0.75rem;
+  border-inline-start: 3px solid var(--copilot-border);
+  color: var(--copilot-muted);
+}
+
+.nxtbi-copilot__markdown blockquote > :last-child {
+  margin-block-end: 0;
+}
+
+.nxtbi-copilot__markdown a {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.nxtbi-copilot__markdown :is(pre, code) {
+  border-radius: 0.3rem;
+  background: var(--copilot-tint);
+}
+
+.nxtbi-copilot__markdown code {
+  padding: 0.1em 0.25em;
+  color: inherit;
+}
+
+.nxtbi-copilot__markdown pre {
+  overflow-x: auto;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--copilot-border);
+  color: inherit;
+  text-align: start;
+}
+
+.nxtbi-copilot__markdown pre code {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.nxtbi-copilot__markdown-table {
+  overflow-x: auto;
+}
+
+.nxtbi-copilot__markdown table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.nxtbi-copilot__markdown :is(th, td) {
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--copilot-border);
+  text-align: start;
+}
+
+.nxtbi-copilot__markdown th {
+  background: var(--copilot-tint);
 }
 
 .nxtbi-copilot__message--user {

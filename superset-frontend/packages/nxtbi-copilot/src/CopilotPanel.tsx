@@ -18,13 +18,16 @@
  */
 
 import {
+  memo,
   useEffect,
   useId,
   useRef,
   useState,
+  type AnchorHTMLAttributes,
   type FormEvent,
   type ReactNode,
 } from 'react';
+import Markdown, { type MarkdownToJSX } from 'markdown-to-jsx/react';
 import {
   A2uiRenderer,
   applyA2uiMessage,
@@ -43,6 +46,65 @@ import {
 } from './contracts';
 import { a2uiOperations, fitAgUiInput, readAgUiEvents } from './stream';
 import { CopilotIcon } from './CopilotIcon';
+
+/** Only render a link when the browser resolves it to a supported protocol. */
+function MarkdownLink({
+  href,
+  title,
+  children,
+}: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  if (href) {
+    try {
+      const { protocol } = new URL(href, 'https://copilot.invalid');
+      if (['https:', 'http:', 'mailto:'].includes(protocol)) {
+        return (
+          <a href={href} title={title}>
+            {children}
+          </a>
+        );
+      }
+    } catch {
+      // Keep the label for a malformed destination.
+    }
+  }
+  return <span>{children}</span>;
+}
+
+const markdownOptions: MarkdownToJSX.Options = {
+  disableParsingRawHTML: true,
+  ignoreHTMLBlocks: true,
+  forceBlock: true,
+  wrapper: null,
+  overrides: {
+    a: MarkdownLink,
+    img: () => null,
+    pre: { props: { dir: 'ltr' } },
+    table: ({ children }: { children: ReactNode }) => (
+      <div className="nxtbi-copilot__markdown-table">
+        <table>{children}</table>
+      </div>
+    ),
+  },
+};
+
+/** Render assistant text safely while new stream chunks arrive. */
+const AssistantMarkdown = memo(function AssistantMarkdown({
+  content,
+  streaming,
+}: {
+  content: string;
+  streaming: boolean;
+}) {
+  return (
+    <div className="nxtbi-copilot__markdown" dir="auto">
+      <Markdown
+        options={{ ...markdownOptions, optimizeForStreaming: streaming }}
+      >
+        {content}
+      </Markdown>
+    </div>
+  );
+});
 
 const starterIcons = ['data', 'dashboard', 'search'] as const;
 
@@ -605,15 +667,24 @@ export function CopilotPanel({
                 )}
               </div>
             )}
-            {messages.map(message => (
+            {messages.map((message, index) => (
               <div
                 key={message.id}
                 className={`nxtbi-copilot__message nxtbi-copilot__message--${message.role}`}
               >
-                {message.role === 'assistant' && (
-                  <span className="nxtbi-copilot__speaker">{copy.speaker}</span>
+                {message.role === 'assistant' ? (
+                  <>
+                    <span className="nxtbi-copilot__speaker">
+                      {copy.speaker}
+                    </span>
+                    <AssistantMarkdown
+                      content={message.content}
+                      streaming={streaming && index === messages.length - 1}
+                    />
+                  </>
+                ) : (
+                  <p dir="auto">{message.content}</p>
                 )}
-                <p dir="auto">{message.content}</p>
               </div>
             ))}
             {renderActivities ? (
