@@ -1,0 +1,8 @@
+{
+  "publisher": "nxtbi",
+  "name": "ai-copilot",
+  "displayName": "NxtBI AI Copilot",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "permissions": []
+}

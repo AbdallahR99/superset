@@ -775,6 +775,7 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # respond with 404 and the frontend hides every entry point.
     # @lifecycle: development
     "DASHBOARD_V2": False,
+    "NXTBI_AI_COPILOT": False,
     # Allow metrics and columns to be grouped into folders in the chart builder
     # @lifecycle: development
     "DATASET_FOLDERS": False,

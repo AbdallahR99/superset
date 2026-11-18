@@ -1,0 +1,90 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Overlay for nxtbi/docker-compose.yml. Relative paths are anchored in nxtbi.
+x-copilot-superset-build: &copilot-superset-build
+  context: ..
+  dockerfile: nxtbi/copilot/superset.Dockerfile
+  args:
+    SUPERSET_BASE_IMAGE: ${NXTBI_COPILOT_SUPERSET_BASE_IMAGE:-nxtbi/superset-fork:upstream-sync-6e54f477a0}
+x-copilot-superset-environment: &copilot-superset-environment
+  NXTBI_COPILOT_ENABLED: "true"
+  NXTBI_COPILOT_AGENT_URL: http://copilot-agent:8100/ag-ui
+  NXTBI_COPILOT_MCP_URL: http://superset-mcp:5008/mcp
+  NXTBI_COPILOT_SHARED_SECRET: ${NXTBI_COPILOT_SHARED_SECRET:?Configure Copilot signing material}
+  NXTBI_COPILOT_LOCAL_EXTENSION: /app/nxtbi/copilot-extension
+services:
+  superset:
+    image: ${NXTBI_COPILOT_SUPERSET_IMAGE:-nxtbi/superset-fork:copilot-local}
+    build: *copilot-superset-build
+    environment:
+      <<: *copilot-superset-environment
+    volumes:
+      - ./copilot/superset-extension:/app/nxtbi/copilot-extension:ro
+    depends_on:
+      copilot-agent:
+        condition: service_healthy
+
+  superset-init:
+    image: ${NXTBI_COPILOT_SUPERSET_IMAGE:-nxtbi/superset-fork:copilot-local}
+    build: *copilot-superset-build
+    environment:
+      <<: *copilot-superset-environment
+    volumes:
+      - ./copilot/superset-extension:/app/nxtbi/copilot-extension:ro
+
+  copilot-agent:
+    image: nxtbi/copilot-agent:local
+    build:
+      context: ..
+      dockerfile: nxtbi/copilot/Dockerfile
+      target: agent
+    environment:
+      NXTBI_COPILOT_MODEL: ${NXTBI_COPILOT_MODEL:?Configure a tool-capable model}
+      NXTBI_COPILOT_MODEL_BASE_URL: ${NXTBI_COPILOT_MODEL_BASE_URL:?Configure an OpenAI-compatible endpoint}
+      NXTBI_COPILOT_MODEL_API_KEY: ${NXTBI_COPILOT_MODEL_API_KEY:-}
+      NXTBI_COPILOT_SHARED_SECRET: ${NXTBI_COPILOT_SHARED_SECRET:?Configure Copilot signing material}
+      NXTBI_COPILOT_TOOL_URL: http://superset:8088/api/v1/nxtbi_copilot/internal/tools
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8100/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 5s
+    restart: unless-stopped
+
+  copilot-example:
+    image: nxtbi/copilot-example:local
+    profiles: ["copilot-example"]
+    build:
+      context: ..
+      dockerfile: nxtbi/copilot/Dockerfile
+      target: standalone
+    environment:
+      NXTBI_COPILOT_AGENT_URL: http://copilot-agent:8100/ag-ui
+      NXTBI_COPILOT_SHARED_SECRET: ${NXTBI_COPILOT_SHARED_SECRET:?Configure Copilot signing material}
+      NXTBI_COPILOT_DEMO_USERNAME: ${NXTBI_COPILOT_DEMO_USERNAME:-demo}
+      NXTBI_COPILOT_DEMO_PASSWORD: ${NXTBI_COPILOT_DEMO_PASSWORD:-}
+      NXTBI_COPILOT_DEMO_ORIGIN: http://localhost:${NXTBI_COPILOT_DEMO_PORT:-5186}
+    ports:
+      - "127.0.0.1:${NXTBI_COPILOT_DEMO_PORT:-5186}:8101"
+    depends_on:
+      copilot-agent:
+        condition: service_healthy
+    restart: unless-stopped

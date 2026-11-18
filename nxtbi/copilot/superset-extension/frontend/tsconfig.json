@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["react"],
+    "typeRoots": ["../../../../superset-frontend/node_modules/@types"],
+    "paths": {
+      "react": [
+        "../../../../superset-frontend/node_modules/@types/react/index.d.ts"
+      ],
+      "react/*": ["../../../../superset-frontend/node_modules/@types/react/*"],
+      "@apache-superset/core": [
+        "../../../../superset-frontend/packages/superset-core/lib/index.d.ts"
+      ],
+      "@apache-superset/widgets": [
+        "../../../../superset-frontend/packages/superset-widgets/lib/index.d.ts"
+      ],
+      "@nxtbi/copilot": [
+        "../../../../superset-frontend/packages/nxtbi-copilot/src/index.ts"
+      ]
+    }
+  },
+  "include": ["src"]
+}

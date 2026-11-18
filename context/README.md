@@ -29,6 +29,7 @@ Read in this order:
 | [testing.md](testing.md) | Every check, how to run it, last results |
 | [known-limitations.md](known-limitations.md) | What is not done or not verified |
 | [git-state.md](git-state.md) | Branches, merges, what is pushed |
+| [copilot.md](copilot.md) | Copilot SDK, host integration, agent, and startup |
 
 Longer documents, all under `nxtbi/docs/`: `I18N-RTL.md`, `WIDGETS.md`, `TEST-RESULTS.md`,
 `CAPABILITY-MATRIX.md`, `rtl/` (RTL research), `widgets/` (PR review, API contract, security model).
