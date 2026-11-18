@@ -607,6 +607,11 @@ class Superset(BaseSupersetView):
             if not get_current_user():
                 return redirect_to_login()
             abort(404)
+        if dashboard.uses_v2_builder:
+            url = url_for("DashboardBuilderV2View.show", pk=dashboard.id)
+            if request.query_string:
+                url += "?" + request.query_string.decode("latin-1")
+            return redirect(url)
         add_extra_log_payload(
             dashboard_id=dashboard.id,
             dashboard_version="v2",

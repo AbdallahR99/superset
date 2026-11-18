@@ -36,6 +36,53 @@ from tests.unit_tests.dashboard_v2.conftest import make_document, stored_documen
 BASE = "/api/v1/dashboard_v2/"
 
 
+def test_dashboard_slug_opens_the_saved_builder_document(
+    client: Any,
+    dashboard_v2_enabled: None,
+    editor: None,
+    v2_session: Session,
+    mocker: MockerFixture,
+) -> None:
+    """List links and existing bookmarks open the document saved by approval."""
+    from superset.models.dashboard import Dashboard
+
+    dashboard = v2_session.get(Dashboard, _create(client, "sales"))
+    assert dashboard is not None
+    dashboard.slug = "test"
+    v2_session.flush()
+    mocker.patch("superset.views.core.get_current_user", return_value=object())
+    assert dashboard.url == f"/dashboard/v2/{dashboard.id}/"
+    response = client.get("/dashboard/test/?edit=true&tab=1&tab=2")
+    assert response.status_code == 302
+    assert response.location == f"{dashboard.url}?edit=true&tab=1&tab=2"
+
+    dashboard.json_metadata = "{}"
+    assert dashboard.url == "/dashboard/test/"
+
+
+@pytest.mark.parametrize("distinct", [True, False])
+def test_recent_activity_opens_the_saved_builder_document(
+    client: Any,
+    dashboard_v2_enabled: None,
+    editor: None,
+    v2_session: Session,
+    mocker: MockerFixture,
+    distinct: bool,
+) -> None:
+    """The home activity table can navigate directly to a V2 document."""
+    from superset.daos.log import LogDAO
+    from superset.models.core import Log
+
+    dashboard_id = _create(client, "sales")
+    mocker.patch("superset.daos.log.get_user_id", return_value=None)
+    v2_session.add(
+        Log(action="log", dashboard_id=dashboard_id, json='{"event_name": "view"}')
+    )
+    v2_session.flush()
+    activity = LogDAO.get_recent_activity(["view"], distinct, 0, 10)
+    assert [row["item_url"] for row in activity] == [f"/dashboard/v2/{dashboard_id}/"]
+
+
 def _denied() -> SupersetSecurityException:
     return SupersetSecurityException(
         SupersetError(

@@ -50,6 +50,7 @@ from superset.connectors.sqla.models import (
     SqlaTable,
 )
 from superset.daos.datasource import Datasource, DatasourceDAO
+from superset.dashboard_v2.document import load_stored_document
 from superset.models.helpers import (
     AuditMixinNullable,
     ImportExportMixin,
@@ -433,7 +434,16 @@ class Dashboard(CoreDashboard, SoftDeleteMixin, AuditMixinNullable, ImportExport
         return f"Dashboard<{self.id or self.slug}>"
 
     @property
+    def uses_v2_builder(self) -> bool:
+        """Whether this dashboard opens in the enabled document-based builder."""
+        return is_feature_enabled("DASHBOARD_V2") and (
+            load_stored_document(self.json_metadata) is not None
+        )
+
+    @property
     def url(self) -> str:
+        if self.uses_v2_builder:
+            return f"/dashboard/v2/{self.id}/"
         return f"/dashboard/{self.slug or self.id}/"
 
     @staticmethod

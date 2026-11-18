@@ -19,6 +19,7 @@ from typing import Any
 
 import humanize
 from sqlalchemy import and_, or_
+from sqlalchemy.orm import Load
 from sqlalchemy.sql import functions as func
 
 from superset import db
@@ -77,8 +78,7 @@ class LogDAO(BaseDAO[Log]):
             qry = (
                 db.session.query(
                     subqry,
-                    Dashboard.slug.label("dashboard_slug"),
-                    Dashboard.dashboard_title,
+                    Dashboard,
                     Slice.slice_name,
                 )
                 .outerjoin(Dashboard, Dashboard.id == subqry.c.dashboard_id)
@@ -98,8 +98,7 @@ class LogDAO(BaseDAO[Log]):
                     Log.action,
                     Log.dashboard_id,
                     Log.slice_id,
-                    Dashboard.slug.label("dashboard_slug"),
-                    Dashboard.dashboard_title,
+                    Dashboard,
                     Slice.slice_name,
                 )
                 .outerjoin(Dashboard, Dashboard.id == Log.dashboard_id)
@@ -120,15 +119,23 @@ class LogDAO(BaseDAO[Log]):
                 .offset(page * page_size)
             )
 
+        qry = qry.options(
+            Load(Dashboard).load_only(
+                Dashboard.id,
+                Dashboard.slug,
+                Dashboard.dashboard_title,
+                Dashboard.json_metadata,
+            )
+        )
         payload = []
         for log in qry.all():
             item_url = None
             item_title = None
             item_type = None
-            if log.dashboard_id:
+            if log.dashboard_id and log.Dashboard:
                 item_type = "dashboard"
-                item_url = Dashboard.get_url(log.dashboard_id, log.dashboard_slug)
-                item_title = log.dashboard_title
+                item_url = log.Dashboard.url
+                item_title = log.Dashboard.dashboard_title
             elif log.slice_id:
                 item_type = "slice"
                 item_url = Slice.build_explore_url(log.slice_id)

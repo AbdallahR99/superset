@@ -20,3 +20,7 @@ FROM ${SUPERSET_BASE_IMAGE} AS superset
 COPY --chown=superset:superset superset/copilot /app/superset/copilot
 COPY --chown=superset:superset superset/config.py /app/superset/config.py
 COPY --chown=superset:superset superset/initialization/__init__.py /app/superset/initialization/__init__.py
+COPY --chown=superset:superset superset/dashboards/api.py /app/superset/dashboards/api.py
+COPY --chown=superset:superset superset/daos/log.py /app/superset/daos/log.py
+COPY --chown=superset:superset superset/models/dashboard.py /app/superset/models/dashboard.py
+COPY --chown=superset:superset superset/views/core.py /app/superset/views/core.py
