@@ -212,7 +212,7 @@
 .nxtbi-copilot__markdown blockquote {
   margin-inline: 0;
   padding-inline-start: 0.75rem;
-  border-inline-start: 3px solid var(--copilot-border);
+  border-inline-start: 1px solid var(--copilot-border);
   color: var(--copilot-muted);
 }
 
