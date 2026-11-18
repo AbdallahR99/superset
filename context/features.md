@@ -19,6 +19,9 @@
 
 - Builder: add, configure, move, resize, save, reload; containers (tabs, collapsible, carousel);
   conflict dialog on a stale save; embed dialogs.
+- Dashboard editors can undo and redo edits in the open builder and inspect saved
+  changes through History. Save the draft before using Publish. Published dashboards
+  can be returned to draft using Unpublish.
 - Widgets: ECharts chart, AG Grid table, metric tile, select filter, filter bar, markdown.
 - Filter widgets, chart cross-filtering, host-controlled filters.
 - Saved widgets (CRUD, paged list) and inline definitions; server-side data and filter values.

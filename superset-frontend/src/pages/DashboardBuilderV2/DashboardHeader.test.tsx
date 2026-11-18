@@ -17,6 +17,7 @@
  * under the License.
  */
 import userEvent from '@testing-library/user-event';
+import { FeatureFlag } from '@superset-ui/core';
 import { render, screen } from 'spec/helpers/testing-library';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
 import DashboardHeader, { humanize } from './DashboardHeader';
@@ -32,8 +33,25 @@ const renderHeader = () =>
     initialState: { user: ADMIN },
   });
 
+const previousFlags = window.featureFlags;
 beforeEach(() => {
+  window.featureFlags = {
+    ...previousFlags,
+    [FeatureFlag.VersionHistory]: true,
+  };
   provider.reset();
+});
+afterEach(() => {
+  window.featureFlags = previousFlags;
+});
+
+test('hides dashboard history when version history is disabled', () => {
+  window.featureFlags = {
+    ...previousFlags,
+    [FeatureFlag.VersionHistory]: false,
+  };
+  renderHeader();
+  expect(screen.queryByTestId('header-history')).not.toBeInTheDocument();
 });
 
 test('the header carries the dashboard-level affordances', () => {
@@ -126,6 +144,29 @@ test('the dashboard is nameable, and the name is stored on the dashboard', async
   // On the root node rather than in this component's state: a name is
   // something the dashboard has, so the assistant can read and rename it too.
   expect(provider.getRoot().props?.title).toBe('Vaccine rollout');
+});
+
+test('undo and redo restore the dashboard title and update the available actions', async () => {
+  renderHeader();
+
+  const title = screen.getByRole('textbox', { name: 'Dashboard title' });
+  const undo = () => screen.getByRole('button', { name: 'Undo' });
+  const redo = () => screen.getByRole('button', { name: 'Redo' });
+  expect(undo()).toBeDisabled();
+  expect(redo()).toBeDisabled();
+
+  await userEvent.type(title, 'Sales');
+  await userEvent.tab();
+  expect(undo()).toBeEnabled();
+  await userEvent.click(undo());
+  expect(title).toHaveValue('');
+  expect(undo()).toBeDisabled();
+  expect(redo()).toBeEnabled();
+
+  await userEvent.click(redo());
+  expect(title).toHaveValue('Sales');
+  expect(undo()).toBeEnabled();
+  expect(redo()).toBeDisabled();
 });
 
 test('the title shows a rename made anywhere else', () => {

@@ -149,9 +149,9 @@ filter state is outside the Copilot adapter. The standalone app uses a
 separate demonstration identity and catalog. GovAI was the verified model
 provider. An optional Ollama smoke run reached the agent time limit.
 
-## Main demo update
+## Main demo Copilot update
 
-The demo on port 8088 runs `nxtbi/superset-fork:copilot-demo-polish-20261118`
+The Copilot update on port 8088 used `nxtbi/superset-fork:copilot-demo-polish-20261118`
 with image digest `sha256:b040b8d394231aadb25dbdf29099d2848ca9c33560e5032c9a9b5b79e5620d7b`.
 The rollout recreated only the web container. The database fingerprints,
 service settings and mounts matched the snapshot from before rollout.
@@ -164,3 +164,11 @@ original saved dashboard and its six widgets, a new Copilot save and retry,
 history in a fresh signed-in session, English desktop and Arabic mobile,
 and a Widget SDK snippet from **Allocated Budget** in the classic dashboard
 and in Explore.
+
+The demo now runs `nxtbi/superset-fork:dashboard-v2-toolbar-20261118` at
+`sha256:5aa8fa12f21820366b4c16ac841e3327a6f4c240bf88f50b76e4762f025a63d4`.
+The Copilot update image is the rollback tag for this version. The builder
+exposes Undo and Redo for in-session edits, History for saved changes, and
+Publish and Unpublish for the saved dashboard. The live browser test kept
+dashboard 49 in Draft and exercised both publication actions on a temporary
+dashboard. The focused checks passed 151 frontend and 93 backend tests.

@@ -51,6 +51,12 @@ const eventValueKey = (nodeId: string, eventType: string): string =>
 type StoredNode = Omit<DashboardNode, 'id'>;
 
 const ROOT_ID = 'root';
+const MAX_HISTORY_ENTRIES = 50;
+
+interface DocumentSnapshot {
+  nodes: Record<string, StoredNode>;
+  id: number;
+}
 
 /**
  * The root's own type — the one container every dashboard always has,
@@ -190,7 +196,7 @@ class DashboardProvider implements WidgetBus {
 
   /**
    * Which document the tree is. Ticks whenever the whole tree is replaced
-   * (`loadDocument`, `newDocument`), and at no other time.
+   * (`loadDocument`, `newDocument`, undo, redo), and at no other time.
    *
    * Node ids repeat between documents, and a reloaded copy of one dashboard
    * has the very ids its previous copy had, so "a node with this id still
@@ -207,6 +213,12 @@ class DashboardProvider implements WidgetBus {
    * saved" is answered from.
    */
   private documentVersion = 0;
+
+  private documentStateId = 0;
+
+  private undoStack: DocumentSnapshot[] = [];
+
+  private redoStack: DocumentSnapshot[] = [];
 
   /**
    * Which node the author is working on.
@@ -259,6 +271,21 @@ class DashboardProvider implements WidgetBus {
   /** Host-internal. Ticks once per change to the document; see `documentVersion`. */
   public getDocumentVersion = (): number => this.documentVersion;
 
+  /** Identifies the current snapshot, including when revisited by undo or redo. */
+  public getDocumentStateId = (): number => this.documentStateId;
+
+  /** Whether there is an earlier edit in this document. */
+  public canUndo = (): boolean => this.undoStack.length > 0;
+
+  /** Whether an undone edit is still available. */
+  public canRedo = (): boolean => this.redoStack.length > 0;
+
+  /** Restores the document before its last edit. */
+  public undo = (): void => this.restore(this.undoStack, this.redoStack);
+
+  /** Reapplies the last edit undone in this document. */
+  public redo = (): void => this.restore(this.redoStack, this.undoStack);
+
   /** Host-internal. Ticks when the whole tree is replaced; see `documentGeneration`. */
   public getDocumentGeneration = (): number => this.documentGeneration;
 
@@ -279,7 +306,33 @@ class DashboardProvider implements WidgetBus {
     this.stateSubscribers.forEach(fn => fn());
   };
 
-  private commit(nodes: Record<string, StoredNode>): void {
+  /** Moves a snapshot between history stacks and publishes it as one change. */
+  private restore(from: DocumentSnapshot[], to: DocumentSnapshot[]): void {
+    const snapshot = from.pop();
+    if (!snapshot) return;
+    to.push({ nodes: this.nodes, id: this.documentStateId });
+    this.documentGeneration += 1;
+    this.setNodes(snapshot.nodes, snapshot.id);
+  }
+
+  /** Records an edit, or establishes a baseline after replacing the document. */
+  private commit(
+    nodes: Record<string, StoredNode>,
+    replaceDocument = false,
+  ): void {
+    if (replaceDocument) {
+      this.undoStack = [];
+    } else {
+      this.undoStack.push({ nodes: this.nodes, id: this.documentStateId });
+      if (this.undoStack.length > MAX_HISTORY_ENTRIES) this.undoStack.shift();
+    }
+    this.redoStack = [];
+    // Store node maps without prototypes so ids never resolve to inherited keys.
+    this.setNodes(createNodeMap(nodes), this.documentVersion + 1);
+  }
+
+  /** Publishes a snapshot after reconciling references to the current tree. */
+  private setNodes(nodes: Record<string, StoredNode>, id: number): void {
     // A selection is a reference to a node, and a node that is gone cannot be
     // the thing being edited. Clearing it here — rather than at each removal
     // site — covers a subtree deletion too, where the node that vanished was
@@ -287,10 +340,8 @@ class DashboardProvider implements WidgetBus {
     if (this.selection !== undefined && !hasNode(nodes, this.selection)) {
       this.selection = undefined;
     }
-    // Held without a prototype whatever built `nodes`: an id is looked up
-    // here as a key, and a key such as `constructor` must find a node or
-    // nothing, never a member every object has.
-    this.nodes = createNodeMap(nodes);
+    this.nodes = nodes;
+    this.documentStateId = id;
     this.revision += 1;
     this.documentVersion += 1;
     this.layoutChangeEmitter.fire();
@@ -428,7 +479,13 @@ class DashboardProvider implements WidgetBus {
     });
   }
 
-  public addWidget(parentId: string, index: number, spec: WidgetSpec): string {
+  /** Adds a widget, optionally resizing the sibling it shares space with. */
+  public addWidget(
+    parentId: string,
+    index: number,
+    spec: WidgetSpec,
+    siblingResize?: { id: string; layout: Partial<LayoutProps> },
+  ): string {
     if (spec.type === GRID_TYPE) {
       throw new Error(
         `[dashboard] Cannot add a "${GRID_TYPE}" node — it is reserved for the dashboard root, not a Widget`,
@@ -463,6 +520,13 @@ class DashboardProvider implements WidgetBus {
     const nodes = createNodeMap(this.nodes);
     nodes[parentId] = { ...parent, children };
     nodes[id] = node;
+    if (siblingResize && parent.children.includes(siblingResize.id)) {
+      const sibling = nodes[siblingResize.id];
+      nodes[siblingResize.id] = {
+        ...sibling,
+        layout: { ...sibling.layout, ...siblingResize.layout },
+      };
+    }
 
     this.commit(this.resolveParentCollisions(parentId, nodes));
 
@@ -670,7 +734,7 @@ class DashboardProvider implements WidgetBus {
     this.selection = undefined;
     this.eventValues = {};
     this.eventSources.clear();
-    this.commit(tree);
+    this.commit(tree, true);
     return issues;
   }
 
@@ -793,7 +857,10 @@ class DashboardProvider implements WidgetBus {
     this.selection = undefined;
     this.revision = 0;
     this.documentVersion = 0;
+    this.documentStateId = 0;
     this.documentGeneration = 0;
+    this.undoStack = [];
+    this.redoStack = [];
     this.nextNodeId = 0;
     this.allocatedSourceIds = 0;
     this.allocatedSources.clear();

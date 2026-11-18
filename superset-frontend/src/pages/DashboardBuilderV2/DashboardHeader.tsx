@@ -38,9 +38,11 @@ import type { BootstrapUser } from 'src/types/bootstrapTypes';
 import { provider, useDashboardRevision } from 'src/core/dashboard/store';
 import { useDashboardSession } from 'src/core/dashboard/session';
 import ConflictDialog from './ConflictDialog';
+import DashboardHistory from './DashboardHistory';
 import EmbedDashboardModal from './EmbedDashboardModal';
 import Inert from './InertControl';
 import { useSaveDashboard } from './useSaveDashboard';
+import { useDashboardPublication } from './useDashboardPublication';
 
 /**
  * Who is making this dashboard, and when it was last written down.
@@ -145,6 +147,7 @@ const Metadata = ({
 const TitleInput = styled(Input)`
   ${({ theme }) => css`
     max-width: ${theme.sizeUnit * 60}px;
+    min-inline-size: 0;
     height: ${theme.controlHeightSM}px;
     padding-inline: ${theme.sizeUnit}px;
     font-size: ${theme.fontSizeLG}px;
@@ -226,6 +229,7 @@ const Bar = styled.header`
   ${({ theme }) => css`
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: ${theme.sizeUnit * 2}px;
     flex: 0 0 auto;
     padding: ${theme.sizeUnit * 2}px ${theme.sizeUnit * 4}px;
@@ -239,8 +243,9 @@ const Actions = styled.span`
   ${({ theme }) => css`
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: ${theme.sizeUnit * 2}px;
-    margin-left: auto;
+    margin-inline-start: auto;
   `}
 `;
 
@@ -269,6 +274,7 @@ export default function DashboardHeader(): ReactElement {
   // which dashboard a save would write to.
   const session = useDashboardSession();
   const save = useSaveDashboard();
+  const togglePublished = useDashboardPublication();
   const [showEmbed, setShowEmbed] = useState(false);
   const ready = session.status === 'ready';
   // Embedding hands data to another site through guest tokens; where the
@@ -292,10 +298,8 @@ export default function DashboardHeader(): ReactElement {
       <Inert label={t('Favorite')} test="header-favorite" buttonStyle="link">
         <Icons.StarOutlined iconSize="m" />
       </Inert>
-      {/* Nothing here can publish, so the chip states the only status this
-          page can honestly claim. */}
       <span data-test="header-published">
-        <PublishedLabel isPublished={false} />
+        <PublishedLabel isPublished={session.published} />
       </span>
       {/* Beside the status rather than opposite it: whether a dashboard is a
           draft, whose it is, and when it was last written are one answer to
@@ -313,15 +317,26 @@ export default function DashboardHeader(): ReactElement {
       )}
 
       <Actions>
-        {/* Icons, not words, because these two are reached by muscle memory
-            far more often than they are read. The name stays on them for
-            anyone not reading with their eyes. */}
-        <Inert label={t('Undo')} test="header-undo">
-          <Icons.UndoOutlined iconSize="s" />
-        </Inert>
-        <Inert label={t('Redo')} test="header-redo">
-          <Icons.RedoOutlined iconSize="s" />
-        </Inert>
+        <Button
+          aria-label={t('Undo')}
+          tooltip={t('Undo')}
+          data-test="header-undo"
+          buttonSize="xsmall"
+          buttonStyle="secondary"
+          disabled={!ready || !session.canEdit || !provider.canUndo()}
+          onClick={provider.undo}
+          icon={<Icons.UndoOutlined iconSize="s" />}
+        />
+        <Button
+          aria-label={t('Redo')}
+          tooltip={t('Redo')}
+          data-test="header-redo"
+          buttonSize="xsmall"
+          buttonStyle="secondary"
+          disabled={!ready || !session.canEdit || !provider.canRedo()}
+          onClick={provider.redo}
+          icon={<Icons.RedoOutlined iconSize="s" />}
+        />
         {/* Stepping back through the work and writing it down are two
             different acts on the bar's one crowded end, and at an even gap
             the four of them read as one run of controls. The rule is what
@@ -342,22 +357,47 @@ export default function DashboardHeader(): ReactElement {
             committed. One concern, read in one place — so the record sits
             immediately before the button that produces what it lists, rather
             than at the far side of the bar from it. */}
-        <Inert label={t('History')} test="header-history" reads>
-          {t('History')}
-        </Inert>
+        {isFeatureEnabled(FeatureFlag.VersionHistory) && session.canEdit && (
+          <DashboardHistory
+            key={session.uuid}
+            uuid={ready ? session.uuid : undefined}
+          />
+        )}
         <Button
           buttonStyle="primary"
           buttonSize="small"
           // A tree that is still loading, or that failed to load, is not the
           // dashboard the route names, and saving it would write a blank
           // over the one that is.
-          disabled={!ready}
+          disabled={!ready || session.publishing}
           loading={session.saving}
           onClick={save}
           data-test="header-save"
         >
           {t('Save')}
         </Button>
+        {session.canPublish && session.dashboardId !== undefined && (
+          <Button
+            buttonStyle="secondary"
+            buttonSize="small"
+            disabled={
+              !ready ||
+              session.saving ||
+              session.conflict !== undefined ||
+              (!session.published && session.dirty)
+            }
+            loading={session.publishing}
+            tooltip={
+              !session.published && session.dirty
+                ? t('Save changes before publishing')
+                : undefined
+            }
+            onClick={togglePublished}
+            data-test="header-publish"
+          >
+            {session.published ? t('Unpublish') : t('Publish')}
+          </Button>
+        )}
         {canEmbed && (
           <EmbedDashboardModal
             show={showEmbed}

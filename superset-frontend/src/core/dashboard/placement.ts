@@ -164,13 +164,19 @@ export function placeBlockAt(
   type: string,
   index: number,
   position: { col: number; row: number; colSpan: number; rowSpan: number },
+  siblingResize?: Parameters<typeof provider.addWidget>[3],
 ): string {
-  const id = provider.addWidget(parentId, index, {
-    type,
-    layout: isContainerType(type)
-      ? { columns: DEFAULT_COLUMNS, gap: 16, ...position }
-      : { ...position },
-  });
+  const id = provider.addWidget(
+    parentId,
+    index,
+    {
+      type,
+      layout: isContainerType(type)
+        ? { columns: DEFAULT_COLUMNS, gap: 16, ...position }
+        : { ...position },
+    },
+    siblingResize,
+  );
   provider.setSelection(id);
   return id;
 }

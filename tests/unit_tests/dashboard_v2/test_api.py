@@ -221,6 +221,35 @@ def test_get_returns_the_revision(
     assert response.headers["ETag"] == '"1"'
 
 
+def test_publication_uses_saved_dashboard_metadata_without_changing_document(
+    client: Any,
+    dashboard_v2_enabled: None,
+    editor: None,
+    v2_session: Session,
+    mocker: MockerFixture,
+) -> None:
+    """The publication control and V2 status describe the same saved row."""
+    pk = _create(client, "chart")
+    path = f"{BASE}{pk}"
+    before = client.get(path).get_json()["result"]
+    assert before["published"] is False
+    assert before["can_edit"] is True
+    assert before["can_publish"] is True
+
+    updated = client.put(f"/api/v1/dashboard/{pk}", json={"published": True})
+    assert updated.status_code == 200, updated.get_json()
+    after = client.get(path).get_json()["result"]
+    assert after["published"] is True
+    assert after["revision"] == before["revision"]
+    assert after["document"] == before["document"]
+
+    mocker.patch.object(security_manager, "is_editor", return_value=False)
+    viewer = client.get(path).get_json()["result"]
+    assert viewer["published"] is True
+    assert viewer["can_edit"] is False
+    assert viewer["can_publish"] is False
+
+
 @pytest.mark.parametrize("if_match", ['"1"', 'W/"1"', "1"])
 def test_put_with_if_match_bumps_the_revision(
     client: Any,

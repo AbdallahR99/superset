@@ -53,6 +53,11 @@ type SaveCall = Deferred<DashboardV2> & {
 function fakeApi() {
   const fetches: FetchCall[] = [];
   const saves: SaveCall[] = [];
+  const publications: (Deferred<string | undefined> & {
+    id: number;
+    published: boolean;
+    signal: AbortSignal;
+  })[] = [];
   const api: SessionApi = {
     fetch: (ref, options) => {
       const call = { ...defer<DashboardV2>(), ref, signal: options?.signal };
@@ -64,8 +69,13 @@ function fakeApi() {
       saves.push(call);
       return call.promise;
     },
+    publish: (id, published, signal) => {
+      const call = { ...defer<string | undefined>(), id, published, signal };
+      publications.push(call);
+      return call.promise;
+    },
   };
-  return { api, fetches, saves };
+  return { api, fetches, saves, publications };
 }
 
 const documentOf = (...markdown: string[]): Record<string, DocumentNode> => ({
@@ -98,9 +108,9 @@ const flush = async (): Promise<void> => {
 };
 
 const setup = () => {
-  const { api, fetches, saves } = fakeApi();
+  const { api, fetches, saves, publications } = fakeApi();
   const session = new DashboardSession(provider, api);
-  return { session, fetches, saves };
+  return { session, fetches, saves, publications };
 };
 
 const addMarkdown = (): string =>
@@ -108,6 +118,130 @@ const addMarkdown = (): string =>
 
 beforeEach(() => {
   provider.reset();
+});
+
+test('only publishes a saved draft and serializes a save queued during publication', async () => {
+  const { session, fetches, saves, publications } = setup();
+  session.open('5');
+  const draft = {
+    ...saved(5, 1),
+    can_edit: true,
+    can_publish: true,
+    published: false,
+  };
+  fetches[0].resolve(draft);
+  await flush();
+  addMarkdown();
+  await expect(session.togglePublication()).resolves.toEqual({
+    status: 'skipped',
+  });
+  expect(publications).toHaveLength(0);
+  provider.undo();
+
+  const publishing = session.togglePublication();
+  addMarkdown();
+  const saving = session.save();
+  await flush();
+  expect(publications[0]).toMatchObject({ id: 5, published: true });
+  expect(saves).toHaveLength(0);
+  publications[0].resolve('2026-01-01T00:00:00Z');
+  await expect(publishing).resolves.toEqual({
+    status: 'changed',
+    published: true,
+  });
+  await flush();
+  saves[0].resolve({ ...draft, revision: 2, published: true });
+  await saving;
+  expect(session.getState()).toMatchObject({
+    published: true,
+    publishing: false,
+  });
+});
+
+test('a publication acknowledgement cannot land on a reopened dashboard', async () => {
+  const { session, fetches, publications } = setup();
+  session.open('5');
+  const draft = {
+    ...saved(5, 1),
+    can_edit: true,
+    can_publish: true,
+    published: false,
+  };
+  fetches[0].resolve(draft);
+  await flush();
+  const publishing = session.togglePublication();
+  await flush();
+  session.reload();
+  fetches[1].resolve(draft);
+  await flush();
+  expect(publications[0].signal.aborted).toBe(true);
+  publications[0].resolve(undefined);
+  await expect(publishing).resolves.toEqual({ status: 'superseded' });
+  expect(session.getState()).toMatchObject({
+    published: false,
+    publishing: false,
+  });
+});
+
+test('undo and redo use the saved snapshot as the clean checkpoint', async () => {
+  const { session, fetches, saves } = setup();
+  session.open('5');
+  fetches[0].resolve(saved(5, 1));
+  await flush();
+
+  const first = addMarkdown();
+  const saving = session.save();
+  const second = addMarkdown();
+  saves[0].resolve(saved(5, 2));
+  await saving;
+  expect(session.isDirty()).toBe(true);
+
+  provider.undo();
+  expect(provider.getRoot().children).toEqual([first]);
+  expect(session.isDirty()).toBe(false);
+  provider.redo();
+  expect(provider.getRoot().children).toEqual([second, first]);
+  expect(session.isDirty()).toBe(true);
+
+  provider.undo();
+  addMarkdown();
+  expect(provider.canRedo()).toBe(false);
+  session.reload();
+  fetches[1].resolve(saved(5, 2));
+  await flush();
+  expect(provider.canUndo()).toBe(false);
+  expect(provider.canRedo()).toBe(false);
+  expect(session.isDirty()).toBe(false);
+});
+
+test('undo and redo restore a split drop in one step', () => {
+  const fullWidth = { col: 1, row: 1, colSpan: 24, rowSpan: 4 };
+  const left = { ...fullWidth, colSpan: 12 };
+  const right = { ...left, col: 13 };
+  provider.loadDocument({
+    root: { type: 'grid', children: ['sibling'] },
+    sibling: { type: 'markdown', layout: fullWidth },
+  });
+
+  const added = provider.addWidget(
+    'root',
+    1,
+    { type: 'markdown', layout: right },
+    { id: 'sibling', layout: left },
+  );
+  provider.setSelection(added);
+  expect(provider.getNode('sibling')?.layout).toEqual(left);
+
+  provider.undo();
+  expect(provider.getRoot().children).toEqual(['sibling']);
+  expect(provider.getNode('sibling')?.layout).toEqual(fullWidth);
+  expect(provider.getSelection()).toBeUndefined();
+  expect(provider.canUndo()).toBe(false);
+
+  provider.redo();
+  expect(provider.getRoot().children).toEqual(['sibling', added]);
+  expect(provider.getNode('sibling')?.layout).toEqual(left);
+  expect(provider.getNode(added)?.layout).toEqual(right);
 });
 
 test('a dashboard with no ref opens blank, ready and clean', () => {

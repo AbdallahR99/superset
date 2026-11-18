@@ -56,6 +56,7 @@ import {
   readNodeErrors,
   sameDocumentNodes,
   saveDashboardV2,
+  updateDashboardPublication,
 } from './persistence';
 import type { DashboardV2 } from './persistence';
 import { provider, useDashboardRevision } from './store';
@@ -85,6 +86,10 @@ export interface DashboardSessionState {
   /** The revision the tree was loaded from or last saved as. */
   baseRevision: number | undefined;
   changedOn: string | undefined;
+  published: boolean;
+  canEdit: boolean;
+  canPublish: boolean;
+  publishing: boolean;
   saving: boolean;
   conflict: SessionConflict | undefined;
   loadFailure: LoadFailure | undefined;
@@ -122,10 +127,15 @@ export type SaveOutcome =
   /** The session turned to another dashboard before the answer came back. */
   | { status: 'superseded' };
 
+export type PublicationOutcome =
+  | { status: 'changed'; published: boolean }
+  | { status: 'skipped' | 'superseded' | 'error' };
+
 /** The two requests a session makes, replaceable for a test. */
 export interface SessionApi {
   fetch: typeof fetchDashboardV2;
   save: typeof saveDashboardV2;
+  publish?: typeof updateDashboardPublication;
 }
 
 const ROOT_ID = 'root';
@@ -145,6 +155,10 @@ const BLANK_STATE: DashboardSessionState = {
   uuid: undefined,
   baseRevision: undefined,
   changedOn: undefined,
+  published: false,
+  canEdit: true,
+  canPublish: false,
+  publishing: false,
   saving: false,
   conflict: undefined,
   loadFailure: undefined,
@@ -158,6 +172,13 @@ const failureOf = (error: unknown): LoadFailure => {
   }
   return 'failed';
 };
+
+/** Visibility and permissions are reported by the server for the saved row. */
+const dashboardStatus = (dashboard: DashboardV2) => ({
+  published: dashboard.published === true,
+  canEdit: dashboard.can_edit === true,
+  canPublish: dashboard.can_publish === true,
+});
 
 /**
  * The name the row carries, put where the builder reads a name from.
@@ -192,10 +213,14 @@ export class DashboardSession {
 
   private loadController: AbortController | undefined;
 
-  /** The store's document version that matches what the server holds. */
-  private savedVersion: number;
+  /** The store snapshot that matches what the server holds. */
+  private savedStateId: number;
 
   private inFlightSave: Promise<SaveOutcome> | undefined;
+
+  private inFlightPublication: Promise<PublicationOutcome> | undefined;
+
+  private publicationController: AbortController | undefined;
 
   private resaveRequested = false;
 
@@ -242,7 +267,7 @@ export class DashboardSession {
         uuid: string | undefined;
         nodes: Record<string, DocumentNode>;
         baseRevision: number | undefined;
-        version: number;
+        stateId: number;
       }
     | undefined;
 
@@ -263,7 +288,7 @@ export class DashboardSession {
       save: saveDashboardV2,
     },
   ) {
-    this.savedVersion = store.getDocumentVersion();
+    this.savedStateId = store.getDocumentStateId();
   }
 
   public subscribe = (listener: () => void): (() => void) => {
@@ -337,7 +362,7 @@ export class DashboardSession {
   /** Whether the tree holds edits the server does not. */
   public isDirty = (): boolean =>
     this.state.status === 'ready' &&
-    this.store.getDocumentVersion() !== this.savedVersion;
+    this.store.getDocumentStateId() !== this.savedStateId;
 
   /** Drops whatever is in flight; nothing already sent can land after this. */
   private supersede(): void {
@@ -345,6 +370,9 @@ export class DashboardSession {
     this.loadController?.abort();
     this.loadController = undefined;
     this.inFlightSave = undefined;
+    this.publicationController?.abort();
+    this.publicationController = undefined;
+    this.inFlightPublication = undefined;
     this.resaveRequested = false;
     this.unconfirmedSave = undefined;
   }
@@ -373,7 +401,7 @@ export class DashboardSession {
     if (ref === undefined) {
       this.loadDiscarded = false;
       this.store.newDocument();
-      this.savedVersion = this.store.getDocumentVersion();
+      this.savedStateId = this.store.getDocumentStateId();
       this.setState(BLANK_STATE);
       return;
     }
@@ -400,7 +428,9 @@ export class DashboardSession {
   public close(): void {
     const pending = this.adoptRef;
     this.supersede();
-    if (this.state.saving) this.setState({ saving: false });
+    if (this.state.saving || this.state.publishing) {
+      this.setState({ saving: false, publishing: false });
+    }
     if (pending !== undefined) {
       // The route of a dashboard that has no id and the route of one that
       // has are different routes, so moving from the first to the second
@@ -424,7 +454,7 @@ export class DashboardSession {
     // tree would be the previous dashboard's under this one's name.
     this.store.newDocument();
     const versionAtStart = this.store.getDocumentVersion();
-    this.savedVersion = versionAtStart;
+    this.savedStateId = this.store.getDocumentStateId();
     this.setState({ ...BLANK_STATE, status: 'loading', ref });
 
     let result: DashboardV2;
@@ -449,6 +479,7 @@ export class DashboardSession {
       dashboardId: result.id,
       uuid: result.uuid,
       changedOn: result.changed_on,
+      ...dashboardStatus(result),
     };
 
     if (this.store.getDocumentVersion() !== versionAtStart) {
@@ -476,7 +507,7 @@ export class DashboardSession {
       this.setState({ status: 'error', loadFailure: 'invalid' });
       return;
     }
-    this.savedVersion = this.store.getDocumentVersion();
+    this.savedStateId = this.store.getDocumentStateId();
     this.setState({
       ...meta,
       status: 'ready',
@@ -492,6 +523,12 @@ export class DashboardSession {
   public save(): Promise<SaveOutcome> {
     if (this.state.status !== 'ready') {
       return Promise.resolve({ status: 'skipped' });
+    }
+    if (this.inFlightPublication) {
+      const { epoch } = this;
+      return this.inFlightPublication.then(() =>
+        epoch === this.epoch ? this.save() : { status: 'superseded' },
+      );
     }
     if (this.inFlightSave) {
       this.resaveRequested = true;
@@ -513,6 +550,50 @@ export class DashboardSession {
       if (this.inFlightSave === running) this.inFlightSave = undefined;
     });
     this.inFlightSave = running;
+    return running;
+  }
+
+  /** Change visibility of the last saved copy of this dashboard. */
+  public togglePublication(): Promise<PublicationOutcome> {
+    const { status, dashboardId, published, canPublish, conflict } = this.state;
+    if (
+      status !== 'ready' ||
+      dashboardId === undefined ||
+      !canPublish ||
+      this.inFlightSave ||
+      this.inFlightPublication ||
+      conflict ||
+      (!published && this.isDirty())
+    ) {
+      return Promise.resolve({ status: 'skipped' });
+    }
+    const epoch = this.epoch;
+    const controller = new AbortController();
+    this.publicationController = controller;
+    const next = !published;
+    const publish = this.api.publish ?? updateDashboardPublication;
+    const running = Promise.resolve()
+      .then(() => publish(dashboardId, next, controller.signal))
+      .then((changedOn): PublicationOutcome => {
+        if (epoch !== this.epoch) return { status: 'superseded' };
+        this.setState({
+          published: next,
+          changedOn: changedOn ?? this.state.changedOn,
+        });
+        return { status: 'changed', published: next };
+      })
+      .catch((): PublicationOutcome => ({
+        status: epoch === this.epoch ? 'error' : 'superseded',
+      }))
+      .finally(() => {
+        if (this.inFlightPublication === running) {
+          this.inFlightPublication = undefined;
+          this.publicationController = undefined;
+          this.setState({ publishing: false });
+        }
+      });
+    this.inFlightPublication = running;
+    this.setState({ publishing: true });
     return running;
   }
 
@@ -579,7 +660,7 @@ export class DashboardSession {
 
     for (;;) {
       this.resaveRequested = false;
-      const version = this.store.getDocumentVersion();
+      const stateId = this.store.getDocumentStateId();
       const root = this.store.getRoot();
       const title =
         typeof root.props?.title === 'string' ? root.props.title : '';
@@ -629,8 +710,9 @@ export class DashboardSession {
             this.setState({
               baseRevision: verdict.dashboard.revision,
               changedOn: verdict.dashboard.changed_on,
+              ...dashboardStatus(verdict.dashboard),
             });
-            if (this.store.getDocumentVersion() === unconfirmed.version) {
+            if (this.store.getDocumentStateId() === unconfirmed.stateId) {
               saved = verdict.dashboard;
             } else {
               // The author's own save, with edits made since: sent again on
@@ -652,7 +734,7 @@ export class DashboardSession {
           } else if (verdict.kind === 'conflict') {
             failure = new DashboardV2ConflictError(verdict.revision);
           } else if (verdict.kind === 'unknown' && id !== undefined) {
-            this.unconfirmedSave = { id, uuid, nodes, baseRevision, version };
+            this.unconfirmedSave = { id, uuid, nodes, baseRevision, stateId };
           }
         }
         if (saved === undefined) {
@@ -699,6 +781,7 @@ export class DashboardSession {
             dashboardId: saved.id,
             uuid: saved.uuid,
             changedOn: saved.changed_on,
+            ...dashboardStatus(saved),
             baseRevision: undefined,
             conflict: this.foreignCopy,
           });
@@ -708,6 +791,7 @@ export class DashboardSession {
           dashboardId: saved.id,
           uuid: saved.uuid,
           changedOn: saved.changed_on,
+          ...dashboardStatus(saved),
           baseRevision: saved.revision,
           conflict: undefined,
         });
@@ -737,15 +821,16 @@ export class DashboardSession {
           dashboardId: saved.id,
           uuid: saved.uuid,
           changedOn: saved.changed_on,
+          ...dashboardStatus(saved),
           baseRevision: saved.revision,
           conflict: undefined,
         });
       }
-      this.savedVersion = version;
+      this.savedStateId = stateId;
 
       if (
         !this.resaveRequested ||
-        this.store.getDocumentVersion() === version
+        this.store.getDocumentStateId() === stateId
       ) {
         break;
       }
@@ -817,7 +902,7 @@ export class DashboardSession {
     this.stopWatchingRefused = undefined;
     this.refusedProps = new Map();
     this.state = BLANK_STATE;
-    this.savedVersion = this.store.getDocumentVersion();
+    this.savedStateId = this.store.getDocumentStateId();
   }
 }
 

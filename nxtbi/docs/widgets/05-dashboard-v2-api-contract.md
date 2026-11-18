@@ -25,6 +25,9 @@ The gate is the first of the app's `before_request` hooks: it is inserted ahead 
   "id": 12,
   "uuid": "6f0c...",
   "dashboard_title": "Sales",
+  "published": false,
+  "can_edit": true,                    // object-level editorship for the caller
+  "can_publish": true,                 // editorship and Dashboard write permission
   "changed_on": "2026-01-01T10:00:00+00:00", // UTC with an explicit offset
   "revision": 3,                       // integer, see section 4
   "document": {
@@ -41,6 +44,9 @@ The gate is the first of the app's `before_request` hooks: it is inserted ahead 
 - `revision` travels **beside** `document`, never inside it. A `revision` key sent inside `document` is ignored.
 - `embedded.allowed_domains` is omitted for embedded guests.
 - `changed_on` is the time of the last write in ISO 8601, converted to UTC and sent **with an explicit offset**. The builder still reads a value without a designator as UTC, for answers from a server that predates the offset.
+- The builder changes publication via `PUT /api/v1/dashboard/<pk>` with
+  `{ "published": true }` or `{ "published": false }`. This uses the existing
+  dashboard authorization and leaves the V2 document and revision intact.
 - Every successful response also carries the revision as a header: `ETag: "3"`. The body field is the one to rely on; reading the header cross-origin needs `ETag` in the CORS `expose_headers`.
 
 ## 3. Endpoints

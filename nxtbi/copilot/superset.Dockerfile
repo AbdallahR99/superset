@@ -24,3 +24,5 @@ COPY --chown=superset:superset superset/dashboards/api.py /app/superset/dashboar
 COPY --chown=superset:superset superset/daos/log.py /app/superset/daos/log.py
 COPY --chown=superset:superset superset/models/dashboard.py /app/superset/models/dashboard.py
 COPY --chown=superset:superset superset/views/core.py /app/superset/views/core.py
+COPY --chown=superset:superset superset/commands/dashboard_v2/get.py /app/superset/commands/dashboard_v2/get.py
+COPY --chown=superset:superset superset/dashboard_v2/schemas.py /app/superset/dashboard_v2/schemas.py

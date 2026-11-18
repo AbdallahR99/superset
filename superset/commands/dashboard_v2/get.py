@@ -98,10 +98,15 @@ def serialize_dashboard(dashboard: Dashboard, stored: dict[str, Any]) -> dict[st
         embedded_summary = {"uuid": str(embedded.uuid)}
         if not security_manager.is_guest_user():
             embedded_summary["allowed_domains"] = embedded.allowed_domains
+    can_edit = security_manager.is_editor(dashboard)
     return {
         "id": dashboard.id,
         "uuid": str(dashboard.uuid),
         "dashboard_title": dashboard.dashboard_title,
+        "published": bool(dashboard.published),
+        "can_edit": can_edit,
+        "can_publish": can_edit
+        and security_manager.can_access("can_write", "Dashboard"),
         # The column is a naive timestamp in the server's zone; answer with an
         # explicit offset so a client never has to guess the zone.
         "changed_on": (

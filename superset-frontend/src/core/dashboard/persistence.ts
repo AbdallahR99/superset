@@ -31,6 +31,9 @@ export interface DashboardV2 {
   id: number;
   uuid: string;
   dashboard_title: string;
+  published?: boolean;
+  can_edit?: boolean;
+  can_publish?: boolean;
   changed_on?: string;
   /**
    * Which write of the document this is. The server hands it out on every
@@ -244,6 +247,28 @@ export async function fetchDashboardV2(
     signal,
   });
   return json.result as DashboardV2;
+}
+
+/** Set visibility on the saved row through the same operation as the classic dashboard. */
+export async function updateDashboardPublication(
+  id: number,
+  published: boolean,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  const { json } = await SupersetClient.put({
+    endpoint: `/api/v1/dashboard/${id}`,
+    jsonPayload: { published },
+    signal,
+  });
+  if (json.id !== id || json.result?.published !== published) {
+    throw new Error('Unexpected dashboard publication response');
+  }
+  const timestamp = json.last_modified_time;
+  if (typeof timestamp !== 'number') return undefined;
+  const modified = new Date(timestamp * 1000);
+  return Number.isFinite(modified.getTime())
+    ? modified.toISOString()
+    : undefined;
 }
 
 /**

@@ -623,17 +623,9 @@ export default function RootGrid({ nodeId }: { nodeId: string }) {
    * that has to be figured out here rather than left to default to "at the
    * end").
    *
-   * A `shrink` result commits in two calls, shrink *first* — see
-   * `DashboardProvider.addWidget`'s own call to
-   * `resolveParentCollisions`: with the neighbor already shrunk, the new
-   * widget never overlaps anything when that collision pass runs, so nothing
-   * is disturbed. Inserting first would overlap the still-wide neighbor and
-   * get pushed straight down by that same collision rule instead, which
-   * would permanently destroy the split before it ever rendered. All four
-   * of the neighbor's own layout fields are pinned, not just `col`/`colSpan`
-   * — `packChildLayout` re-auto-places any child missing `col`/`row` on
-   * every render, so a partially-written neighbor would drift apart from
-   * its new sibling on the very next one.
+   * When a drop splits a widget, the new widget and the resized sibling
+   * commit together. Collision resolution sees both positions, and Undo
+   * restores the sibling's original size as it removes the new widget.
    *
    * `readingOrderIndex` is computed against `packed` — the *pre-shrink* map,
    * still true to what's on screen at the moment of drop — which is correct
@@ -668,22 +660,26 @@ export default function RootGrid({ nodeId }: { nodeId: string }) {
     const index =
       readingOrderIndex === -1 ? children.length : readingOrderIndex;
 
-    if (shrink) {
-      store.updateLayouts({
-        [shrink.id]: {
+    placeBlockAt(
+      nodeId,
+      type,
+      index,
+      {
+        col: rect.x + 1,
+        row: rect.y + 1,
+        colSpan: rect.w,
+        rowSpan: rect.h,
+      },
+      shrink && {
+        id: shrink.id,
+        layout: {
           col: shrink.rect.x + 1,
           row: shrink.rect.y + 1,
           colSpan: shrink.rect.w,
           rowSpan: shrink.rect.h,
         },
-      });
-    }
-    placeBlockAt(nodeId, type, index, {
-      col: rect.x + 1,
-      row: rect.y + 1,
-      colSpan: rect.w,
-      rowSpan: rect.h,
-    });
+      },
+    );
   };
 
   return (
