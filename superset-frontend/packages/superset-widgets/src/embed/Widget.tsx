@@ -66,6 +66,9 @@ function widgetTitle(
   type: string,
   props: Record<string, unknown>,
 ): string | undefined {
+  if (type === 'ag-grid-table' && typeof props.label === 'string') {
+    return props.label.trim() || undefined;
+  }
   if (type !== 'echarts') return undefined;
   const chromeText = (props.chrome as { titleText?: unknown } | undefined)
     ?.titleText;

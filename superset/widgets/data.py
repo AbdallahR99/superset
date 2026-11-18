@@ -350,6 +350,8 @@ def build_widget_query(
         "extras": {"where": base_filters["where"], "having": base_filters["having"]},
         "row_limit": row_limit,
     }
+    if binding.get("orderByDimension") is True and dimensions:
+        query["orderby"] = [(dimension, True) for dimension in dimensions]
     return dataset_id, query, form_data
 
 

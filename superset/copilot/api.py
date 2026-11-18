@@ -40,12 +40,14 @@ from superset.commands.widget.exceptions import (
 )
 from superset.commands.widget.saved import GetSavedWidgetCommand
 from superset.copilot.contracts import (
+    AggregateArguments,
     APPROVAL_AUDIENCE,
     APPROVAL_TTL,
     CopilotConversation,
     DashboardApproval,
     DashboardProposal,
     MAX_BODY_BYTES,
+    ProfileArguments,
     RUN_AUDIENCE,
     RUN_TTL,
     RunIdentity,
@@ -55,8 +57,10 @@ from superset.copilot.contracts import (
     verify_claims,
 )
 from superset.copilot.services import (
+    aggregate_dataset,
     CopilotAccessError,
     CopilotToolError,
+    profile_dataset,
     read_metadata,
     validate_dashboard_proposal,
 )
@@ -163,6 +167,14 @@ def _internal_tools() -> Response:
     try:
         call = ToolRequest.model_validate(_body())
         with override_user(user):
+            if call.name == "profile_dataset":
+                return jsonify(
+                    profile_dataset(ProfileArguments.model_validate(call.arguments))
+                )
+            if call.name == "aggregate_dataset":
+                return jsonify(
+                    aggregate_dataset(AggregateArguments.model_validate(call.arguments))
+                )
             if call.name == "get_saved_widget":
                 _require_widgets()
                 if not security_manager.can_access("can_read", "Chart"):

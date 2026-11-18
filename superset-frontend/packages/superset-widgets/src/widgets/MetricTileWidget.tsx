@@ -43,11 +43,16 @@ const BigNumber = styled(Typography.Title)`
   }
 `;
 
-function formatNumber(value: unknown, decimals: number): string {
+function formatNumber(
+  value: unknown,
+  decimals: number,
+  percentage = false,
+): string {
   const num = typeof value === 'number' ? value : Number(value);
   if (value == null || Number.isNaN(num))
     return value == null ? '—' : String(value);
   return new Intl.NumberFormat(undefined, {
+    style: percentage ? 'percent' : 'decimal',
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   }).format(num);
@@ -110,6 +115,7 @@ export default function MetricTileWidget(widgetProps: WidgetProps) {
   const loaded = !loading && result !== undefined;
 
   const decimals = (props.decimals as number | undefined) ?? 0;
+  const percentage = props.percentage === true;
   const prefix = (props.prefix as string | undefined) ?? '';
   const suffix = (props.suffix as string | undefined) ?? '';
   const label = (props.label as string | undefined) ?? columnLabel ?? '';
@@ -136,7 +142,7 @@ export default function MetricTileWidget(widgetProps: WidgetProps) {
         <>
           <BigNumber level={2}>
             {prefix}
-            {formatNumber(value, decimals)}
+            {formatNumber(value, decimals, percentage)}
             {suffix}
           </BigNumber>
           {label && (

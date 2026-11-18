@@ -35,7 +35,10 @@ export interface CopilotConversation {
 
 export interface CopilotHistory {
   list: (signal: AbortSignal) => Promise<CopilotConversation[]>;
-  save: (conversation: CopilotConversation, signal: AbortSignal) => Promise<void>;
+  save: (
+    conversation: CopilotConversation,
+    signal: AbortSignal,
+  ) => Promise<void>;
 }
 
 export interface AgUiRunInput {
@@ -54,6 +57,8 @@ export interface DashboardWidget {
   metric: string;
   dimension?: string;
   title?: string;
+  chartStyle?: 'bar' | 'line';
+  filter?: { column: string; value: string | number | boolean };
 }
 
 export interface DashboardProposal {
@@ -103,8 +108,24 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
         typeof item.metric === 'string' &&
         item.metric.length <= 256 &&
         [item.dimension, item.title].every(
-          text => text === undefined || (typeof text === 'string' && text.length <= 256),
-        ),
+          text =>
+            text === undefined ||
+            (typeof text === 'string' && text.length <= 256),
+        ) &&
+        (item.chartStyle === undefined ||
+          (item.type === 'echarts' &&
+            ['bar', 'line'].includes(item.chartStyle))) &&
+        (item.filter === undefined ||
+          (item.filter &&
+            typeof item.filter.column === 'string' &&
+            item.filter.column.trim().length > 0 &&
+            item.filter.column.length <= 256 &&
+            (typeof item.filter.value === 'boolean' ||
+              (typeof item.filter.value === 'number' &&
+                Number.isFinite(item.filter.value)) ||
+              (typeof item.filter.value === 'string' &&
+                item.filter.value.trim().length > 0 &&
+                item.filter.value.length <= 256)))),
     )
   ) {
     return undefined;
@@ -112,8 +133,16 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
   return {
     title: proposal.title,
     approvalToken: proposal.approvalToken,
-    widgets: proposal.widgets.map(({ type, datasetId, metric, dimension, title }) => ({
-      type, datasetId, metric, dimension, title,
-    })),
+    widgets: proposal.widgets.map(
+      ({ type, datasetId, metric, dimension, title, chartStyle, filter }) => ({
+        type,
+        datasetId,
+        metric,
+        dimension,
+        title,
+        chartStyle,
+        filter: filter && { column: filter.column, value: filter.value },
+      }),
+    ),
   };
 }

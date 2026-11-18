@@ -26,7 +26,7 @@ import time
 from typing import Annotated, Literal
 
 from ag_ui.core import AssistantMessage, RunAgentInput, UserMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_BODY_BYTES = 64_000
 MAX_MESSAGE_COUNT = 40
@@ -51,6 +51,15 @@ class GatewayClaims(BaseModel):
     thread_id: NONEMPTY_ID
 
 
+class DatasetFilter(BaseModel):
+    """An exact match on a verified dataset field."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
+
+    column: LABEL
+    value: LABEL | int | float | bool
+
+
 class WidgetDraft(BaseModel):
     """A dashboard widget that can be proposed for a separate approval."""
 
@@ -62,7 +71,16 @@ class WidgetDraft(BaseModel):
     ]
     metric: LABEL
     dimension: LABEL | None = None
+    chart_style: Literal["bar", "line"] | None = Field(default=None, alias="chartStyle")
+    filter: DatasetFilter | None = None
     title: LABEL | None = None
+
+    @model_validator(mode="after")
+    def validate_chart_style(self) -> WidgetDraft:
+        """Only an ECharts widget can choose its chart style."""
+        if self.chart_style is not None and self.type != "echarts":
+            raise ValueError("chartStyle requires an echarts widget.")
+        return self
 
 
 class DashboardDraft(BaseModel):

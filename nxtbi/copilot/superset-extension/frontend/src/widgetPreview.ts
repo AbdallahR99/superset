@@ -27,8 +27,10 @@ interface WidgetPreview {
 
 export function widgetPreview(
   widget: ProposedWidget,
+  d3format?: string,
 ): WidgetPreview | undefined {
-  const { type, datasetId, title } = widget;
+  const { type, datasetId, title, chartStyle, filter } = widget;
+  const isTrend = chartStyle === 'line';
   const metric = widget.metric.trim();
   const dimension = widget.dimension?.trim();
   if (!Number.isSafeInteger(datasetId) || datasetId < 1 || !metric) {
@@ -40,30 +42,64 @@ export function widgetPreview(
     metrics: [metric],
     dimensions: dimension && type !== 'metric-tile' ? [dimension] : [],
     rowLimit: 100,
+    ...(isTrend && { orderByDimension: true }),
+    ...(filter && {
+      filters: [
+        {
+          expressionType: 'SIMPLE',
+          clause: 'WHERE',
+          subject: filter.column,
+          operator: '==',
+          comparator: filter.value,
+        },
+      ],
+    }),
   };
 
   switch (type) {
-    case 'metric-tile':
-      return { type, props: { dataBinding, label: title?.trim() || metric } };
+    case 'metric-tile': {
+      const precision = d3format?.match(/^(?:\.([0-9]))?%$/);
+      return {
+        type,
+        props: {
+          dataBinding,
+          label: title?.trim() || metric,
+          ...(precision && {
+            percentage: true,
+            decimals: Number(precision[1] ?? 0),
+          }),
+        },
+      };
+    }
     case 'ag-grid-table':
-      return { type, props: { dataBinding } };
+      return { type, props: { dataBinding, label: title?.trim() } };
     case 'echarts':
       if (!dimension) return undefined;
       return {
         type,
         props: {
           dataBinding,
-          crossFilter: true,
+          crossFilter: !isTrend,
           echartsOptions: {
+            animation: false,
             ...(title?.trim() && { title: { text: title.trim() } }),
+            grid: { left: 64, right: 24, bottom: 40, top: 48 },
+            tooltip: { trigger: 'axis', renderMode: 'richText' },
             xAxis: {
               type: 'category',
-              data: { $bind: { source: 'dimension', alias: dimension } },
+              axisLabel: { hideOverlap: true },
+              data: {
+                $bind: {
+                  source: 'dimension',
+                  alias: dimension,
+                  ...(isTrend && { format: 'date' }),
+                },
+              },
             },
             yAxis: { type: 'value' },
             series: [
               {
-                type: 'bar',
+                type: chartStyle ?? 'bar',
                 data: { $bind: { source: 'metric', alias: metric } },
               },
             ],

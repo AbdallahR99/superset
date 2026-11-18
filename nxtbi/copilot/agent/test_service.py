@@ -26,7 +26,7 @@ from typing import Any, Literal
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from pydantic_ai.messages import ModelMessage, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.models.test import TestModel as PydanticTestModel
@@ -441,10 +441,105 @@ def test_navigation_requires_verified_dashboard(gateway_status: int) -> None:
     assert surface_count == int(gateway_status == 200)
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "evidence"),
+    [
+        (
+            "profile_dataset",
+            {"id": 4},
+            {"dataset_id": 4, "row_count": 8, "columns": []},
+        ),
+        (
+            "aggregate_dataset",
+            {
+                "id": 4,
+                "metric": "population",
+                "dimension": "district",
+                "filter": {"column": "year", "value": 2024},
+            },
+            {
+                "dataset_id": 4,
+                "metric": "population",
+                "dimension": "district",
+                "rows": [{"group": "North", "value": 1400}],
+                "truncated": False,
+            },
+        ),
+    ],
+)
+def test_dataset_evidence_reaches_model(
+    tool_name: str, arguments: dict[str, object], evidence: dict[str, object]
+) -> None:
+    """Read evidence through the signed gateway and preserve its scope and values."""
+    headers = _authorization("superset")
+    calls: list[object] = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == headers["Authorization"]
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json=evidence)
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        for message in messages:
+            for part in message.parts:
+                if isinstance(part, ToolReturnPart):
+                    assert part.content == evidence
+                    yield "The dataset was assessed."
+                    return
+        yield {
+            0: DeltaToolCall(
+                name=tool_name, tool_call_id="evidence", json_args=json.dumps(arguments)
+            )
+        }
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        model=FunctionModel(stream_function=generate),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        events = _events(client.post("/ag-ui", headers=headers, json=REQUEST))
+    assert calls == [{"name": tool_name, "arguments": arguments}]
+    assert any(event.get("delta") == "The dataset was assessed." for event in events)
+
+
+def test_model_filter_decodes_only_strict_objects() -> None:
+    """A quoted JSON object from the model becomes a typed gateway filter."""
+    adapter = TypeAdapter(service.ModelFilter)
+    expected = {"column": "census_year", "value": 2026}
+    assert adapter.validate_python(json.dumps(expected)).model_dump() == expected
+    for invalid in (
+        "{",
+        "[]",
+        "null",
+        " " * 2049,
+        '{"column":"census_year","value":[]}',
+        '{"column":"census_year","value":2026,"extra":true}',
+    ):
+        with pytest.raises(ValidationError):
+            adapter.validate_python(invalid)
+
+
 def test_superset_proposal_requires_separate_approval() -> None:
     """The only Superset write-like tool yields a preview and opaque approval token."""
     headers = _authorization("superset")
-    widgets = [{"type": "metric-tile", "datasetId": 5, "metric": "count"}]
+    widgets = [
+        {
+            "type": "metric-tile",
+            "datasetId": 5,
+            "metric": "population",
+            "filter": {"column": "year", "value": 2024},
+        },
+        {
+            "type": "echarts",
+            "datasetId": 5,
+            "metric": "population",
+            "dimension": "year",
+            "chartStyle": "line",
+        },
+    ]
     request_arguments = {"title": "Demo dashboard", "widgets": widgets}
     approval = "opaque-gateway-approval-token"
     calls: list[object] = []
@@ -465,6 +560,8 @@ def test_superset_proposal_requires_separate_approval() -> None:
         assert {
             "get_chart",
             "get_dataset",
+            "profile_dataset",
+            "aggregate_dataset",
             "get_dashboard",
             "propose_dashboard",
         } <= names
@@ -512,3 +609,109 @@ def test_unrecognized_a2ui_action_is_rejected() -> None:
     with TestClient(app) as client:
         response = client.post("/ag-ui", headers=_authorization(), json=payload)
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("missing_groups", [False, True])
+def test_snapshot_proposal_verifies_latest_temporal_scope(missing_groups: bool) -> None:
+    """Use observed dates for all snapshot widgets and suppress unsupported previews."""
+    requested = {
+        "dataset_id": 23,
+        "title": "Population",
+        "temporal_column": "year_date",
+        "headline_metric": "persons",
+        "kpis": ["persons"],
+        "breakdowns": ["region_en", "gender"],
+    }
+    calls = []
+    expected_filter = {"column": "year_date", "value": "2026-01-01"}
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        call = json.loads(request.content)
+        name = call["name"]
+        args = call["arguments"]
+        calls.append(name)
+        if name == "get_dataset":
+            result = {
+                "id": 23,
+                "metrics": ["persons"],
+                "temporal_columns": ["year_date"],
+                "groupable_columns": ["year_date", "region_en", "gender"],
+                "filterable_columns": ["year_date"],
+                "metric_details": [
+                    {"metric_name": "persons", "verbose_name": "Population"}
+                ],
+            }
+        elif name == "profile_dataset":
+            result = {
+                "dataset_id": 23,
+                "row_count": 12,
+                "columns": [{"column_name": "year_date", "latest": "2026-01-01"}],
+            }
+        elif name == "aggregate_dataset":
+            assert args["filter"] == expected_filter
+            group = args.get("dimension")
+            rows = (
+                [{"group": "North", "value": 8}, {"group": "South", "value": 2}]
+                if group
+                else [{"group": None, "value": 10}]
+            )
+            result = {
+                "dataset_id": 23,
+                "metric": "persons",
+                "dimension": group,
+                "rows": [] if missing_groups and group else rows,
+            }
+        else:
+            assert name == "propose_dashboard"
+            tile, line, bar, table = args["widgets"]
+            assert table["type"] == "ag-grid-table"
+            assert tile["filter"] == bar["filter"] == expected_filter
+            assert "2026-01-01" in tile["title"]
+            assert line["title"] == "Population over time"
+            assert bar["title"] == "Population by region · 2026-01-01"
+            assert line["chartStyle"] == "line"
+            assert "filter" not in line
+            result = {**args, "approvalToken": "opaque-test-approval"}
+        return httpx.Response(200, json=result)
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        for msg in messages:
+            for part in msg.parts:
+                if isinstance(part, ToolReturnPart):
+                    if not missing_groups:
+                        widgets = part.content["proposal"]["widgets"]
+                        assert [w["type"] for w in widgets] == [
+                            "metric tile",
+                            "line",
+                            "bar",
+                            "table",
+                        ]
+                        assert widgets[-1]["dimension"] == "gender"
+                        assert "2026-01-01" in widgets[-1]["title"]
+                    yield "Checked the latest observation."
+                    return
+        yield {
+            0: DeltaToolCall(
+                name="propose_snapshot_dashboard",
+                tool_call_id="snapshot",
+                json_args=json.dumps(requested),
+            )
+        }
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        model=FunctionModel(stream_function=generate),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        events = _events(
+            client.post("/ag-ui", headers=_authorization("superset"), json=REQUEST)
+        )
+    assert calls.count("aggregate_dataset") == 2
+    assert ("propose_dashboard" in calls) != missing_groups
+    assert (
+        any(e.get("name") == "nxtbi.dashboard-proposal" for e in events)
+        != missing_groups
+    )

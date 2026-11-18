@@ -95,7 +95,15 @@ export async function fetchQueryData(
     result_type: 'full',
   } as unknown as QueryFormData;
 
-  const queryContext = buildQueryContext(formData);
+  const queryContext = buildQueryContext(formData, query => {
+    const dimensions = binding.dimensions?.filter(dimension =>
+      Boolean(dimension),
+    );
+    if (!binding.orderByDimension || !dimensions?.length) return [query];
+    return [
+      { ...query, orderby: dimensions.map(dimension => [dimension, true]) },
+    ];
+  });
 
   let json: { result?: ChartDataResponseResult[] } | undefined;
   try {

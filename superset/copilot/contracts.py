@@ -49,6 +49,13 @@ class Contract(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
 
+class AggregateFilter(Contract):
+    """An equality constraint on one registered dataset column."""
+
+    column: ShortText
+    value: ShortText | bool | int | Annotated[float, Field(allow_inf_nan=False)]
+
+
 class ProposalWidget(Contract):
     """A widget bound solely to an existing metric and dataset column."""
 
@@ -57,12 +64,16 @@ class ProposalWidget(Contract):
     metric: ShortText
     dimension: ShortText | None = None
     title: ShortText | None = None
+    chart_style: Literal["bar", "line"] | None = Field(default=None, alias="chartStyle")
+    filter: AggregateFilter | None = None
 
     @model_validator(mode="after")
     def validate_dimension(self) -> ProposalWidget:
         """A category chart needs an existing grouping column."""
         if self.type == "echarts" and self.dimension is None:
             raise ValueError("A chart requires a grouping column.")
+        if self.type != "echarts" and self.chart_style is not None:
+            raise ValueError("Chart style is only available on charts.")
         return self
 
 
@@ -85,6 +96,8 @@ class ToolRequest(Contract):
     name: Literal[
         "list_datasets",
         "get_dataset",
+        "profile_dataset",
+        "aggregate_dataset",
         "list_dashboards",
         "get_dashboard",
         "list_charts",
@@ -105,6 +118,27 @@ class GetArguments(Contract):
     """Select one object by its numeric Superset identity."""
 
     id: ResourceId
+
+
+class ProfileArguments(GetArguments):
+    """Count visible rows and profile at most three named columns."""
+
+    columns: list[ShortText] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def unique_columns(self) -> ProfileArguments:
+        """Reject ambiguous repeated profile columns."""
+        if len(self.columns) != len(set(self.columns)):
+            raise ValueError("Choose distinct profile columns.")
+        return self
+
+
+class AggregateArguments(GetArguments):
+    """Summarize a registered metric, optionally grouped and filtered."""
+
+    metric: ShortText
+    dimension: ShortText | None = None
+    filter: AggregateFilter | None = None
 
 
 class SavedWidgetArguments(Contract):
@@ -211,12 +245,28 @@ def verify_claims(
     return claims
 
 
-def make_document(proposal: DashboardProposal) -> dict[str, Any]:
+def percent_precision(d3format: str | None) -> int | None:
+    """Return the supported decimal count for a percentage metric format."""
+    if d3format == "%":
+        return 0
+    if d3format and d3format.startswith(".") and d3format.endswith("%"):
+        precision = d3format[1:-1]
+        if len(precision) == 1 and precision in "0123456789":
+            return int(precision)
+    return None
+
+
+def make_document(
+    proposal: DashboardProposal,
+    percentages: dict[tuple[int, str], int] | None = None,
+) -> dict[str, Any]:
     """Compile the allowed widget choices through the Dashboard V2 document format."""
     children: list[str] = []
     nodes: dict[str, Any] = {
         "root": {"type": "grid", "layout": {"columns": 24}, "children": children}
     }
+    kpi_count = sum(widget.type == "metric-tile" for widget in proposal.widgets)
+    kpi_span = 24 // max(2, min(kpi_count, 4))
     for index, widget in enumerate(proposal.widgets, 1):
         node_id = f"widget_{index}"
         children.append(node_id)
@@ -232,21 +282,43 @@ def make_document(proposal: DashboardProposal) -> dict[str, Any]:
                 "rowLimit": 100,
             }
         }
+        if widget.filter:
+            props["dataBinding"]["filters"] = [
+                {
+                    "expressionType": "SIMPLE",
+                    "clause": "WHERE",
+                    "subject": widget.filter.column,
+                    "operator": "==",
+                    "comparator": widget.filter.value,
+                }
+            ]
         if widget.type == "metric-tile":
             props["label"] = widget.title or widget.metric
+            precision = (percentages or {}).get((widget.dataset_id, widget.metric))
+            if precision is not None:
+                props.update(percentage=True, decimals=precision)
+        if widget.type == "ag-grid-table" and widget.title:
+            props["label"] = widget.title
+        is_trend = widget.chart_style == "line"
         if widget.type == "echarts":
-            props["crossFilter"] = True
+            axis_binding = {"source": "dimension", "alias": widget.dimension}
+            if is_trend:
+                props["dataBinding"]["orderByDimension"] = True
+                axis_binding["format"] = "date"
+            props["crossFilter"] = not is_trend
             props["echartsOptions"] = {
+                "animation": False,
+                "grid": {"left": 64, "right": 24, "bottom": 40, "top": 48},
+                "tooltip": {"trigger": "axis", "renderMode": "richText"},
                 "xAxis": {
                     "type": "category",
-                    "data": {
-                        "$bind": {"source": "dimension", "alias": widget.dimension}
-                    },
+                    "axisLabel": {"hideOverlap": True},
+                    "data": {"$bind": axis_binding},
                 },
                 "yAxis": {"type": "value"},
                 "series": [
                     {
-                        "type": "bar",
+                        "type": widget.chart_style or "bar",
                         "data": {"$bind": {"source": "metric", "alias": widget.metric}},
                     }
                 ],
@@ -256,7 +328,11 @@ def make_document(proposal: DashboardProposal) -> dict[str, Any]:
         nodes[node_id] = {
             "type": widget.type,
             "layout": {
-                "colSpan": 8 if widget.type == "metric-tile" else 12,
+                "colSpan": kpi_span
+                if widget.type == "metric-tile"
+                else 24
+                if is_trend
+                else 12,
                 "rowSpan": 4 if widget.type == "metric-tile" else 9,
             },
             "props": props,

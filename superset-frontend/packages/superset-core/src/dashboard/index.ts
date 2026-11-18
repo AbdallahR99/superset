@@ -294,6 +294,8 @@ export interface DataBindingSpec {
   metrics: unknown[];
   dimensions?: string[];
   filters?: Record<string, unknown>[];
+  /** Sort by the selected grouping columns in ascending order. */
+  orderByDimension?: boolean;
   rowLimit?: number;
 }
 

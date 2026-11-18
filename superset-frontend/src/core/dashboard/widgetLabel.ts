@@ -69,6 +69,7 @@ const echartsTitle = (props: Props): unknown => {
 const NAMED_BY: Record<string, (props: Props) => unknown> = {
   echarts: echartsTitle,
   'metric-tile': props => props?.label,
+  'ag-grid-table': props => props?.label,
   tab: props => props?.label,
   collapsible: props => props?.label,
   slide: props => props?.label,

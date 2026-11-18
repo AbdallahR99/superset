@@ -116,6 +116,9 @@ class DataBinding(MetricControl):
     # Pydantic's default `extra="ignore"` drops fields the model doesn't
     # declare.
     filters: SkipJsonSchema[list[dict[str, Any]]] = Field(default_factory=list)
+    order_by_dimension: SkipJsonSchema[bool] = Field(
+        default=False, alias="orderByDimension"
+    )
     row_limit: int = Field(
         default=1000,
         ge=1,
@@ -146,6 +149,7 @@ class MetricTileControls(WidgetControls):
         title="Decimal places",
         description="How many decimal places to show.",
     )
+    percentage: SkipJsonSchema[bool] = False
     prefix: str = Field(
         default="",
         title="Prefix",
@@ -168,6 +172,7 @@ class AgGridTableControls(WidgetControls):
 
     model_config = ConfigDict(populate_by_name=True)
     foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId",)
+    label: SkipJsonSchema[str] = ""
 
     data_binding: DataBinding = Field(
         alias="dataBinding",

@@ -101,6 +101,39 @@ test('a chart does not draw the title its surrounding header carries', async () 
   expect(option).toHaveProperty('series');
 });
 
+test('renders temporal axis labels as dates and keeps matching values', async () => {
+  fetchData.mockResolvedValue({
+    columns: ['year_date', 'total'],
+    rows: [
+      { year_date: Date.UTC(2025, 0, 1), total: 9988233 },
+      { year_date: '2026-01-01', total: 10155391 },
+    ],
+  });
+  renderChart({
+    dataBinding: {
+      datasetId: 23,
+      metrics: ['total'],
+      dimensions: ['year_date'],
+    },
+    echartsOptions: {
+      xAxis: {
+        type: 'category',
+        data: {
+          $bind: { source: 'dimension', alias: 'year_date', format: 'date' },
+        },
+      },
+      series: [
+        { type: 'line', data: { $bind: { source: 'metric', alias: 'total' } } },
+      ],
+    },
+  });
+
+  await waitFor(() => expect(mockSetOption).toHaveBeenCalled());
+  const [option] = mockSetOption.mock.calls[0];
+  expect(option.xAxis.data).toEqual(['2025-01-01', '2026-01-01']);
+  expect(option.series[0].data).toEqual([9988233, 10155391]);
+});
+
 test('the query goes through the data client as an inline widget, or by saved id', async () => {
   const props = { dataBinding: { datasetId: 1, metrics: ['count'] } };
   const { unmount } = renderChart(props);

@@ -43,8 +43,13 @@ interface DatasetSummary {
 
 interface DatasetFields {
   table_name: string;
-  metrics: { metric_name: string; verbose_name?: string }[];
-  columns: { column_name: string; verbose_name?: string; groupby: boolean }[];
+  metrics: { metric_name: string; verbose_name?: string; d3format?: string }[];
+  columns: {
+    column_name: string;
+    verbose_name?: string;
+    groupby: boolean;
+    is_dttm: boolean;
+  }[];
 }
 
 async function readDataset<T>(url: string, signal: AbortSignal): Promise<T> {
@@ -85,9 +90,14 @@ const labels = {
     refresh: 'Refresh previews',
     idle: 'Choose a metric and any required dimension to preview this widget.',
     unavailable: 'Preview unavailable for this widget.',
+    chartStyle: 'Chart style',
+    bar: 'Bar chart',
+    line: 'Line chart',
+    scope: 'Fixed filter',
+    clearScope: 'Remove filter',
     'metric-tile': 'Metric tile',
     'ag-grid-table': 'Table',
-    echarts: 'Bar chart',
+    echarts: 'Chart',
   },
   ar: {
     changed: 'حدّث المعاينات لعرض التغييرات.',
@@ -112,9 +122,14 @@ const labels = {
     refresh: 'تحديث المعاينات',
     idle: 'اختر مقياسًا وأي بُعد مطلوب لمعاينة هذا العنصر.',
     unavailable: 'معاينة هذا العنصر غير متوفرة.',
+    chartStyle: 'نمط المخطط',
+    bar: 'مخطط أعمدة',
+    line: 'مخطط خطي',
+    scope: 'عامل تصفية ثابت',
+    clearScope: 'إزالة عامل التصفية',
     'metric-tile': 'بطاقة مقياس',
     'ag-grid-table': 'جدول',
-    echarts: 'مخطط أعمدة',
+    echarts: 'مخطط',
   },
 };
 
@@ -160,7 +175,7 @@ export default function ProposalEditor({
     const controller = new AbortController();
     setFields({});
     const query =
-      '(columns:!(table_name,metrics.metric_name,metrics.verbose_name,columns.column_name,columns.verbose_name,columns.groupby))';
+      '(columns:!(table_name,metrics.metric_name,metrics.verbose_name,metrics.d3format,columns.column_name,columns.verbose_name,columns.groupby,columns.is_dttm))';
     for (const id of ids.split(',').map(Number)) {
       readDataset<{ result: DatasetFields }>(
         `${base}/api/v1/dataset/${id}?q=${query}`,
@@ -238,10 +253,19 @@ export default function ProposalEditor({
           const dataset = fields[widget.datasetId];
           const metrics = dataset?.metrics ?? [];
           const dimensions =
-            dataset?.columns.filter(column => column.groupby) ?? [];
+            dataset?.columns.filter(
+              column =>
+                column.groupby &&
+                (widget.chartStyle !== 'line' || column.is_dttm),
+            ) ?? [];
+          const selectedMetric = metrics.find(
+            item => item.metric_name === widget.metric,
+          );
           const datasets = catalog?.result ?? [];
           const snapshot = previewWidgets[index];
-          const preview = snapshot === widget && widgetPreview(snapshot);
+          const preview =
+            snapshot === widget &&
+            widgetPreview(snapshot, selectedMetric?.d3format);
           return (
             <fieldset
               key={index}
@@ -259,6 +283,7 @@ export default function ProposalEditor({
                       datasetId: Number(event.target.value),
                       metric: '',
                       dimension: undefined,
+                      filter: undefined,
                     });
                   }}
                 >
@@ -291,7 +316,12 @@ export default function ProposalEditor({
                     const type = widgetTypes.find(
                       value => value === event.target.value,
                     );
-                    if (type) updateWidget(index, { type });
+                    if (type)
+                      updateWidget(index, {
+                        type,
+                        chartStyle:
+                          type === 'echarts' ? widget.chartStyle : undefined,
+                      });
                   }}
                 >
                   {widgetTypes.map(type => (
@@ -301,20 +331,45 @@ export default function ProposalEditor({
                   ))}
                 </select>
               </label>
-              {widget.type !== 'ag-grid-table' && (
+              {widget.type === 'echarts' && (
                 <label>
-                  {text.widgetTitle}{' '}
-                  <input
-                    value={widget.title ?? ''}
-                    maxLength={160}
-                    onChange={event =>
+                  {text.chartStyle}{' '}
+                  <select
+                    value={widget.chartStyle ?? 'bar'}
+                    onChange={event => {
+                      const chartStyle =
+                        event.target.value === 'line' ? 'line' : 'bar';
+                      const temporal = dataset?.columns.some(
+                        column =>
+                          column.column_name === widget.dimension &&
+                          column.is_dttm,
+                      );
                       updateWidget(index, {
-                        title: event.target.value || undefined,
-                      })
-                    }
-                  />
+                        chartStyle,
+                        dimension:
+                          chartStyle === 'line' && !temporal
+                            ? undefined
+                            : widget.dimension,
+                      });
+                    }}
+                  >
+                    <option value="bar">{text.bar}</option>
+                    <option value="line">{text.line}</option>
+                  </select>
                 </label>
               )}
+              <label>
+                {text.widgetTitle}{' '}
+                <input
+                  value={widget.title ?? ''}
+                  maxLength={160}
+                  onChange={event =>
+                    updateWidget(index, {
+                      title: event.target.value || undefined,
+                    })
+                  }
+                />
+              </label>
               <label>
                 {text.metric}{' '}
                 <select
@@ -373,11 +428,25 @@ export default function ProposalEditor({
                   </select>
                 </label>
               )}
+              {widget.filter && (
+                <div>
+                  {text.scope}{' '}
+                  <bdi>
+                    {widget.filter.column} = {String(widget.filter.value)}
+                  </bdi>{' '}
+                  <button
+                    type="button"
+                    onClick={() => updateWidget(index, { filter: undefined })}
+                  >
+                    {text.clearScope}
+                  </button>
+                </div>
+              )}
               {preview ? (
                 <Widget
                   type={preview.type}
                   props={preview.props}
-                  showTitle={false}
+                  showTitle={preview.type !== 'metric-tile'}
                   renderError={() => <p role="status">{text.unavailable}</p>}
                   style={{ height: preview.type === 'metric-tile' ? 90 : 200 }}
                 />

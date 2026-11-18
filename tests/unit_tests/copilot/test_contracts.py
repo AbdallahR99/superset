@@ -25,6 +25,7 @@ from superset.copilot.contracts import (
     CopilotConversation,
     DashboardProposal,
     make_document,
+    percent_precision,
     sign_claims,
     verify_claims,
 )
@@ -110,6 +111,55 @@ def test_proposal_rejects_undeclared_fields() -> None:
                 ],
             }
         )
+
+
+def test_proposal_preserves_snapshot_filters_percentages_and_trend_order() -> None:
+    kpis = [
+        {
+            "type": "metric-tile",
+            "datasetId": 23,
+            "metric": metric,
+            "filter": {"column": "census_year", "value": 2026},
+        }
+        for metric in (
+            "population_total",
+            "female_share",
+            "youth_share",
+            "senior_share",
+        )
+    ]
+    trend = {
+        "type": "echarts",
+        "datasetId": 23,
+        "metric": "population_total",
+        "dimension": "year_date",
+        "chartStyle": "line",
+    }
+    proposal = DashboardProposal.model_validate(
+        {"title": "Population", "widgets": [*kpis, trend]}
+    )
+    nodes = make_document(proposal, {(23, "female_share"): 1})["nodes"]
+    assert [nodes[f"widget_{index}"]["layout"]["colSpan"] for index in range(1, 5)] == [
+        6
+    ] * 4
+    props = nodes["widget_2"]["props"]
+    assert props["dataBinding"]["filters"] == [
+        {
+            "expressionType": "SIMPLE",
+            "clause": "WHERE",
+            "subject": "census_year",
+            "operator": "==",
+            "comparator": 2026,
+        }
+    ]
+    assert (props["percentage"], props["decimals"]) == (True, 1)
+    trend_props = nodes["widget_5"]["props"]
+    assert trend_props["dataBinding"]["orderByDimension"] is True
+    assert trend_props["echartsOptions"]["xAxis"]["data"]["$bind"]["format"] == "date"
+    assert trend_props["echartsOptions"]["series"][0]["type"] == "line"
+    assert percent_precision(".1%") == 1
+    assert percent_precision("%") == 0
+    assert percent_precision(",.0f") is None
 
 
 def test_mcp_delegation_is_read_only_and_user_scoped() -> None:

@@ -32,6 +32,8 @@ interface BindMarker {
     source: 'metric' | 'dimension' | 'theme' | 'records';
     /** `metric`/`dimension` — the row field to pull one column's values from. */
     alias?: string;
+    /** `dimension` — show temporal values as UTC dates instead of epochs. */
+    format?: 'date';
     /** `theme` — the theme token to substitute. */
     token?: string;
     /**
@@ -57,6 +59,13 @@ interface BindMarker {
 }
 
 const BIND_SOURCES = new Set(['metric', 'dimension', 'theme', 'records']);
+
+function formatTemporalLabel(value: DataRow[string]): DataRow[string] {
+  if (typeof value !== 'string' && typeof value !== 'number') return value;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return date.toISOString().replace(/T00:00:00\.000Z$/, '');
+}
 
 function isBindMarker(value: unknown): value is BindMarker {
   return (
@@ -106,7 +115,12 @@ function resolveBind(bind: BindMarker['$bind'], ctx: BindContext): unknown {
     if (!bind.alias) {
       throw new Error(`$bind with source "${bind.source}" is missing "alias"`);
     }
-    const values = ctx.rows.map(row => row[bind.alias as string]);
+    const { alias } = bind;
+    const values = ctx.rows.map(row => row[alias]);
+    if (bind.source === 'dimension' && bind.format === 'date') {
+      const labels = values.map(formatTemporalLabel);
+      return bind.single ? labels[0] : labels;
+    }
     return bind.single ? values[0] : values;
   }
   if (bind.source === 'records') {
