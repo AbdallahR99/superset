@@ -98,8 +98,28 @@ from the app header. The standalone example is at
 [http://localhost:5186](http://localhost:5186) and uses the demo-only credentials
 in the Copilot environment file. Both hosts send user prompts to the
 configured model endpoint. Superset tool results sent to that endpoint are
-limited to authorized metadata. Live widget data is fetched through Superset
-to the browser.
+limited to authorized metadata and bounded aggregate results. The analysis
+tools run with the signed-in user’s dataset permissions and row-level security.
+They return row counts, column coverage and date bounds, or at most ten groups
+for a saved metric. The browser fetches live widget data directly through
+Superset.
+
+## Dataset analysis and dashboard proposals
+
+Copilot checks accessible datasets for populated groupings and usable time
+coverage, then queries saved metrics to substantiate its recommendations. For
+annual snapshots, the proposal carries the verified year into each point-in-time
+KPI and breakdown. The line chart queries the temporal dimension in ascending
+order. Percentage tiles take their precision from the saved metric format.
+The proposal editor shows each fixed filter and offers a chart style selector.
+Approval validates the filters, metrics, and dimensions again before saving.
+Readiness rankings cover the datasets Copilot inspected. Proposals can bind
+one fixed equality filter per widget and use existing saved metrics. Dataset
+and metric authoring continue through Superset’s data modeling tools.
+
+The chat and History display assistant replies using the same Markdown
+renderer. Headings, lists, tables, links and code remain legible in both
+directions. Embedded HTML displays as text and remote images are omitted.
 
 ## Coverage and limits
 
@@ -197,3 +217,49 @@ approve a draft, reopen it through History, and publish it across a reload.
 Dashboard V2 read validators include publication and permission metadata,
 while writes keep their document revision precondition. The focused backend
 suite passed 102 tests and the agent suite passed 20 tests.
+
+## Evidence-based Copilot rollout
+
+The main demo at [port 8088](http://localhost:8088) runs
+`nxtbi/superset-fork:copilot-analysis-polished-20261118` and
+`nxtbi/copilot-agent:analysis-polished-20261118`.
+The image digests are `sha256:e07f0e8aa0fd39aab67e2734fcf6fa39f5c971b11fc6ad762946c00be9d33089`
+and `sha256:5b08164a65ba417dc23d48dcb405e03cd130a734c95b563538c09ed6a0b8e109`, respectively.
+Rollback uses `nxtbi/superset-fork:copilot-analysis-20261118`,
+`nxtbi/copilot-agent:analysis-verified-20261118`, and the matching manifest
+saved at `nxtbi/out/copilot/analysis/before-polished-manifest.json` on the demo
+host. The workflow images and `rollback-manifest.json` remain available for
+the pre-analysis version.
+
+All 34 live smoke checks passed. The rollout preserved the fingerprints of
+existing data, mounts, environment, and shared services. Chromium reopened
+the original population conversation with formatted Markdown and confirmed
+its stored text was unchanged. The original population dashboard is still
+an unpublished draft.
+
+Live GovAI runs profiled four candidate datasets, and an independent replay
+also queried four saved metrics. Some runs returned the profiles alone.
+The follow-up proposed a temporary population draft. Chromium saved and
+reopened it through the approval flow. Its KPIs used the 2026 snapshot, with
+10,155,391 total, 48.7% female share, 32.1% youth share, and 13.0% senior share. The trend
+contained 12 chronological points. In October 2026 budget data, Energy had
+the lowest execution rate at 77.96%, and Infrastructure had the largest
+unspent balance at 5,564,682.09. Both use the synthetic demo data.
+
+On the polished images, a fresh GovAI proposal passed the browser save and
+reopen checks. Chromium verified readable dates on the trend canvas and
+the table's saved title. Test drafts were removed through the standard
+dashboard API.
+
+Intermittent TLS connection timeouts to GovAI interrupted some live replays.
+After connectivity recovered, the final images passed a complete replay of
+the original opening question, its population-dashboard follow-up, and the
+independent budget comparison. The application kept its provider settings.
+
+The focused Copilot and widget backend checks passed 100 tests, the agent
+passed 25, and the Copilot and Widget SDKs passed 173 Jest tests. Full
+Superset, the Chat extension, and the standalone example built successfully.
+The broader Dashboard V2, Widgets, and Copilot backend run passed 622 of 655
+tests. All 33 failures reproduced on the previous image. The Dashboard V2
+fixtures lack an authenticated Flask user, and one widget schema test hits a
+timezone dependency error during MCP registration in the test environment.
