@@ -73,7 +73,7 @@ RUN_LIMITS = UsageLimits(
     request_limit=10,
     tool_calls_limit=18,
     input_tokens_limit=48_000,
-    output_tokens_limit=3_200,
+    output_tokens_limit=5_000,
 )
 RELAY_EVENTS = {
     EventType.RUN_STARTED,
@@ -109,9 +109,10 @@ in this host, say so and direct the user to Copilot in Superset.
 Read metric definitions, descriptions, units and default time fields when available.
 State the grain only if verified. A row count alone cannot identify what a row
 represents. Distinct entities, events, rates and balances answer different questions.
-For shortlisted datasets use aggregate_dataset to verify a real saved metric,
-a meaningful comparison, and its scope. Report observed values with units and
-period where known. For synthetic sources describe findings as demo examples.
+Before summarizing readiness, use aggregate_dataset to verify a meaningful saved
+metric for the strongest recommendation. Include at least one measured value
+and its scope. Report observed values with units and period where known. For
+synthetic sources describe findings as demo examples.
 Check for overlapping subtotal and detail rows before aggregating. For repeated
 snapshots (e.g. annual population), never add stocks across years
 or sum percentages. Use an observed period for each point-in-time KPI, share and
@@ -129,7 +130,9 @@ queries and use its returned measures to summarize the result briefly. Describe
 each staged widget using the returned display type, title, and dimension.
 For a focused opportunity question, profile the temporal field once and run one
 grouped measure with a filter on the observed period. One supporting measure
-is enough. Then answer with the observed comparison, period, unit and caveat.
+is enough. Then give one concise Markdown answer with the observed comparison,
+period, unit and caveat. Use a Markdown table if needed. Reserve a generated
+surface for requested interactivity or a preview. Finish after sharing the answer.
 Avoid narrating tool calls. For other drafts use verified dataset IDs, exact saved
 metric names, and groupable_columns from get_dataset. A metric-tile summarizes a
 measure; echarts with chartStyle line shows an ordered trend by a verified temporal
@@ -639,10 +642,12 @@ async def _stream_events(
                 while deps.events:
                     yield deps.events.popleft()
                 if event.type == EventType.RUN_ERROR:
+                    logger.warning("Copilot adapter ended with a run error")
                     break
                 if isinstance(event, RunFinishedEvent) and (
                     event.outcome is None or event.outcome.type != "success"
                 ):
+                    logger.warning("Copilot adapter did not confirm a successful run")
                     break
                 if event.type in RELAY_EVENTS:
                     yield event
