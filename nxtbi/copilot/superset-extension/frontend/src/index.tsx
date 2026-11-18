@@ -67,17 +67,9 @@ function Trigger() {
       aria-controls="nxtbi-copilot-panel"
       aria-expanded={open}
       onClick={() => (open ? chat.close() : chat.open())}
-      style={{
-        background: '#0e5c68',
-        border: '1px solid #fff',
-        borderRadius: 22,
-        boxShadow: '0 3px 12px #0002',
-        color: '#fff',
-        cursor: 'pointer',
-        fontWeight: 600,
-        padding: '8px 16px',
-      }}
+      className="nxtbi-copilot-trigger"
     >
+      <span aria-hidden="true">✦</span>
       {englishOrArabic('NxtBI Copilot', 'مساعد NxtBI')}
     </button>
   );
@@ -161,38 +153,38 @@ function Panel() {
       style={{
         background: 'var(--ant-color-bg-container, Canvas)',
         color: 'var(--ant-color-text, CanvasText)',
+        border:
+          mode === 'floating'
+            ? '1px solid var(--ant-color-border-secondary, #d8e0e0)'
+            : undefined,
+        borderRadius: mode === 'floating' ? 14 : undefined,
+        boxShadow:
+          mode === 'floating'
+            ? 'var(--ant-box-shadow-secondary, 0 12px 32px #122d3626)'
+            : undefined,
         display: 'flex',
         flexDirection: 'column',
         height: mode === 'panel' ? '100%' : 'min(72dvh, 720px)',
         minHeight: 0,
-        width: mode === 'panel' ? '100%' : 'min(440px, calc(100vw - 32px))',
+        overflow: 'hidden',
+        width: mode === 'panel' ? '100%' : 'min(480px, calc(100vw - 32px))',
       }}
     >
-      <header
-        style={{
-          alignItems: 'center',
-          borderBlockEnd: '1px solid var(--ant-color-border-secondary, #aaa)',
-          display: 'flex',
-          gap: 8,
-          justifyContent: 'space-between',
-          padding: 8,
-        }}
-      >
-        <strong>{englishOrArabic('NxtBI Copilot', 'مساعد NxtBI')}</strong>
-        <button
-          type="button"
-          onClick={() =>
-            chat.setDisplayMode(mode === 'panel' ? 'floating' : 'panel')
-          }
-        >
-          {mode === 'panel'
-            ? englishOrArabic('Float', 'عرض عائم')
-            : englishOrArabic('Dock', 'تثبيت')}
-        </button>
-      </header>
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        <CopilotPanel host={host} />
-      </div>
+      <CopilotPanel
+        host={host}
+        headerActions={
+          <button
+            type="button"
+            onClick={() =>
+              chat.setDisplayMode(mode === 'panel' ? 'floating' : 'panel')
+            }
+          >
+            {mode === 'panel'
+              ? englishOrArabic('Float', 'عرض عائم')
+              : englishOrArabic('Dock', 'تثبيت')}
+          </button>
+        }
+      />
     </section>
   );
 }

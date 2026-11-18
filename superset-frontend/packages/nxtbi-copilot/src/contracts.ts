@@ -26,6 +26,18 @@ export interface CopilotTextMessage {
   content: string;
 }
 
+export interface CopilotConversation {
+  threadId: string;
+  messages: CopilotTextMessage[];
+  updatedAt: string;
+  savedDashboard?: { id: number; url: string };
+}
+
+export interface CopilotHistory {
+  list: (signal: AbortSignal) => Promise<CopilotConversation[]>;
+  save: (conversation: CopilotConversation, signal: AbortSignal) => Promise<void>;
+}
+
 export interface AgUiRunInput {
   threadId: string;
   runId: string;
@@ -56,6 +68,7 @@ export interface CopilotHost {
   direction?: 'ltr' | 'rtl';
   context: () => Record<string, unknown>;
   run: (input: AgUiRunInput, signal: AbortSignal) => Promise<Response>;
+  history?: CopilotHistory;
   approve?: (
     proposal: DashboardProposal,
     signal: AbortSignal,

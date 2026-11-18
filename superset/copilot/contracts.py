@@ -121,6 +121,42 @@ class RunIdentity(BaseModel):
     run_id: WireId = Field(alias="runId")
 
 
+class CopilotHistoryMessage(Contract):
+    """One visible chat message, without tool or activity payloads."""
+
+    id: WireId
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=24_000)
+
+
+class CopilotHistoryDashboard(Contract):
+    """A same-site link returned after dashboard approval."""
+
+    id: ResourceId
+    url: str = Field(pattern=r"^/dashboard/v2/[1-9][0-9]{0,9}/$")
+
+    @model_validator(mode="after")
+    def validate_dashboard_url(self) -> CopilotHistoryDashboard:
+        """Keep the saved dashboard link tied to the matching ID."""
+        if self.url != f"/dashboard/v2/{self.id}/":
+            raise ValueError("Dashboard URL must match the dashboard ID.")
+        return self
+
+
+class CopilotConversation(Contract):
+    """A transcript snapshot containing only content shown in the chat."""
+
+    thread_id: WireId = Field(alias="threadId")
+    messages: list[CopilotHistoryMessage] = Field(min_length=1, max_length=32)
+    updated_at: str = Field(
+        alias="updatedAt",
+        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
+    )
+    saved_dashboard: CopilotHistoryDashboard | None = Field(
+        default=None, alias="savedDashboard"
+    )
+
+
 def _base64(data: bytes) -> str:
     """Encode unpadded URL-safe Base64."""
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")

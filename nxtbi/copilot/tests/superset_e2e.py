@@ -58,6 +58,8 @@ def keycloak_session(browser: Browser, username: str, password: str) -> Page:
         page.get_by_text("Keycloak", exact=False).first.click()
         page.wait_for_url(f"{KEYCLOAK}/realms/**", timeout=45_000)
         page.locator("#username").fill(username)
+        if not page.locator("#password").is_visible():
+            page.locator("#kc-login").click()
         page.locator("#password").fill(password)
         page.locator("#kc-login").click()
         page.wait_for_url(f"{BASE}/**", timeout=45_000)
@@ -211,7 +213,7 @@ def verify_proposal(page: Page, dataset: int, title: str) -> int:
         "Then use propose_dashboard to draft Planning budget preview. "
         "Add a bar chart of execution_rate by sector_en and a metric tile "
         "of overall execution_rate, both from the checked dataset. "
-        "Return the draft for review without saving it.",
+        f"Use the title {title}. Return the draft for review without saving it.",
     )
     assert {"description": "active_dataset_id", "value": str(dataset)} in request[
         "context"
@@ -292,6 +294,8 @@ def verify_proposal(page: Page, dataset: int, title: str) -> int:
     response = approved.value
     assert response.status == 201, f"Confirmed approval HTTP {response.status}"
     approved_body = response.request.post_data_json
+    expect(page.get_by_text("Dashboard saved", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Open dashboard", exact=True).click()
     page.wait_for_url(re.compile(rf"{re.escape(BASE)}/dashboard/v2/[1-9]\d*/$"))
     dashboard_id = int(urlsplit(page.url).path.rstrip("/").rsplit("/", maxsplit=1)[1])
     expect(page.locator("[data-test='header-title']")).to_have_value(
@@ -320,8 +324,17 @@ def verify_proposal(page: Page, dataset: int, title: str) -> int:
     expect(page.locator("[data-test='header-title']")).to_have_value(
         title, timeout=45_000
     )
+    open_chat(page)
+    panel = page.locator("#nxtbi-copilot-panel")
+    panel.get_by_role("button", name="History", exact=True).click()
+    panel.get_by_role("button", name=re.compile(re.escape(title))).click()
+    expect(panel.get_by_text("Dashboard saved", exact=True)).to_be_visible()
+    expect(
+        panel.get_by_role("button", name="Open dashboard", exact=True)
+    ).to_be_enabled()
     print(
-        f"PASS approval 201, retry 200, one saved and reopened ({dashboard_id})",
+        f"PASS approval 201, retry 200, dashboard {dashboard_id} reopened, "
+        "history restored",
         flush=True,
     )
     return dashboard_id

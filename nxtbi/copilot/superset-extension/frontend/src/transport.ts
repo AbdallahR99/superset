@@ -16,13 +16,51 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { CopilotHost, DashboardProposal } from '@nxtbi/copilot';
+import type {
+  CopilotConversation,
+  CopilotHost,
+  CopilotTextMessage,
+  DashboardProposal,
+} from '@nxtbi/copilot';
 
 type RunInput = Parameters<CopilotHost['run']>[0];
 
+function readConversation(value: unknown): CopilotConversation | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const item = value as Partial<CopilotConversation>;
+  if (
+    typeof item.threadId !== 'string' ||
+    typeof item.updatedAt !== 'string' ||
+    !Array.isArray(item.messages) ||
+    !item.messages.length ||
+    !item.messages.every(
+      (message: CopilotTextMessage | null) =>
+        message &&
+        typeof message.id === 'string' &&
+        (message.role === 'user' || message.role === 'assistant') &&
+        typeof message.content === 'string',
+    )
+  ) {
+    return undefined;
+  }
+  const dashboard = item.savedDashboard;
+  return {
+    threadId: item.threadId,
+    updatedAt: item.updatedAt,
+    messages: item.messages,
+    savedDashboard:
+      dashboard &&
+      Number.isSafeInteger(dashboard.id) &&
+      dashboard.id > 0 &&
+      dashboard.url === `/dashboard/v2/${dashboard.id}/`
+        ? { id: dashboard.id, url: dashboard.url }
+        : undefined,
+  };
+}
+
 export function createSessionTransport(base: string) {
-  async function post(
-    path: 'run' | 'approve',
+  async function write(
+    path: 'run' | 'approve' | 'history',
     body: unknown,
     accept: string,
     signal: AbortSignal,
@@ -44,7 +82,7 @@ export function createSessionTransport(base: string) {
     }
     return fetch(`${base}/api/v1/nxtbi_copilot/${path}`, {
       ...session,
-      method: 'POST',
+      method: path === 'history' ? 'PUT' : 'POST',
       headers: {
         'Content-Type': 'application/json',
         Accept: accept,
@@ -56,19 +94,45 @@ export function createSessionTransport(base: string) {
 
   return {
     run(input: RunInput, signal: AbortSignal): Promise<Response> {
-      return post('run', input, 'text/event-stream', signal);
+      return write('run', input, 'text/event-stream', signal);
+    },
+    history: {
+      async list(signal: AbortSignal): Promise<CopilotConversation[]> {
+        const response = await fetch(`${base}/api/v1/nxtbi_copilot/history`, {
+          credentials: 'same-origin',
+          redirect: 'error',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+          signal,
+        });
+        if (!response.ok) throw new Error('Could not load Copilot history.');
+        const { result }: { result?: unknown } = await response.json();
+        if (!Array.isArray(result)) {
+          throw new Error('Superset returned invalid Copilot history.');
+        }
+        return result.flatMap(entry => readConversation(entry) ?? []);
+      },
+      async save(conversation: CopilotConversation, signal: AbortSignal) {
+        const response = await write(
+          'history',
+          conversation,
+          'application/json',
+          signal,
+        );
+        if (!response.ok) throw new Error('Could not save Copilot history.');
+      },
     },
     async approve(
       proposal: DashboardProposal,
       signal: AbortSignal,
     ): Promise<{ id: number; url: string }> {
-      const response = await post(
+      const response = await write(
         'approve',
         proposal,
         'application/json',
         signal,
       );
-      if (!response.ok)
+      if (response.status !== 200 && response.status !== 201)
         throw new Error(
           `Superset rejected the dashboard approval (HTTP ${response.status}).`,
         );
@@ -78,7 +142,7 @@ export function createSessionTransport(base: string) {
         typeof id !== 'number' ||
         !Number.isSafeInteger(id) ||
         id < 1 ||
-        typeof url !== 'string'
+        url !== `/dashboard/v2/${id}/`
       ) {
         throw new Error('Superset returned an invalid dashboard response.');
       }

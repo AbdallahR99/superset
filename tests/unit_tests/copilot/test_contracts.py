@@ -22,6 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from superset.copilot.contracts import (
+    CopilotConversation,
     DashboardProposal,
     make_document,
     sign_claims,
@@ -43,6 +44,27 @@ def test_run_claims_are_bound_to_the_type_and_time() -> None:
     ):
         with pytest.raises(ValueError, match="Invalid Copilot capability"):
             verify_claims(secret, invalid, audience, 60, now=now)
+
+
+def test_history_accepts_only_chat_text_and_matching_dashboard_reference() -> None:
+    transcript = {
+        "threadId": "thread-1",
+        "messages": [{"id": "m-1", "role": "user", "content": "Show sales"}],
+        "updatedAt": "2026-11-18T09:00:00.000Z",
+        "savedDashboard": {"id": 8, "url": "/dashboard/v2/8/"},
+    }
+    assert (
+        CopilotConversation.model_validate(transcript).model_dump(by_alias=True)
+        == transcript
+    )
+
+    for unsafe in (
+        {**transcript, "approvalToken": "expired"},
+        {**transcript, "messages": [{"id": "m-1", "role": "tool", "content": "data"}]},
+        {**transcript, "savedDashboard": {"id": 8, "url": "/dashboard/v2/9/"}},
+    ):
+        with pytest.raises(ValidationError):
+            CopilotConversation.model_validate(unsafe)
 
 
 def test_proposal_compiles_only_registered_data_references() -> None:

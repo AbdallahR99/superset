@@ -88,3 +88,73 @@ test('the session transport returns a protected approval reference', async ({
     },
   );
 });
+
+test('Copilot history reads and writes transcripts through the authenticated Superset route', async ({
+  mock,
+}) => {
+  const transcript = {
+    threadId: 'thread-1',
+    messages: [
+      { id: 'message-1', role: 'user' as const, content: 'Show sales' },
+    ],
+    updatedAt: '2026-11-18T09:00:00.000Z',
+    savedDashboard: { id: 8, url: '/dashboard/v2/8/' },
+  };
+  const fetchMock = mock.method(
+    globalThis,
+    'fetch',
+    async (url: string, init: RequestInit) => {
+      if (url.endsWith('/csrf_token/')) {
+        return new Response(JSON.stringify({ result: 'fixture-csrf-token' }));
+      }
+      if (init.method === 'PUT') return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ result: [transcript, null] }));
+    },
+  );
+  const base = 'https://example.test/bi';
+  const { history } = createSessionTransport(base);
+  const signal = new AbortController().signal;
+  assert.deepEqual(await history.list(signal), [transcript]);
+  await history.save(transcript, signal);
+  const calls = fetchMock.mock.calls.map(
+    call => call.arguments as [string, RequestInit],
+  );
+  assert.deepEqual(
+    calls.map(([url]) => url),
+    [
+      `${base}/api/v1/nxtbi_copilot/history`,
+      `${base}/api/v1/security/csrf_token/`,
+      `${base}/api/v1/nxtbi_copilot/history`,
+    ],
+  );
+  assert.equal(calls[0][1].cache, 'no-store');
+  const [, put] = calls[2];
+  assert.equal(put.method, 'PUT');
+  assert.equal(put.credentials, 'same-origin');
+  assert.equal(put.signal, signal);
+  assert.equal(
+    new Headers(put.headers).get('X-CSRFToken'),
+    'fixture-csrf-token',
+  );
+  assert.deepEqual(JSON.parse(String(put.body)), transcript);
+});
+
+test('approval rejects a link that does not match the saved dashboard ID', async ({
+  mock,
+}) => {
+  mock.method(globalThis, 'fetch', async (url: string) =>
+    url.endsWith('/csrf_token/')
+      ? new Response(JSON.stringify({ result: 'fixture-csrf-token' }))
+      : new Response(JSON.stringify({ id: 8, url: '/dashboard/test/' }), {
+          status: 201,
+        }),
+  );
+  const transport = createSessionTransport('https://example.test');
+  await assert.rejects(
+    transport.approve(
+      { title: 'Draft', approvalToken: 'fixture-approval-token', widgets: [] },
+      new AbortController().signal,
+    ),
+    /invalid dashboard response/,
+  );
+});

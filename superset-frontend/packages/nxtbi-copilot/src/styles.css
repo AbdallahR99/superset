@@ -17,49 +17,197 @@
  * under the License.
  */
 
+.nxtbi-copilot-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid transparent;
+  border-radius: 2rem;
+  background: var(--nxtbi-copilot-accent, #17675d);
+  color: white;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.nxtbi-copilot-trigger:focus-visible {
+  outline: 2px solid var(--ant-color-text, currentColor);
+  outline-offset: 2px;
+}
+
 .nxtbi-copilot {
-  --copilot-border: var(--nxtbi-copilot-border, color-mix(in srgb, currentColor 19%, transparent));
-  --copilot-surface: var(--nxtbi-copilot-surface, Canvas);
+  --copilot-border: var(
+    --nxtbi-copilot-border,
+    var(
+      --ant-color-border-secondary,
+      color-mix(in srgb, currentColor 17%, transparent)
+    )
+  );
+  --copilot-surface: var(
+    --nxtbi-copilot-surface,
+    var(--ant-color-bg-container, Canvas)
+  );
   --copilot-accent: var(--nxtbi-copilot-accent, #17675d);
+  --copilot-tint: color-mix(
+    in srgb,
+    var(--copilot-accent) 10%,
+    var(--copilot-surface)
+  );
+  --copilot-muted: var(
+    --ant-color-text-secondary,
+    color-mix(in srgb, currentColor 76%, transparent)
+  );
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  min-block-size: 18rem;
+  min-block-size: 0;
   max-block-size: 100%;
   block-size: 100%;
   color: inherit;
   background: var(--copilot-surface);
   font: inherit;
+  line-height: 1.5;
+}
+
+.nxtbi-copilot__header,
+.nxtbi-copilot__identity,
+.nxtbi-copilot__toolbar,
+.nxtbi-copilot__history-heading,
+.nxtbi-copilot__saved {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.nxtbi-copilot__header {
+  justify-content: space-between;
+  flex: none;
+  border-block-end: 1px solid var(--copilot-border);
+  padding: 0.75rem 1rem;
+}
+
+.nxtbi-copilot__identity {
+  letter-spacing: -0.015em;
+}
+
+.nxtbi-copilot__mark {
+  display: grid;
+  place-items: center;
+  inline-size: 2rem;
+  block-size: 2rem;
+  color: white;
+  background: var(--copilot-accent);
+  border-radius: 0.65rem;
+  font-size: 1.2rem;
 }
 
 .nxtbi-copilot__history {
   flex: 1 1 auto;
   min-block-size: 0;
   overflow: auto;
-  padding: 0.875rem;
+  overscroll-behavior: contain;
+  padding: 1rem;
 }
 
-.nxtbi-copilot__intro {
-  opacity: 0.82;
+.nxtbi-copilot__welcome {
+  padding: 1.1rem;
+  border: 1px solid var(--copilot-border);
+  border-radius: 0.9rem;
+  background: linear-gradient(
+    145deg,
+    var(--copilot-tint),
+    var(--copilot-surface) 78%
+  );
+}
+
+.nxtbi-copilot__welcome h3 {
+  margin: 0;
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+}
+
+.nxtbi-copilot__welcome p {
+  margin: 0.5rem 0 0;
+  color: var(--copilot-muted);
+}
+
+.nxtbi-copilot__suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-block-start: 0.9rem;
 }
 
 .nxtbi-copilot__message {
   inline-size: fit-content;
-  max-inline-size: 100%;
-  margin: 0 0 0.75rem;
-  padding: 0.55rem 0.75rem;
-  border-radius: 0.55rem;
+  max-inline-size: 95%;
+  margin: 0 0 1rem;
   overflow-wrap: anywhere;
+}
+
+.nxtbi-copilot__message p {
+  margin: 0;
   white-space: pre-wrap;
 }
 
 .nxtbi-copilot__message--user {
   margin-inline-start: auto;
-  background: color-mix(in srgb, var(--copilot-accent) 13%, var(--copilot-surface));
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.85rem;
+  border-end-end-radius: 0.25rem;
+  background: var(--copilot-tint);
 }
 
-.nxtbi-copilot__message--assistant {
-  border: 1px solid var(--copilot-border);
+.nxtbi-copilot__speaker {
+  display: block;
+  margin-block-end: 0.35rem;
+  color: var(--copilot-muted);
+  font-size: 0.78em;
+  font-weight: 650;
+}
+
+.nxtbi-copilot__history-heading {
+  justify-content: space-between;
+  margin-block-end: 0.75rem;
+}
+
+.nxtbi-copilot__history-heading h3,
+.nxtbi-copilot__proposal h3 {
+  margin: 0;
+  color: inherit;
+  font-size: 1rem;
+}
+
+.nxtbi-copilot__conversations {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0;
+  list-style: none;
+}
+
+.nxtbi-copilot__conversations button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  inline-size: 100%;
+  text-align: start;
+}
+
+.nxtbi-copilot__conversations strong {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nxtbi-copilot__conversations time {
+  flex: none;
+  color: var(--copilot-muted);
+  font-size: 0.82em;
 }
 
 .nxtbi-copilot__proposal {
@@ -67,12 +215,9 @@
   gap: 0.75rem;
   padding: 0.875rem;
   margin-block: 0.75rem;
-  border-radius: 0.65rem;
+  border-radius: 0.85rem;
   border: 1px solid var(--copilot-border);
-}
-
-.nxtbi-copilot__proposal h3 {
-  margin: 0;
+  background: var(--copilot-surface);
 }
 
 .nxtbi-copilot__proposal label {
@@ -88,36 +233,66 @@
 }
 
 .nxtbi-copilot__composer {
+  flex: none;
   border-block-start: 1px solid var(--copilot-border);
-  padding: 0.75rem;
+  padding: 0.75rem 1rem;
 }
 
 .nxtbi-copilot__composer textarea {
   flex: 1 1 auto;
   min-inline-size: 0;
-  resize: vertical;
+  min-block-size: 2.4rem;
+  max-block-size: 8rem;
+  resize: block;
 }
 
 .nxtbi-copilot__composer textarea,
-.nxtbi-copilot__proposal input {
+.nxtbi-copilot__proposal input,
+.nxtbi-copilot__proposal select {
+  inline-size: 100%;
+  box-sizing: border-box;
   padding: 0.5rem;
   border: 1px solid var(--copilot-border);
-  border-radius: 0.35rem;
+  border-radius: 0.55rem;
   background: var(--copilot-surface);
   color: inherit;
   font: inherit;
 }
 
-.nxtbi-copilot__composer button,
-.nxtbi-copilot__actions button,
-.nxtbi-copilot__proposal > button {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid transparent;
-  border-radius: 0.35rem;
-  background: var(--copilot-accent);
-  color: #fff;
+.nxtbi-copilot__proposal fieldset {
+  margin: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--copilot-border);
+  border-radius: 0.55rem;
+}
+
+.nxtbi-copilot :where(button) {
+  min-block-size: 2.25rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--copilot-border);
+  border-radius: 0.5rem;
+  background: var(--copilot-surface);
+  color: inherit;
   cursor: pointer;
   font: inherit;
+}
+
+.nxtbi-copilot :where(button):not(:disabled):hover,
+.nxtbi-copilot__toolbar button[aria-expanded='true'] {
+  background: var(--copilot-tint);
+}
+
+.nxtbi-copilot .nxtbi-copilot__primary,
+.nxtbi-copilot .nxtbi-copilot__primary:not(:disabled):hover {
+  color: white;
+  background: var(--copilot-accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.nxtbi-copilot :where(button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--ant-color-primary, var(--copilot-accent));
+  outline-offset: 2px;
 }
 
 .nxtbi-copilot button:disabled {
@@ -125,6 +300,19 @@
   cursor: default;
 }
 
+.nxtbi-copilot__saved {
+  justify-content: space-between;
+  padding: 0.65rem 0.75rem;
+  margin-block: 0.75rem;
+  border: 1px solid var(--copilot-border);
+  border-radius: 0.65rem;
+  background: var(--copilot-tint);
+}
+
+.nxtbi-copilot__working {
+  color: var(--copilot-muted);
+}
+
 .nxtbi-copilot__error {
-  color: var(--nxtbi-copilot-error, #a12632);
+  color: var(--nxtbi-copilot-error, var(--ant-color-error-text, #a12632));
 }

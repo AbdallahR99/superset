@@ -42,6 +42,7 @@ from superset.commands.widget.saved import GetSavedWidgetCommand
 from superset.copilot.contracts import (
     APPROVAL_AUDIENCE,
     APPROVAL_TTL,
+    CopilotConversation,
     DashboardApproval,
     DashboardProposal,
     MAX_BODY_BYTES,
@@ -62,7 +63,15 @@ from superset.copilot.services import (
 from superset.dashboard_v2.document import DocumentValidationError, parse_strict_json
 from superset.exceptions import SupersetSecurityException
 from superset.extensions import appbuilder, csrf
+from superset.extensions.storage.persistent_dao import (
+    ExtensionStorageDAO,
+    ExtensionStorageListPayloadTooLarge,
+    ExtensionStorageQuotaExceeded,
+    ExtensionStorageValueTooLarge,
+)
+from superset.utils import json
 from superset.utils.core import override_user
+from superset.utils.decorators import transaction
 from superset.views.base_api import BaseSupersetApi
 
 if TYPE_CHECKING:
@@ -70,16 +79,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 TOOL_ROUTE = "/api/v1/nxtbi_copilot/internal/tools"
+COPILOT_EXTENSION_ID = "nxtbi.ai-copilot"
+HISTORY_RESOURCE_TYPE = "copilot_conversation"
+HISTORY_RESOURCE_UUID = "0ce6e8ba-cf58-40e3-bca3-81f8a707c468"
+HISTORY_PAGE_SIZE = 10
+MAX_HISTORY_BODY_BYTES = 512 * 1024
 
 
-def _body() -> dict[str, Any]:
+def _body(max_bytes: int = MAX_BODY_BYTES) -> dict[str, Any]:
     """Bound bytes and reject ambiguous or deeply nested JSON before parsing."""
     if not request.is_json:
         abort(415)
-    if request.content_length and request.content_length > MAX_BODY_BYTES:
+    if request.content_length and request.content_length > max_bytes:
         abort(413)
-    raw = request.stream.read(MAX_BODY_BYTES + 1)
-    if len(raw) > MAX_BODY_BYTES:
+    raw = request.stream.read(max_bytes + 1)
+    if len(raw) > max_bytes:
         abort(413)
     try:
         value = parse_strict_json(raw, 24)
@@ -190,7 +204,77 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
     resource_name = "nxtbi_copilot"
     allow_browser_login = True
     class_permission_name = "Dashboard"
-    method_permission_name = {"run": "read", "approve": "write"}
+    method_permission_name = {
+        "run": "read",
+        "approve": "write",
+        "get_history": "read",
+        "save_history": "read",
+    }
+
+    @expose("/history", methods=("GET",))
+    @protect()
+    def get_history(self) -> Response:
+        """Return recent transcripts owned by the authenticated browser user."""
+        user = _actor()
+        try:
+            entries, _ = ExtensionStorageDAO.list_entries(
+                COPILOT_EXTENSION_ID,
+                user_fk=user.id,
+                resource_type=HISTORY_RESOURCE_TYPE,
+                resource_uuid=HISTORY_RESOURCE_UUID,
+                page_size=HISTORY_PAGE_SIZE,
+            )
+        except ExtensionStorageListPayloadTooLarge as ex:
+            return self.response(ex.status, message=ex.message)
+
+        conversations = []
+        for entry in entries:
+            if entry.codec != "json" or entry.value is None:
+                continue
+            try:
+                conversation = CopilotConversation.model_validate(
+                    json.loads(entry.value)
+                )
+            except ValueError:
+                continue
+            if conversation.thread_id == entry.key:
+                conversations.append(
+                    conversation.model_dump(by_alias=True, exclude_none=True)
+                )
+        response = jsonify(result=conversations)
+        response.cache_control.no_store = True
+        return response
+
+    @expose("/history", methods=("PUT",))
+    @protect()
+    @transaction()
+    def save_history(self) -> Response:
+        """Store an encrypted transcript under its owner's account."""
+        user = _actor()
+        try:
+            conversation = CopilotConversation.model_validate(
+                _body(MAX_HISTORY_BODY_BYTES)
+            )
+            encoded = json.dumps(
+                conversation.model_dump(by_alias=True, exclude_none=True),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (ValidationError, UnicodeEncodeError):
+            return self.response(422, message="Invalid Copilot transcript.")
+        try:
+            ExtensionStorageDAO.set(
+                COPILOT_EXTENSION_ID,
+                conversation.thread_id,
+                encoded,
+                user_fk=user.id,
+                resource_type=HISTORY_RESOURCE_TYPE,
+                resource_uuid=HISTORY_RESOURCE_UUID,
+                encrypt=True,
+            )
+        except (ExtensionStorageQuotaExceeded, ExtensionStorageValueTooLarge) as ex:
+            return self.response(ex.status, message=ex.message)
+        return Response(status=204)
 
     @expose("/run", methods=("POST",))
     @protect()
