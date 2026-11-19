@@ -158,3 +158,64 @@ test('approval rejects a link that does not match the saved dashboard ID', async
     /invalid dashboard response/,
   );
 });
+
+test('CSV import sends a protected multipart request and reuses its ID on retry', async ({
+  mock,
+}) => {
+  const fetchMock = mock.method(globalThis, 'fetch', async (url: string) =>
+    url.endsWith('/csrf_token/')
+      ? new Response(JSON.stringify({ result: 'fixture-csrf-token' }))
+      : new Response(JSON.stringify({ id: 12, name: 'Orders' }), {
+          status: 201,
+        }),
+  );
+  const { uploadDataset } = createSessionTransport('https://example.test/bi');
+  const file = new File(['total\n42\n'], 'orders.csv', { type: 'text/csv' });
+  const signal = new AbortController().signal;
+  assert.deepEqual(await uploadDataset(file, signal), {
+    id: 12,
+    name: 'Orders',
+  });
+  await uploadDataset(file, signal);
+
+  const requests = fetchMock.mock.calls
+    .map(call => call.arguments as [string, RequestInit])
+    .filter(([url]) => url.endsWith('/upload/'));
+  assert.equal(requests.length, 2);
+  const ids = [];
+  for (const [url, request] of requests) {
+    assert.equal(url, 'https://example.test/bi/api/v1/nxtbi_copilot/upload/');
+    assert.equal(request.credentials, 'same-origin');
+    assert.equal(request.redirect, 'error');
+    assert.equal(request.signal, signal);
+    const headers = new Headers(request.headers);
+    assert.equal(headers.get('X-CSRFToken'), 'fixture-csrf-token');
+    assert.equal(headers.has('Content-Type'), false);
+    assert.ok(request.body instanceof FormData);
+    const uploaded = request.body.get('file');
+    assert.ok(uploaded instanceof File);
+    assert.equal(uploaded.name, 'orders.csv');
+    assert.equal(await uploaded.text(), 'total\n42\n');
+    ids.push(request.body.get('upload_id'));
+  }
+  assert.ok(typeof ids[0] === 'string' && /^[a-f0-9-]{36}$/.test(ids[0]));
+  assert.equal(ids[0], ids[1]);
+});
+
+test('CSV import reports unavailable destinations without returning a dataset', async ({
+  mock,
+}) => {
+  mock.method(globalThis, 'fetch', async (url: string) =>
+    url.endsWith('/csrf_token/')
+      ? new Response(JSON.stringify({ result: 'fixture-csrf-token' }))
+      : new Response(null, { status: 503 }),
+  );
+  const { uploadDataset } = createSessionTransport('https://example.test');
+  await assert.rejects(
+    uploadDataset(
+      new File(['total\n42'], 'orders.csv'),
+      new AbortController().signal,
+    ),
+    /upload destination is available/,
+  );
+});

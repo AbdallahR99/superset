@@ -24,6 +24,8 @@ const paths = {
   data: 'M20 6c0 1.7-3.6 3-8 3S4 7.7 4 6s3.6-3 8-3 8 1.3 8 3ZM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
   dashboard: 'M3 5h18v14H3zM3 9h18m-9 0v10',
   search: 'M15.5 15.5 21 21m-10-4a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z',
+  attach:
+    'M20 11.5 11.5 20a4 4 0 0 1-5.7-5.7l9.2-9.2a2.75 2.75 0 0 1 3.9 3.9l-8.5 8.5a1.4 1.4 0 0 1-2-2l7.8-7.8',
 } as const;
 
 /** A decorative icon whose containing control supplies its accessible name. */

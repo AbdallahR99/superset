@@ -353,6 +353,77 @@
   padding: 0.75rem 1rem;
 }
 
+.nxtbi-copilot__uploads {
+  display: grid;
+  flex: none;
+  gap: 0.5rem;
+  border-block-start: 1px solid var(--copilot-border);
+  padding: 0.65rem 1rem;
+}
+
+.nxtbi-copilot__uploads ul {
+  max-block-size: min(9rem, 22dvh);
+  margin: 0;
+  padding-inline-start: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.nxtbi-copilot__uploads li + li {
+  border-block-start: 1px solid var(--copilot-border);
+}
+
+.nxtbi-copilot__uploads p {
+  margin: 0;
+}
+
+.nxtbi-copilot__upload-status {
+  color: var(--copilot-muted);
+}
+
+.nxtbi-copilot__upload-status:empty,
+.nxtbi-copilot__upload-actions:empty {
+  display: none;
+}
+
+.nxtbi-copilot__uploads progress {
+  inline-size: 100%;
+  accent-color: var(--copilot-accent);
+}
+
+.nxtbi-copilot__upload-row,
+.nxtbi-copilot__upload-row label,
+.nxtbi-copilot__upload-actions,
+.nxtbi-copilot__attach-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nxtbi-copilot__upload-row {
+  justify-content: space-between;
+  padding-block: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+.nxtbi-copilot__upload-row label {
+  min-inline-size: 0;
+}
+
+.nxtbi-copilot__upload-row :is(input, button),
+.nxtbi-copilot__attach-button {
+  flex: none;
+}
+
+.nxtbi-copilot__upload-actions {
+  flex-wrap: wrap;
+}
+
+.nxtbi-copilot__attach-button {
+  min-block-size: 2.4rem;
+  white-space: nowrap;
+}
+
 .nxtbi-copilot__composer textarea {
   flex: 1 1 auto;
   min-inline-size: 0;

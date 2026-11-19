@@ -108,6 +108,8 @@ class RunHints(BaseModel):
     active_dashboard_id: int | None = None
     active_chart_id: int | None = None
     active_dataset_id: int | None = None
+    uploaded_dataset_id: int | None = None
+    uploaded_dataset_action: Literal["draft"] | None = None
     form_values: dict[str, str] | None = None
 
 
@@ -183,7 +185,24 @@ def verify_gateway_token(authorization: str | None, secret: str) -> GatewayClaim
     return claims
 
 
-def _parse_hints(raw: object, forwarded: object) -> RunHints:
+def _parse_form_values(forwarded: object) -> dict[str, str] | None:
+    """Read only bounded values submitted through a supported form action."""
+    if not isinstance(forwarded, dict) or "a2uiAction" not in forwarded:
+        return None
+    action = A2UIAction.model_validate(forwarded["a2uiAction"]).action
+    for name, value in action.context.items():
+        if (
+            not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", name)
+            or name in {"constructor", "prototype"}
+            or len(value) > 500
+        ):
+            raise ValueError("Invalid form field")
+    return action.context
+
+
+def _parse_hints(
+    raw: object, forwarded: object, host: Literal["superset", "standalone"]
+) -> RunHints:
     hints = RunHints()
     if isinstance(raw, list):
         for item in raw[:8]:
@@ -197,21 +216,27 @@ def _parse_hints(raw: object, forwarded: object) -> RunHints:
             elif key == "page" and len(value) <= 120:
                 hints.page = value
             elif (
-                key in ("active_dashboard_id", "active_chart_id", "active_dataset_id")
+                host == "superset"
+                and key == "uploaded_dataset_action"
+                and value == "draft"
+            ):
+                hints.uploaded_dataset_action = "draft"
+            elif (
+                key
+                in (
+                    "active_dashboard_id",
+                    "active_chart_id",
+                    "active_dataset_id",
+                    "uploaded_dataset_id",
+                )
+                and (key != "uploaded_dataset_id" or host == "superset")
                 and re.fullmatch(r"[1-9][0-9]{0,9}", value)
                 and int(value) <= 2_147_483_647
             ):
                 setattr(hints, key, int(value))
-    if isinstance(forwarded, dict) and "a2uiAction" in forwarded:
-        action = A2UIAction.model_validate(forwarded["a2uiAction"]).action
-        for name, value in action.context.items():
-            if (
-                not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", name)
-                or name in {"constructor", "prototype"}
-                or len(value) > 500
-            ):
-                raise ValueError("Invalid form field")
-        hints.form_values = action.context
+    if hints.uploaded_dataset_action and hints.uploaded_dataset_id is None:
+        raise ValueError("Select a dataset before staging an upload draft")
+    hints.form_values = _parse_form_values(forwarded)
     return hints
 
 
@@ -274,7 +299,9 @@ def parse_run(body: bytes, claims: GatewayClaims) -> tuple[RunAgentInput, RunHin
             or not latest.content.strip()
         ):
             raise ValueError
-        hints = _parse_hints(incoming.get("context"), incoming.get("forwardedProps"))
+        hints = _parse_hints(
+            incoming.get("context"), incoming.get("forwardedProps"), claims.host
+        )
         if hints.page:
             page = json.dumps(hints.page, ensure_ascii=False)
             latest.content += f"\n\nUser-provided page context: {page}"

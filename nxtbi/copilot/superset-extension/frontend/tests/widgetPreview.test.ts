@@ -50,8 +50,12 @@ test('uses the same allowlisted data binding for table and chart previews', () =
   const chart = widgetPreview({ ...input, type: 'echarts' });
   assert.deepEqual(table?.props.dataBinding, chart?.props.dataBinding);
   assert.deepEqual(chart?.props.echartsOptions, {
+    animation: false,
+    grid: { left: 64, right: 24, bottom: 40, top: 48 },
+    tooltip: { trigger: 'axis', renderMode: 'richText' },
     xAxis: {
       type: 'category',
+      axisLabel: { hideOverlap: true },
       data: { $bind: { source: 'dimension', alias: 'region' } },
     },
     yAxis: { type: 'value' },

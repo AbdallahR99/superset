@@ -23,6 +23,30 @@ components, data bindings, and actions again. Explicit renderer actions send
 the resolved form context back on the next AG-UI run.
 [PydanticAI AG-UI adapter](https://ai.pydantic.dev/ui/ag-ui/)
 
+## CSV imports in Copilot
+
+Open Copilot and select **Choose CSV files**, then **Import CSV files**.
+Each UTF-8 CSV with a header becomes a separate Superset dataset. The file
+limit is 10 MiB or the instance's lower configured limit. Choose an imported
+dataset and select **Draft dashboard from dataset** for a preview, or type an
+analysis request to use GovAI. **Review and save** is the same approval flow as
+for other Copilot dashboards. Publishing remains a builder action.
+
+Superset writes files through its native uploader using the signed-in actor
+and the **Database → can upload** permission. The configured destination must
+allow file uploads, and its schema must pass the native access checks. Copilot
+uses the single eligible destination. Administrators can narrow the selection
+with the optional `NXTBI_COPILOT_CSV_DATABASE` database name and
+`NXTBI_COPILOT_CSV_SCHEMA` in Superset configuration. The main demo uses its
+existing upload-enabled `examples` database.
+
+An import registers row count and suitable numeric metrics. The one-click
+draft uses registered metrics, observed coverage and useful low-cardinality
+breakdowns without a model request. Copilot sends the selected dataset ID in
+chat context. The file goes to Superset, which imports its rows. Model-assisted
+queries use the same permission and aggregation controls as other datasets.
+Related files remain independent datasets until their relationships are modeled.
+
 ## Authorization and dashboard approval
 
 Superset authenticates the browser through its normal session and sends a
@@ -266,7 +290,7 @@ timezone dependency error during MCP registration in the test environment.
 
 ## Markdown quote rollout
 
-The main demo at [port 8088](http://localhost:8088) runs
+The quote rollout on the main demo used
 `nxtbi/superset-fork:copilot-4558abd734` at
 `sha256:7b7ad5f10e7fe14b3dcfc74a0cc95f124c7239aa1172bce8d0fcb48ac252b56b`.
 The image includes Copilot commit `4558abd734`. The rollout replaced only
@@ -279,3 +303,32 @@ All 34 live smoke checks passed on this image.
 The previous web image is `nxtbi/superset-fork:copilot-analysis-polished-20261118`.
 Its manifest and the web-only rollback script are in
 `nxtbi/out/copilot/quote-rollout-4558abd734/` on the demo host.
+
+## CSV import rollout
+
+The main demo at [port 8088](http://localhost:8088) runs
+`nxtbi/superset-fork:copilot-csv-20261119` at
+`sha256:9e41fcc75bf45c6cdb735369b936c730f851b0f37ad41d5872aa0e1387e696ec`
+and `nxtbi/copilot-agent:csv-20261119` at
+`sha256:a4f63e97d15ecfbd124c5876401ae3d204f9ac9ae5750607277279055140fb08`.
+The prior web and agent tags are `copilot-4558abd734` and
+`analysis-polished-20261118`. The previous extension manifest and rollback
+script are in `nxtbi/out/copilot/csv-upload-20261119/` on the demo host.
+
+Chromium imported the synthetic `orders.csv` and `payments.csv` from
+`E:/Work_Lab/test_datasets/01_easy_ecommerce`. A repeated upload returned its
+existing dataset. The selected Orders dataset produced a draft with 2,000
+records, a saved order-total sum of 6,439,445.27, and a chart by order status.
+The browser changed a widget title, refreshed the preview, approved the save,
+and reopened the draft. The test also verified upload permissions and dataset
+visibility. The test dashboard and imported tables were cleaned up.
+
+The rollout's before and after snapshots matched for data and settings.
+The examples database table inventory matched again after cleanup. During
+the browser checks, the existing Superset worker issued five chart updates
+independently of the CSV workflow.
+
+All 34 main-demo smoke checks passed, along with 16 Copilot backend tests,
+35 agent tests, 18 extension tests, and 175 SDK and Widget Jest tests.
+GovAI timed out during verification. The one-click draft completed live
+through Superset, and agent tests covered the normal model-assisted route.

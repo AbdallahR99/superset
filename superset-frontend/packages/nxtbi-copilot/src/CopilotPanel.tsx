@@ -24,6 +24,7 @@ import {
   useRef,
   useState,
   type AnchorHTMLAttributes,
+  type ChangeEvent,
   type FormEvent,
   type ReactNode,
 } from 'react';
@@ -42,6 +43,7 @@ import {
   type CopilotConversation,
   type CopilotHost,
   type CopilotTextMessage,
+  type CopilotUploadedDataset,
   type DashboardProposal,
 } from './contracts';
 import { a2uiOperations, fitAgUiInput, readAgUiEvents } from './stream';
@@ -156,6 +158,21 @@ const english = {
   openDashboard: 'Open dashboard',
   publishHint: 'Open the dashboard to review and publish it.',
   saveError: 'Could not save this dashboard. Check your access and selections.',
+  chooseCsv: 'Choose CSV files',
+  csvFiles: 'CSV files and datasets',
+  importFiles: 'Import CSV files',
+  retryImport: 'Retry failed imports',
+  importing: 'Importing CSV files…',
+  datasetReady: 'Datasets ready to use',
+  removeFile: 'Remove',
+  removeFromChat: 'Remove from chat',
+  draftFromDataset: 'Draft dashboard from dataset',
+  draftDatasetPrompt: (id: number) =>
+    `Inspect dataset #${id} and draft a dashboard using its data.`,
+  csvType: 'Choose a .csv file.',
+  csvEmpty: 'This CSV is empty.',
+  csvSize: 'Choose a CSV of 10 MiB or less.',
+  csvError: 'Import failed. Check the CSV and your access, then retry.',
 };
 
 const arabic: typeof english = {
@@ -205,6 +222,21 @@ const arabic: typeof english = {
   openDashboard: 'فتح لوحة المعلومات',
   publishHint: 'افتح لوحة المعلومات لمراجعتها ونشرها.',
   saveError: 'تعذّر حفظ اللوحة. تحقّق من صلاحياتك واختياراتك.',
+  chooseCsv: 'اختر ملفات CSV',
+  csvFiles: 'ملفات CSV ومجموعات البيانات',
+  importFiles: 'استيراد ملفات CSV',
+  retryImport: 'إعادة محاولة الاستيراد',
+  importing: 'جارٍ استيراد ملفات CSV…',
+  datasetReady: 'مجموعات بيانات جاهزة للاستخدام',
+  removeFile: 'إزالة',
+  removeFromChat: 'إزالة من المحادثة',
+  draftFromDataset: 'أنشئ مسودة لوحة من مجموعة البيانات',
+  draftDatasetPrompt: id =>
+    `افحص مجموعة البيانات رقم ${id} وأنشئ مسودة لوحة معلومات باستخدام بياناتها.`,
+  csvType: 'اختر ملفًا بامتداد .csv.',
+  csvEmpty: 'ملف CSV هذا فارغ.',
+  csvSize: 'اختر ملف CSV بحجم 10 ميبي بايت أو أقل.',
+  csvError: 'تعذّر الاستيراد. تحقّق من ملف CSV وصلاحياتك وحاول مجددًا.',
 };
 
 interface CopilotPanelProps {
@@ -222,6 +254,28 @@ const MAX_PROMPT = 3000;
 const MAX_ANSWER = 24000;
 const HISTORY_TIMEOUT = 8000;
 const SCROLL_MARGIN = 32;
+const MAX_CSV_SIZE = 10 * 1024 * 1024;
+
+type CsvAttachment =
+  | { id: string; status: 'ready' | 'failed'; file: File }
+  | {
+      id: string;
+      status: 'invalid';
+      name: string;
+      reason: 'csvType' | 'csvSize' | 'csvEmpty';
+    }
+  | { id: string; status: 'imported'; dataset: CopilotUploadedDataset };
+
+function prepareAttachment(file: File): CsvAttachment {
+  const id = crypto.randomUUID();
+  if (!/\.csv$/i.test(file.name))
+    return { id, status: 'invalid', name: file.name, reason: 'csvType' };
+  if (file.size === 0)
+    return { id, status: 'invalid', name: file.name, reason: 'csvEmpty' };
+  if (file.size > MAX_CSV_SIZE)
+    return { id, status: 'invalid', name: file.name, reason: 'csvSize' };
+  return { id, status: 'ready', file };
+}
 
 function canApprove(proposal: DashboardProposal): boolean {
   return (
@@ -255,8 +309,19 @@ function wireHistory(history: CopilotTextMessage[]): CopilotTextMessage[] {
   return result[0]?.role === 'assistant' ? result.slice(1) : result;
 }
 
-function buildContext(host: CopilotHost): AgUiRunInput['context'] {
-  const context = { ...host.context(), locale: host.locale ?? 'en' };
+function buildContext(
+  host: CopilotHost,
+  uploadedDatasetId?: number,
+  uploadedDatasetAction?: 'draft',
+): AgUiRunInput['context'] {
+  const context = {
+    ...host.context(),
+    uploaded_dataset_id: uploadedDatasetId,
+    uploaded_dataset_action: uploadedDatasetId
+      ? uploadedDatasetAction
+      : undefined,
+    locale: host.locale ?? 'en',
+  };
   return Object.entries(context)
     .filter(
       ([description, value]) =>
@@ -266,6 +331,8 @@ function buildContext(host: CopilotHost): AgUiRunInput['context'] {
           'active_dashboard_id',
           'active_chart_id',
           'active_dataset_id',
+          'uploaded_dataset_id',
+          'uploaded_dataset_action',
         ].includes(description) &&
         (typeof value === 'string' || typeof value === 'number'),
     )
@@ -285,11 +352,18 @@ export function CopilotPanel({
   const copy = isArabic ? arabic : english;
   const direction = host.direction ?? (isArabic ? 'rtl' : 'ltr');
   const historyId = useId();
+  const datasetSelectionName = useId();
   const [threadId, setThreadId] = useState<string>(() => crypto.randomUUID());
   const [messages, setMessages] = useState<CopilotTextMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [attachments, setAttachments] = useState<CsvAttachment[]>([]);
+  const [uploadedDatasetId, setUploadedDatasetId] = useState<number>();
+  const [uploadProgress, setUploadProgress] = useState<{
+    completed: number;
+    total: number;
+  }>();
   const [savedDashboard, setSavedDashboard] =
     useState<CopilotConversation['savedDashboard']>();
   const [error, setError] = useState('');
@@ -307,12 +381,15 @@ export function CopilotPanel({
   const [confirming, setConfirming] = useState(false);
   const connection = useRef<AbortController>();
   const mutation = useRef<AbortController>();
+  const filePicker = useRef<HTMLInputElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const followLatest = useRef(true);
   const composer = useRef<HTMLTextAreaElement>(null);
   const catalogs = host.catalog ? [host.catalog] : undefined;
   const { history: archive } = host;
-  const busy = streaming || saving;
+  const busy = streaming || saving || Boolean(uploadProgress);
+  const pendingFiles = attachments.filter(item => 'file' in item);
+  const hasImported = attachments.some(item => item.status === 'imported');
 
   useEffect(
     () => () => {
@@ -380,6 +457,8 @@ export function CopilotPanel({
     setProposal(undefined);
     setConfirming(false);
     setDraft('');
+    setAttachments([]);
+    setUploadedDatasetId(undefined);
     setError('');
     setFailedPrompt('');
     setHistorySaveFailed(false);
@@ -387,7 +466,11 @@ export function CopilotPanel({
     window.requestAnimationFrame(() => composer.current?.focus());
   }
 
-  async function send(value: string, action?: A2uiAction) {
+  async function send(
+    value: string,
+    action?: A2uiAction,
+    uploadedDatasetAction?: 'draft',
+  ) {
     const text = value.trim().slice(0, MAX_PROMPT);
     if (!text || connection.current || mutation.current) return;
     const controller = new AbortController();
@@ -414,7 +497,7 @@ export function CopilotPanel({
     setStreaming(true);
     setError('');
     setFailedPrompt('');
-    setDraft('');
+    if (!uploadedDatasetAction) setDraft('');
     setProposal(undefined);
     setConfirming(false);
 
@@ -426,7 +509,7 @@ export function CopilotPanel({
           runId: crypto.randomUUID(),
           messages: wireHistory(history),
           tools: [],
-          context: buildContext(host),
+          context: buildContext(host, uploadedDatasetId, uploadedDatasetAction),
           state: {},
           forwardedProps: action ? { a2uiAction: action } : {},
         }),
@@ -505,6 +588,69 @@ export function CopilotPanel({
   function handleAction(action: A2uiAction) {
     if (host.onAction?.(action)) return;
     void send(action.action.userMessage || copy.submit, action);
+  }
+
+  function chooseFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = '';
+    const selected = files.map(prepareAttachment);
+    setAttachments(previous => [...previous, ...selected]);
+  }
+
+  async function importFiles() {
+    const upload = host.uploadDataset;
+    if (
+      !upload ||
+      !pendingFiles.length ||
+      connection.current ||
+      mutation.current
+    )
+      return;
+    const controller = new AbortController();
+    mutation.current = controller;
+    setUploadProgress({ completed: 0, total: pendingFiles.length });
+    try {
+      for (const [index, item] of pendingFiles.entries()) {
+        let next: CsvAttachment;
+        try {
+          const dataset = await upload(item.file, controller.signal);
+          if (
+            !Number.isSafeInteger(dataset.id) ||
+            dataset.id <= 0 ||
+            !dataset.name.trim()
+          )
+            throw new Error('Invalid uploaded dataset');
+          next = { id: item.id, status: 'imported', dataset };
+        } catch {
+          next = { ...item, status: 'failed' };
+        }
+        if (controller.signal.aborted) return;
+        if (next.status === 'imported') {
+          const { id } = next.dataset;
+          setUploadedDatasetId(previous => previous ?? id);
+        }
+        setAttachments(previous =>
+          previous.map(attachment =>
+            attachment.id === item.id ? next : attachment,
+          ),
+        );
+        setUploadProgress({ completed: index + 1, total: pendingFiles.length });
+      }
+    } finally {
+      if (mutation.current === controller) {
+        mutation.current = undefined;
+        if (!controller.signal.aborted) setUploadProgress(undefined);
+      }
+    }
+  }
+
+  function removeAttachment(item: CsvAttachment) {
+    setAttachments(previous =>
+      previous.filter(candidate => candidate.id !== item.id),
+    );
+    if (item.status === 'imported' && item.dataset.id === uploadedDatasetId)
+      setUploadedDatasetId(undefined);
+    window.requestAnimationFrame(() => composer.current?.focus());
   }
 
   async function approve() {
@@ -732,7 +878,7 @@ export function CopilotPanel({
                     <button
                       className="nxtbi-copilot__primary"
                       type="button"
-                      disabled={saving}
+                      disabled={busy}
                       onClick={() => void approve()}
                     >
                       {saving ? copy.saving : copy.confirm}
@@ -749,7 +895,7 @@ export function CopilotPanel({
                   <button
                     className="nxtbi-copilot__primary"
                     type="button"
-                    disabled={streaming || !canApprove(proposal)}
+                    disabled={busy || !canApprove(proposal)}
                     onClick={() => setConfirming(true)}
                   >
                     {copy.review}
@@ -804,7 +950,133 @@ export function CopilotPanel({
               </div>
             )}
           </div>
+          {host.uploadDataset && attachments.length > 0 && (
+            <section
+              className="nxtbi-copilot__uploads"
+              aria-label={copy.csvFiles}
+            >
+              <p role="status" className="nxtbi-copilot__upload-status">
+                {uploadProgress
+                  ? copy.importing
+                  : hasImported
+                    ? copy.datasetReady
+                    : null}
+              </p>
+              {uploadProgress && uploadProgress.total > 1 && (
+                <progress
+                  aria-label={copy.importing}
+                  value={uploadProgress.completed}
+                  max={uploadProgress.total}
+                />
+              )}
+              <ul>
+                {attachments.map(item => {
+                  const imported = item.status === 'imported';
+                  const name = imported
+                    ? item.dataset.name
+                    : item.status === 'invalid'
+                      ? item.name
+                      : item.file.name;
+                  const problem =
+                    item.status === 'invalid'
+                      ? copy[item.reason]
+                      : item.status === 'failed'
+                        ? copy.csvError
+                        : null;
+                  const remove = imported
+                    ? copy.removeFromChat
+                    : copy.removeFile;
+                  return (
+                    <li key={item.id}>
+                      <div className="nxtbi-copilot__upload-row">
+                        {imported ? (
+                          <label>
+                            <input
+                              type="radio"
+                              name={datasetSelectionName}
+                              checked={uploadedDatasetId === item.dataset.id}
+                              disabled={busy}
+                              onChange={() =>
+                                setUploadedDatasetId(item.dataset.id)
+                              }
+                            />
+                            <bdi>{name}</bdi>
+                          </label>
+                        ) : (
+                          <bdi>{name}</bdi>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          aria-label={`${remove} ${name}`}
+                          onClick={() => removeAttachment(item)}
+                        >
+                          {remove}
+                        </button>
+                      </div>
+                      {problem && (
+                        <p className="nxtbi-copilot__error" role="alert">
+                          {problem}
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="nxtbi-copilot__upload-actions">
+                {pendingFiles.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void importFiles()}
+                  >
+                    {pendingFiles.some(item => item.status === 'ready')
+                      ? copy.importFiles
+                      : copy.retryImport}
+                  </button>
+                )}
+                {host.approve && uploadedDatasetId !== undefined && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void send(
+                        copy.draftDatasetPrompt(uploadedDatasetId),
+                        undefined,
+                        'draft',
+                      )
+                    }
+                  >
+                    {copy.draftFromDataset}
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
           <form className="nxtbi-copilot__composer" onSubmit={submit}>
+            {host.uploadDataset && (
+              <>
+                <input
+                  ref={filePicker}
+                  type="file"
+                  accept=".csv,text/csv"
+                  aria-label={copy.chooseCsv}
+                  multiple
+                  hidden
+                  onChange={chooseFiles}
+                />
+                <button
+                  type="button"
+                  className="nxtbi-copilot__attach-button"
+                  aria-label={copy.chooseCsv}
+                  disabled={busy}
+                  onClick={() => filePicker.current?.click()}
+                >
+                  <CopilotIcon name="attach" />
+                  CSV
+                </button>
+              </>
+            )}
             <textarea
               ref={composer}
               rows={2}
@@ -823,7 +1095,7 @@ export function CopilotPanel({
               <button
                 className="nxtbi-copilot__primary"
                 type="submit"
-                disabled={!draft.trim() || saving}
+                disabled={!draft.trim() || busy}
               >
                 {copy.send}
               </button>

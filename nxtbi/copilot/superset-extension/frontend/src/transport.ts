@@ -20,10 +20,39 @@ import type {
   CopilotConversation,
   CopilotHost,
   CopilotTextMessage,
+  CopilotUploadedDataset,
   DashboardProposal,
 } from '@nxtbi/copilot';
 
 type RunInput = Parameters<CopilotHost['run']>[0];
+
+const uploadMessages = {
+  en: {
+    permission:
+      'Your Superset account does not have permission to upload CSV files.',
+    destination:
+      'No single upload destination is available. Ask a Superset administrator to configure a CSV upload database.',
+    size: 'The CSV exceeds the upload limit.',
+    invalid:
+      'Superset could not read this CSV. Check that it has a header row and uses UTF-8.',
+    pending: 'This CSV import is still being registered. Retry in a moment.',
+    registration:
+      'The file was stored, but Superset could not register its dataset. Ask a Superset administrator to check the import.',
+    generic: 'Superset could not import the CSV. Try again.',
+  },
+  ar: {
+    permission: 'لا يملك حسابك في Superset إذن رفع ملفات CSV.',
+    destination:
+      'لا توجد وجهة رفع محددة. اطلب من مسؤول Superset تهيئة قاعدة بيانات لرفع ملفات CSV.',
+    size: 'يتجاوز ملف CSV الحد الأقصى لحجم الرفع.',
+    invalid:
+      'تعذّر على Superset قراءة الملف. تأكد من وجود صف للعناوين ومن استخدام ترميز UTF-8.',
+    pending: 'لا يزال تسجيل ملف CSV جاريًا. أعد المحاولة بعد قليل.',
+    registration:
+      'تم تخزين الملف، لكن تعذّر تسجيل مجموعة البيانات. اطلب من مسؤول Superset مراجعة الاستيراد.',
+    generic: 'تعذّر على Superset استيراد الملف. حاول مجددًا.',
+  },
+};
 
 function readConversation(value: unknown): CopilotConversation | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
@@ -58,9 +87,10 @@ function readConversation(value: unknown): CopilotConversation | undefined {
   };
 }
 
-export function createSessionTransport(base: string) {
+export function createSessionTransport(base: string, language = () => 'en') {
+  const uploadIds = new WeakMap<File, string>();
   async function write(
-    path: 'run' | 'approve' | 'history',
+    path: 'run' | 'approve' | 'history' | 'upload/',
     body: unknown,
     accept: string,
     signal: AbortSignal,
@@ -80,21 +110,80 @@ export function createSessionTransport(base: string) {
     if (typeof data.result !== 'string' || !data.result) {
       throw new Error('The Superset session could not be verified.');
     }
+    const multipart = body instanceof FormData;
     return fetch(`${base}/api/v1/nxtbi_copilot/${path}`, {
       ...session,
       method: path === 'history' ? 'PUT' : 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        ...(!multipart && { 'Content-Type': 'application/json' }),
         Accept: accept,
         'X-CSRFToken': data.result,
       },
-      body: JSON.stringify(body),
+      body: multipart ? body : JSON.stringify(body),
     });
   }
 
   return {
     run(input: RunInput, signal: AbortSignal): Promise<Response> {
       return write('run', input, 'text/event-stream', signal);
+    },
+    async uploadDataset(
+      file: File,
+      signal: AbortSignal,
+    ): Promise<CopilotUploadedDataset> {
+      const messages = language().startsWith('ar')
+        ? uploadMessages.ar
+        : uploadMessages.en;
+      const id = uploadIds.get(file) ?? crypto.randomUUID();
+      uploadIds.set(file, id);
+      const body = new FormData();
+      body.append('file', file);
+      body.append('upload_id', id);
+      const response = await write('upload/', body, 'application/json', signal);
+      if (!response.ok) {
+        const problem: { code?: unknown } | null = await response
+          .json()
+          .catch(() => null);
+        if (problem?.code === 'upload_destination')
+          throw new Error(messages.destination);
+        if (problem?.code === 'upload_conflict')
+          throw new Error(messages.pending);
+        if (problem?.code === 'upload_registration')
+          throw new Error(messages.registration);
+      }
+      switch (response.status) {
+        case 200:
+        case 201:
+          break;
+        case 401:
+        case 403:
+          throw new Error(messages.permission);
+        case 404:
+        case 503:
+          throw new Error(messages.destination);
+        case 413:
+          throw new Error(messages.size);
+        case 400:
+        case 422:
+          throw new Error(messages.invalid);
+        default:
+          throw new Error(messages.generic);
+      }
+      const dataset: { id?: unknown; name?: unknown } | null =
+        await response.json();
+      if (
+        !dataset ||
+        typeof dataset.id !== 'number' ||
+        !Number.isSafeInteger(dataset.id) ||
+        dataset.id < 1 ||
+        dataset.id > 2147483647 ||
+        typeof dataset.name !== 'string' ||
+        !dataset.name.trim() ||
+        dataset.name.length > 256
+      ) {
+        throw new Error(messages.generic);
+      }
+      return { id: dataset.id, name: dataset.name };
     },
     history: {
       async list(signal: AbortSignal): Promise<CopilotConversation[]> {

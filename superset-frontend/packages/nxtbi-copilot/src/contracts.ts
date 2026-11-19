@@ -67,12 +67,21 @@ export interface DashboardProposal {
   approvalToken: string;
 }
 
+export interface CopilotUploadedDataset {
+  id: number;
+  name: string;
+}
+
 /** Host capabilities stay outside model-generated UI. */
 export interface CopilotHost {
   locale?: string;
   direction?: 'ltr' | 'rtl';
   context: () => Record<string, unknown>;
   run: (input: AgUiRunInput, signal: AbortSignal) => Promise<Response>;
+  uploadDataset?: (
+    file: File,
+    signal: AbortSignal,
+  ) => Promise<CopilotUploadedDataset>;
   history?: CopilotHistory;
   approve?: (
     proposal: DashboardProposal,

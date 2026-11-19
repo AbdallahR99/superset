@@ -35,7 +35,7 @@ declare const __webpack_public_path__: string;
 const ProposalEditor = lazy(() => import('./ProposalEditor'));
 
 const base = deploymentBase(window.location.origin, __webpack_public_path__);
-const transport = createSessionTransport(base);
+const transport = createSessionTransport(base, language);
 
 function language(): string {
   return document.documentElement.lang || 'en';

@@ -104,6 +104,30 @@ def test_empty_search_is_omitted(query: str) -> None:
     assert _search_arguments(" Revenue ") == {"query": "Revenue"}
 
 
+@pytest.mark.parametrize(
+    ("host", "value", "expected"),
+    [
+        ("superset", "47", 47),
+        ("superset", "2147483648", None),
+        ("superset", 47, None),
+        ("superset", "47\nraw CSV", None),
+        ("standalone", "47", None),
+    ],
+)
+def test_uploaded_dataset_hint_accepts_only_scoped_numeric_ids(
+    host: Literal["superset", "standalone"], value: object, expected: int | None
+) -> None:
+    """Accept a numeric Superset hint without allowing the context to authorize it."""
+    authorization = _authorization(host)["Authorization"]
+    claims = verify_gateway_token(authorization, SIGNING_KEY)
+    request = {
+        **REQUEST,
+        "context": [{"description": "uploaded_dataset_id", "value": value}],
+    }
+    _, hints = parse_run(json.dumps(request).encode(), claims)
+    assert hints.uploaded_dataset_id == expected
+
+
 def test_model_deadline_is_not_a_successful_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -520,6 +544,174 @@ def test_model_filter_decodes_only_strict_objects() -> None:
     ):
         with pytest.raises(ValidationError):
             adapter.validate_python(invalid)
+
+
+@pytest.mark.parametrize("distinct_dates", [31, 634])
+@pytest.mark.parametrize("use_shortcut", [False, True])
+def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
+    distinct_dates: int, use_shortcut: bool
+) -> None:
+    """The selected file yields verified metrics and avoids partial daily charts."""
+    dataset_id = 47
+    headers = _authorization("superset")
+    calls: list[dict[str, Any]] = []
+    metric = "sum_order_total"
+    approval = "opaque-upload-approval-token"
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == headers["Authorization"]
+        call = json.loads(request.content)
+        name = call["name"]
+        args = call["arguments"]
+        calls.append(call)
+        if name == "propose_dashboard":
+            assert all(widget["datasetId"] == dataset_id for widget in args["widgets"])
+            assert all("filter" not in widget for widget in args["widgets"])
+            return httpx.Response(200, json={**args, "approvalToken": approval})
+        assert args["id"] == dataset_id
+        if name == "get_dataset":
+            result = {
+                "id": dataset_id,
+                "metrics": ["count", "avg_order_total", metric],
+                "metric_details": [
+                    {"metric_name": metric, "verbose_name": "Total order value"}
+                ],
+                "groupable_columns": [
+                    "order_id",
+                    "customer_id",
+                    "contact_status",
+                    "order_date",
+                    "status",
+                ],
+                "temporal_columns": ["order_date"],
+            }
+        elif name == "profile_dataset":
+            assert args["columns"] == ["order_date", "status"]
+            result = {
+                "dataset_id": dataset_id,
+                "row_count": 2_000,
+                "columns": [
+                    {"column_name": "order_date", "distinct_count": distinct_dates},
+                    {"column_name": "status", "distinct_count": 3},
+                ],
+            }
+        else:
+            assert name == "aggregate_dataset"
+            assert args["metric"] == metric
+            dimension = args.get("dimension")
+            assert dimension in (None, "status")
+            result = {
+                "dataset_id": dataset_id,
+                "metric": metric,
+                "dimension": dimension,
+                "rows": (
+                    [
+                        {"group": "active", "value": 3_500_000},
+                        {"group": "pending", "value": 2_939_445.27},
+                    ]
+                    if dimension
+                    else [{"group": None, "value": 6_439_445.27}]
+                ),
+            }
+        return httpx.Response(200, json=result)
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        assert "propose_uploaded_dataset_dashboard" in {
+            tool.name for tool in info.function_tools
+        }
+        assert "User-selected uploaded dataset ID: 47." in str(messages)
+        for message in messages:
+            for part in message.parts:
+                if isinstance(part, ToolReturnPart):
+                    assert approval not in str(part.content)
+                    assert part.content["headline"]["rows"][0]["value"] == 6_439_445.27
+                    yield "I verified the full-file order value."
+                    return
+        yield {
+            0: DeltaToolCall(
+                name="propose_uploaded_dataset_dashboard",
+                tool_call_id="csv-dashboard",
+                json_args='{"title":"Orders overview"}',
+            )
+        }
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        model=None if use_shortcut else FunctionModel(stream_function=generate),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    context = [{"description": "uploaded_dataset_id", "value": "47"}]
+    if use_shortcut:
+        context.append({"description": "uploaded_dataset_action", "value": "draft"})
+    with TestClient(app) as client:
+        events = _events(
+            client.post(
+                "/ag-ui",
+                headers=headers,
+                json={
+                    **REQUEST,
+                    "context": context,
+                },
+            )
+        )
+    proposal = next(event for event in events if event["type"] == "CUSTOM")
+    assert proposal["name"] == "nxtbi.dashboard-proposal"
+    assert proposal["value"]["approvalToken"] == approval
+    widgets = proposal["value"]["widgets"]
+    assert [widget["metric"] for widget in widgets[:2]] == [metric, "count"]
+    assert widgets[-1]["dimension"] == "status"
+    assert widgets[-1]["chartStyle"] == "bar"
+    assert any(widget.get("chartStyle") == "line" for widget in widgets) == (
+        distinct_dates == 31
+    )
+    assert [call["name"] for call in calls] == [
+        "get_dataset",
+        "profile_dataset",
+        "aggregate_dataset",
+        "aggregate_dataset",
+        "propose_dashboard",
+    ]
+
+
+def test_upload_shortcut_requires_a_signed_superset_dataset() -> None:
+    """Reject a missing selection and never stage a denied dataset."""
+    shortcut = {"description": "uploaded_dataset_action", "value": "draft"}
+    selected = {"description": "uploaded_dataset_id", "value": "47"}
+    attempts = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        attempts.append(json.loads(request.content))
+        return httpx.Response(403)
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/ag-ui",
+            headers=_authorization("superset"),
+            json={**REQUEST, "context": [shortcut]},
+        )
+        assert response.status_code == 422
+        response = client.post(
+            "/ag-ui",
+            headers=_authorization(),
+            json={**REQUEST, "context": [shortcut, selected]},
+        )
+        assert response.status_code == 503
+        response = client.post(
+            "/ag-ui",
+            headers=_authorization("superset"),
+            json={**REQUEST, "context": [shortcut, selected]},
+        )
+    assert response.status_code == 200
+    assert "draft_unavailable" in response.text
+    assert "RUN_FINISHED" not in response.text
+    assert "approvalToken" not in response.text
+    assert attempts == [{"name": "get_dataset", "arguments": {"id": 47}}]
 
 
 def test_superset_proposal_requires_separate_approval() -> None:

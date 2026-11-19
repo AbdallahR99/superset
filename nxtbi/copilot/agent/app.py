@@ -25,6 +25,7 @@ from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
+from uuid import uuid4
 
 import httpx
 from ag_ui.core import (
@@ -34,8 +35,13 @@ from ag_ui.core import (
     EventType,
     RunErrorEvent,
     RunFinishedEvent,
+    RunFinishedSuccessOutcome,
     RunStartedEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
 )
+from ag_ui.encoder import EventEncoder
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BeforeValidator, Field, ValidationError
@@ -50,7 +56,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 
-from . import snapshot, surfaces
+from . import snapshot, surfaces, uploads
 from .contracts import (
     DashboardDraft,
     DashboardProposal,
@@ -122,6 +128,12 @@ Verify the denominator and its scope before interpreting any share. If snapshot
 scope cannot be verified, show the registered measure by period and explain the gap.
 Preserve saved aggregations and distinguish an unknown unit from a known currency
 or percentage. Never infer freshness or a date range from the presence of a date.
+For requests about the selected CSV upload, use the supplied uploaded dataset ID.
+For an ordinary dashboard draft, call propose_uploaded_dataset_dashboard directly.
+It reads scoped metadata, measures a saved metric, selects useful chart dimensions,
+and stages a full-file draft. Use that tool rather than treating transaction dates
+as stock snapshots. For specific analyses use get_dataset and scoped evidence
+tools on that ID. Use only saved metrics. Do not infer joins with other uploads.
 For a requested population or other stock/snapshot dashboard, resolve the named
 dataset once with list_datasets when its ID is ambiguous. After get_dataset, call
 propose_snapshot_dashboard immediately. It checks the latest observed temporal
@@ -310,6 +322,15 @@ async def _prepare_superset_tool(
     return definition if ctx.deps.has_superset_tools else None
 
 
+async def _prepare_uploaded_tool(
+    ctx: RunContext[RunDeps], definition: ToolDefinition
+) -> ToolDefinition | None:
+    """Expose the import-specific tool only when a Superset CSV is selected."""
+    if ctx.deps.hints.uploaded_dataset_id is None:
+        return None
+    return await _prepare_superset_tool(ctx, definition)
+
+
 def _host_hints(ctx: RunContext[RunDeps]) -> str:
     hints = ctx.deps.hints
     ids = {
@@ -324,6 +345,11 @@ def _host_hints(ctx: RunContext[RunDeps]) -> str:
     return (
         f"Verified host: {ctx.deps.claims.host}. UI language: {hints.locale}. "
         f"User-provided active resource IDs: {ids}. Verify each with its tool."
+        + (
+            f" User-selected uploaded dataset ID: {hints.uploaded_dataset_id}."
+            if hints.uploaded_dataset_id is not None
+            else ""
+        )
     )
 
 
@@ -479,6 +505,64 @@ def _register_snapshot_tool(agent: Agent[RunDeps, str]) -> None:
         }
 
 
+async def _plan_uploaded_dashboard(
+    deps: RunDeps, title: str, metric: str | None = None
+) -> dict[str, object]:
+    """Measure a selected CSV and stage a dashboard using the actor's permissions."""
+    dataset_id = deps.hints.uploaded_dataset_id
+    if dataset_id is None:
+        return {"error": "Select an uploaded dataset first."}
+    if deps.proposal_staged:
+        return {"status": "A dashboard draft is already awaiting approval."}
+    metadata = await deps.gateway("get_dataset", {"id": dataset_id})
+    try:
+        fields = uploads.select_fields(metadata, dataset_id, metric)
+        profile = await deps.gateway(
+            "profile_dataset", {"id": dataset_id, "columns": fields.profile_columns}
+        )
+        category, temporal = uploads.select_dimensions(profile, dataset_id, fields)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    args: dict[str, object] = {"id": dataset_id, "metric": fields.metric}
+    if category:
+        total, groups = await asyncio.gather(
+            deps.gateway("aggregate_dataset", args),
+            deps.gateway("aggregate_dataset", {**args, "dimension": category}),
+        )
+        if not uploads.supported_aggregate(
+            groups, dataset_id, fields.metric, dimension=category
+        ):
+            category = None
+            groups = None
+    else:
+        total = await deps.gateway("aggregate_dataset", args)
+        groups = None
+    if not uploads.supported_aggregate(total, dataset_id, fields.metric):
+        return {"error": "The imported dataset's saved measure is unavailable."}
+
+    draft = uploads.make_draft(
+        title, dataset_id, fields, category, temporal, deps.hints.locale
+    )
+    return {
+        "proposal": await _stage_proposal(deps, draft),
+        "profile": profile,
+        "headline": total,
+        "comparison": groups,
+    }
+
+
+def _register_uploaded_tool(agent: Agent[RunDeps, str]) -> None:
+    """Let natural-language requests use the same scoped upload planner."""
+
+    @agent.tool(prepare=_prepare_uploaded_tool, sequential=True)
+    async def propose_uploaded_dataset_dashboard(
+        ctx: RunContext[RunDeps], title: LABEL, metric: LABEL | None = None
+    ) -> object:
+        """Review the selected CSV and stage a proposed dashboard for approval."""
+        return await _plan_uploaded_dashboard(ctx.deps, title, metric)
+
+
 def _register_superset_tools(agent: Agent[RunDeps, str]) -> None:
     """Expose the saved chart, dashboard and proposal tools."""
 
@@ -597,6 +681,7 @@ def build_agent(model: Model) -> Agent[RunDeps, str]:
     agent.instructions(_host_hints)
     _register_dataset_tools(agent)
     _register_snapshot_tool(agent)
+    _register_uploaded_tool(agent)
     _register_superset_tools(agent)
     _register_surface_tools(agent)
     return agent
@@ -611,8 +696,45 @@ async def _read_body(request: Request) -> bytes:
     return bytes(body)
 
 
+async def _stream_uploaded_draft(deps: RunDeps) -> AsyncIterator[BaseEvent]:
+    """Handle the selected-file draft button without calling a model provider."""
+    ids = {"threadId": deps.claims.thread_id, "runId": deps.claims.run_id}
+    yield RunStartedEvent(**ids)
+    arabic = deps.hints.locale == "ar"
+    title = "نظرة عامة على البيانات المرفوعة" if arabic else "Uploaded dataset overview"
+
+    try:
+        if deps.has_superset_tools:
+            async with asyncio.timeout(MODEL_TIMEOUT):
+                await _plan_uploaded_dashboard(deps, title)
+    except Exception as exc:
+        logger.warning("Copilot upload draft stopped: %s", type(exc).__name__)
+
+    if not deps.proposal_staged:
+        message = (
+            "تعذّر إعداد مسودة لهذه البيانات. تحقّق من إمكانية الوصول وحاول مرة أخرى."
+            if arabic
+            else "Could not draft this dashboard. Check dataset access and try again."
+        )
+        yield RunErrorEvent(message=message, code="draft_unavailable")
+        return
+
+    message_id = uuid4().hex
+    message = (
+        "مسودة لوحة المعلومات جاهزة. راجع معاينات الرسوم قبل اعتماد الحفظ."
+        if arabic
+        else "Your dashboard draft is ready. Review the widget previews before saving."
+    )
+    yield TextMessageStartEvent(messageId=message_id, role="assistant")
+    yield TextMessageContentEvent(messageId=message_id, delta=message)
+    yield TextMessageEndEvent(messageId=message_id)
+    while deps.events:
+        yield deps.events.popleft()
+    yield RunFinishedEvent(**ids, outcome=RunFinishedSuccessOutcome(type="success"))
+
+
 async def _stream_events(
-    adapter: AGUIAdapter,
+    adapter: AGUIAdapter | None,
     claims: GatewayClaims,
     authorization: str,
     hints: RunHints,
@@ -633,6 +755,10 @@ async def _stream_events(
         ) as client,
     ):
         deps = RunDeps(claims, authorization, hints, tool_url, client)
+        if adapter is None:
+            async for event in _stream_uploaded_draft(deps):
+                yield event
+            return
         try:
             async for event in adapter.run_stream(
                 deps=deps,
@@ -683,7 +809,7 @@ def create_app(
 
     @api.post("/ag-ui")
     async def run_agent(request: Request) -> StreamingResponse:
-        """Verify host claims and emit a real PydanticAI AG-UI event stream."""
+        """Verify host claims and stream chat replies or an explicit upload draft."""
         authorization = request.headers.get("Authorization", "")
         try:
             claims = verify_gateway_token(authorization, config.shared_secret)
@@ -695,10 +821,15 @@ def create_app(
             raise HTTPException(401, "Invalid Copilot gateway context") from exc
         except ValueError as exc:
             raise HTTPException(422, "Invalid AG-UI input") from exc
-        if agent is None:
+        is_upload_draft = hints.uploaded_dataset_action == "draft"
+        if agent is None and not is_upload_draft:
             raise HTTPException(503, "The Copilot model is not configured")
 
-        adapter = AGUIAdapter(agent=agent, run_input=run_input)
+        adapter = (
+            AGUIAdapter(agent=agent, run_input=run_input)
+            if agent is not None and not is_upload_draft
+            else None
+        )
 
         events = _stream_events(
             adapter,
@@ -709,8 +840,14 @@ def create_app(
             tool_transport,
             capacity,
         )
+        encoder = EventEncoder("text/event-stream")
+        encoded = (
+            adapter.encode_stream(events)
+            if adapter is not None
+            else (encoder.encode(event) async for event in events)
+        )
         return StreamingResponse(
-            adapter.encode_stream(events),
+            encoded,
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-store, no-transform",

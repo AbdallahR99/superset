@@ -30,6 +30,7 @@ from flask import abort, current_app, Flask, jsonify, request, Response
 from flask_appbuilder.api import expose, protect
 from flask_login import current_user
 from pydantic import ValidationError
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from superset import is_feature_enabled, security_manager
 from superset.commands.dashboard_v2.save import CreateDashboardV2Command
@@ -64,6 +65,7 @@ from superset.copilot.services import (
     read_metadata,
     validate_dashboard_proposal,
 )
+from superset.copilot.upload import CSV_MAX_BYTES, CSVUploadError, upload_csv_dataset
 from superset.dashboard_v2.document import DocumentValidationError, parse_strict_json
 from superset.exceptions import SupersetSecurityException
 from superset.extensions import appbuilder, csrf
@@ -221,7 +223,45 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
         "approve": "write",
         "get_history": "read",
         "save_history": "read",
+        "upload_csv": "read",
     }
+
+    @expose("/upload/", methods=("POST",))
+    @protect()
+    def upload_csv(self) -> Response:
+        """Import one CSV as the authenticated browser user."""
+        user = _actor()
+        if not security_manager.can_access("can_upload", "Database"):
+            return self.response(403, message="Your account cannot upload data files.")
+        if request.mimetype != "multipart/form-data":
+            return self.response(415, message="Use a multipart CSV upload.")
+        # Allow space for the form boundaries and upload identity while the
+        # upload service checks the file's exact byte count separately.
+        body_limit = CSV_MAX_BYTES + 64 * 1024
+        if (
+            request.max_content_length is None
+            or request.max_content_length > body_limit
+        ):
+            request.max_content_length = body_limit
+        request.max_form_parts = 2
+        try:
+            files = request.files.getlist("file")
+            upload_ids = request.form.getlist("upload_id")
+        except RequestEntityTooLarge:
+            return self.response(413, message="The CSV exceeds the file size limit.")
+        if len(files) != 1 or len(upload_ids) != 1:
+            return self.response(422, message="Choose one CSV file to upload.")
+        try:
+            upload_id = UUID(upload_ids[0])
+            if upload_id.version != 4:
+                raise ValueError
+        except ValueError:
+            return self.response(422, message="Invalid CSV upload identity.")
+        try:
+            dataset = upload_csv_dataset(files[0], upload_id, user.id)
+        except CSVUploadError as ex:
+            return self.response(ex.status, message=str(ex), **ex.details)
+        return self.response(201, **dataset)
 
     @expose("/history", methods=("GET",))
     @protect()
