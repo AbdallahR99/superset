@@ -22,6 +22,8 @@ import json  # noqa: TID251 - The standalone service has no Superset runtime.
 import logging
 import math
 import os
+import re
+import unicodedata
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
@@ -51,11 +53,14 @@ from pydantic import BeforeValidator, Field, ValidationError
 from pydantic_ai import Agent, ModelRetry, RunContext, UsageLimits
 from pydantic_ai.capabilities import Instrumentation
 from pydantic_ai.exceptions import (
+    ContentFilterError,
+    IncompleteToolCall,
     ModelAPIError,
     ModelContextWindowExceededError,
     ModelQuotaExceededError,
     ModelRateLimitError,
     ModelTimeoutError,
+    OutputTokenLimitExceeded,
     RunCancelled,
     UnexpectedModelBehavior,
     UsageLimitExceeded,
@@ -157,19 +162,26 @@ For an open analytical brief, resolve the dataset once and use get_dataset to
 read measure definitions and choose the decision to support. When the saved
 measures support a rate, use one aggregate_dataset call with rate_comparison to
 measure the numerator, eligible denominator, and rate together by a useful group
-and across the same filtered scope. Compare the highest volume and the highest
-rate, even when their leaders differ. Use the actual scope rate as the baseline,
+and across the same filtered scope. Compare the highest workload (denominator)
+and the highest rate, even when their leaders differ. Distinguish both from the
+highest affected count (numerator). Use the actual scope rate as the baseline,
 never an average of group percentages. Report the compared rates as numerator /
 denominator plus percentage and include the baseline with its denominator. State
 ties and flag thin samples before recommending an action. Use the counts to triage
 workload and the rates to select groups for investigation. Check a second relevant
-grouping when available and say when a decision-relevant segment was not measured.
+grouping when available. For each ranked comparison, explicitly name a verified
+highest affected-count group and distinguish it from the rate leader. Retain the
+exact source label in either dashboard language and explain it in that language.
+For a tie, identify a tied leader without implying it leads alone. Say when a
+decision-relevant segment was not measured.
 Reuse complete grouped results for their count, rate, and baseline. Once the
 decision-driving comparisons are verified, stage the dashboard before optional
 exploration. The native widgets will query their selected fields on review.
-Choose the charts that best support those findings. When a comparative rate is
-available, use complementary count and rate views and a detail table with their
-denominators if needed to interpret them. If an ordered period chart would be
+Choose the charts that best support those findings. In each verified grouping for
+the selected rate, include the workload, affected count and rate as viewer-queried
+charts or a grouped detail table of the same scope. Set preserve_requested_layout
+only if the user's explicit widget requirements exclude these supporting views.
+If an ordered period chart would be
 more useful, profile the temporal field then use aggregate_dataset with
 order=dimension_asc and a limit covering the checked periods. If truncated, retry
 with limit=48. If coverage remains incomplete, omit the period chart. Verify the
@@ -263,13 +275,22 @@ GatewayToolName = Literal[
     "propose_dashboard",
 ]
 SearchQuery = Annotated[str, Field(max_length=120)]
-ChronologyScope = tuple[int, str, str, str | None]
+EvidenceScope = tuple[int, str, str, str | None]
 
 
-def _chronology_scope(
+@dataclass(frozen=True)
+class VerifiedRateScope:
+    """Saved measure roles and affected-count leaders for this private run."""
+
+    comparison: RateComparison
+    affected_leaders: tuple[str, ...]
+    affected_ties: int
+
+
+def _evidence_scope(
     dataset_id: int, dimension: str, metric: str, filters: DatasetFilter | None
-) -> ChronologyScope:
-    """Match the exact dataset, group, measure, and filter of a period query."""
+) -> EvidenceScope:
+    """Match the exact dataset, group, measure, and filter of an evidence query."""
     return dataset_id, dimension, metric, filters.model_dump_json() if filters else None
 
 
@@ -353,7 +374,11 @@ class RunDeps:
     proposal_staged: bool = False
     terminal_proposal_call_id: str | None = None
     checked_dashboard_ids: set[int] = field(default_factory=set)
-    truncated_chronology: set[ChronologyScope] = field(default_factory=set)
+    truncated_chronology: set[EvidenceScope] = field(default_factory=set)
+    verified_rate_scopes: dict[EvidenceScope, VerifiedRateScope] = field(
+        default_factory=dict
+    )
+    temporal_dimensions: dict[int, set[str]] = field(default_factory=dict)
 
     def remember_chronology(
         self,
@@ -367,7 +392,7 @@ class RunDeps:
         if dimension is None or not isinstance(result, dict):
             return
         scopes = {
-            _chronology_scope(dataset_id, dimension, metric, filters)
+            _evidence_scope(dataset_id, dimension, metric, filters)
             for metric in metrics
         }
         if result.get("truncated") is True:
@@ -381,12 +406,34 @@ class RunDeps:
             widget.chart_style == "line"
             and widget.dimension is not None
             and widget.metric is not None
-            and _chronology_scope(
+            and _evidence_scope(
                 widget.dataset_id, widget.dimension, widget.metric, widget.filter
             )
             in self.truncated_chronology
             for widget in widgets
         )
+
+    def remember_rate_scope(
+        self,
+        result: object,
+        dataset_id: int,
+        dimension: str | None,
+        comparison: RateComparison,
+        filters: DatasetFilter | None,
+    ) -> None:
+        """Keep the verified comparison and its source labels within this run."""
+        if (
+            dimension is not None
+            and isinstance(result, dict)
+            and isinstance(details := result.get("rate_comparison"), dict)
+            and details.get("complete") is True
+            and details.get("verified_groups", 0) >= 2
+        ):
+            scope = _evidence_scope(dataset_id, dimension, comparison.rate, filters)
+            leaders, ties = _affected_leader_labels(result.get("rows"), comparison)
+            self.verified_rate_scopes[scope] = VerifiedRateScope(
+                comparison, leaders, ties
+            )
 
     @property
     def has_superset_tools(self) -> bool:
@@ -452,6 +499,32 @@ class RunDeps:
                 )
 
 
+def _unexpected_output_category(error: UnexpectedModelBehavior) -> str:
+    """Map known SDK output failures to fixed diagnostics without their content."""
+    kinds = (
+        (ContentFilterError, "provider_content_filter"),
+        (IncompleteToolCall, "incomplete_tool_call"),
+        (OutputTokenLimitExceeded, "model_output_token_limit"),
+    )
+    for error_type, category in kinds:
+        if isinstance(error, error_type):
+            return category
+    prefixes = (
+        (
+            "Streamed response ended without content or tool calls",
+            "provider_empty_stream",
+        ),
+        ("Exceeded maximum output retries (", "output_retries_exhausted"),
+        ("Output validation failed during streaming", "output_validation_failed"),
+        ("Invalid response from ", "provider_invalid_completion"),
+        ("Invalid response, unable to ", "provider_invalid_completion"),
+    )
+    return next(
+        (category for prefix, category in prefixes if error.message.startswith(prefix)),
+        "invalid_model_output",
+    )
+
+
 def _run_failure_category(error: Exception) -> str:
     """Classify adapter failures without exposing provider or generated error text."""
     if isinstance(error, UsageLimitExceeded):
@@ -472,13 +545,14 @@ def _run_failure_category(error: Exception) -> str:
             ),
             "usage_limit",
         )
+    if isinstance(error, UnexpectedModelBehavior):
+        return _unexpected_output_category(error)
     categories = (
         ((TimeoutError, ModelTimeoutError), "timeout"),
         (RunCancelled, "cancelled"),
         (ModelContextWindowExceededError, "provider_context_window"),
         ((ModelRateLimitError, ModelQuotaExceededError), "provider_limit"),
         (ModelAPIError, "provider_error"),
-        (UnexpectedModelBehavior, "invalid_model_output"),
     )
     return next(
         (
@@ -588,7 +662,7 @@ def _rate_comparison(result: object, comparison: RateComparison) -> object:
             if values is not None:
                 measured.append((row.get("group"), values))
 
-    def leaders(key: Literal["numerator", "rate"]) -> dict[str, object]:
+    def leaders(key: Literal["numerator", "denominator", "rate"]) -> dict[str, object]:
         if not measured:
             return {"groups": [], "tied_count": 0}
         highest = max(values[key] for _, values in measured)
@@ -599,17 +673,138 @@ def _rate_comparison(result: object, comparison: RateComparison) -> object:
         ]
         return {"groups": matches[:4], "tied_count": len(matches)}
 
+    baseline = _rate_triplet(result.get("baseline"), comparison)
+    truncated = result.get("truncated") is not False
+    unverified = len(result["rows"]) - len(measured)
     return {
         **result,
         "rate_comparison": {
-            "baseline": _rate_triplet(result.get("baseline"), comparison),
+            "baseline": baseline,
             "highest_observed_volume": leaders("numerator"),
+            "highest_observed_workload": leaders("denominator"),
             "highest_observed_rate": leaders("rate"),
-            "truncated": result.get("truncated") is not False,
+            "truncated": truncated,
+            "complete": not truncated and baseline is not None and unverified == 0,
             "verified_groups": len(measured),
-            "unverified_groups": len(result["rows"]) - len(measured),
+            "unverified_groups": unverified,
         },
     }
+
+
+def _affected_leader_labels(
+    rows: object, comparison: RateComparison
+) -> tuple[tuple[str, ...], int]:
+    """Retain every top affected-count tie, including when only some have text names."""
+    if not isinstance(rows, list):
+        return (), 0
+    counted = []
+    for row in rows:
+        if isinstance(row, dict) and (
+            triplet := _rate_triplet(row.get("values"), comparison)
+        ):
+            counted.append((row.get("group"), triplet["numerator"]))
+    if not counted:
+        return (), 0
+    highest = max(count for _, count in counted)
+    leaders = [group for group, count in counted if count == highest]
+    labels = tuple(
+        group
+        for group in leaders
+        if isinstance(group, str) and any(c.isalpha() for c in group)
+    )
+    return labels, len(leaders)
+
+
+def _missing_rate_views(
+    widgets: list[ModelWidgetDraft], scopes: dict[EvidenceScope, VerifiedRateScope]
+) -> list[dict[str, object]]:
+    """Find missing live metric bindings for every selected grouped rate scope."""
+    selected: dict[tuple[int, str | None], set[str]] = {}
+    grouped: dict[tuple[int, str | None, str], set[str]] = {}
+    for widget in widgets:
+        measures = widget.metrics or ([widget.metric] if widget.metric else [])
+        filter_json = widget.filter.model_dump_json() if widget.filter else None
+        population = (widget.dataset_id, filter_json)
+        selected.setdefault(population, set()).update(measures)
+        dimensions = widget.dimensions or (
+            [widget.dimension] if widget.dimension else []
+        )
+        if widget.type != "metric-tile" and len(dimensions) == 1:
+            grouped.setdefault((*population, dimensions[0]), set()).update(measures)
+
+    missing: list[dict[str, object]] = []
+    for (dataset_id, dimension, rate, filter_json), verified in scopes.items():
+        if rate not in selected.get((dataset_id, filter_json), set()):
+            continue
+        metrics = [verified.comparison.denominator, verified.comparison.numerator, rate]
+        if set(metrics).issubset(
+            grouped.get((dataset_id, filter_json, dimension), set())
+        ):
+            continue
+        missing.append(
+            {
+                "datasetId": dataset_id,
+                "dimension": dimension,
+                "metrics": metrics,
+                "filter": json.loads(filter_json) if filter_json is not None else None,
+            }
+        )
+    return missing
+
+
+def _normalized_label(text: str) -> str:
+    """Compare source names independently of letter case and Unicode presentation."""
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def _missing_affected_leaders(
+    widgets: list[ModelWidgetDraft], summary: str, deps: RunDeps
+) -> list[dict[str, object]]:
+    """Find complete ranked groupings whose affected-count leaders aren't named."""
+    ranked = {
+        _evidence_scope(
+            widget.dataset_id, widget.dimension, widget.metric, widget.filter
+        )
+        for widget in widgets
+        if widget.chart_style == "ranked-bar"
+        and widget.dimension is not None
+        and widget.metric is not None
+    }
+    missing: list[dict[str, object]] = []
+    text = _normalized_label(summary)
+    for (
+        dataset,
+        dimension,
+        rate,
+        scope_filter,
+    ), verified in deps.verified_rate_scopes.items():
+        if (
+            dimension in deps.temporal_dimensions.get(dataset, set())
+            or not verified.affected_leaders
+        ):
+            continue
+        measures = (
+            rate,
+            verified.comparison.numerator,
+            verified.comparison.denominator,
+        )
+        if not any(
+            (dataset, dimension, metric, scope_filter) in ranked for metric in measures
+        ):
+            continue
+        if not any(
+            re.search(rf"(?<!\w){re.escape(_normalized_label(label))}(?!\w)", text)
+            for label in verified.affected_leaders
+        ):
+            missing.append(
+                {
+                    "datasetId": dataset,
+                    "dimension": dimension,
+                    "affected_count_leaders": verified.affected_leaders[:4],
+                    "tied_count": verified.affected_ties,
+                }
+            )
+    return missing
 
 
 def _additional_aggregate_metrics(
@@ -647,7 +842,14 @@ def _register_dataset_tools(agent: Agent[RunDeps, str]) -> None:
     @agent.tool(prepare=_prepare_superset_tool, sequential=True)
     async def get_dataset(ctx: RunContext[RunDeps], id: POSITIVE_ID) -> object:
         """Read stable saved metric and groupable column names by dataset ID."""
-        return await ctx.deps.gateway("get_dataset", {"id": id})
+        result = await ctx.deps.gateway("get_dataset", {"id": id})
+        if isinstance(result, dict) and isinstance(
+            temporal := result.get("temporal_columns"), list
+        ):
+            ctx.deps.temporal_dimensions[id] = {
+                column for column in temporal if isinstance(column, str)
+            }
+        return result
 
     @agent.tool(prepare=_prepare_superset_tool, sequential=True)
     async def profile_dataset(
@@ -709,11 +911,11 @@ def _register_aggregate_tool(agent: Agent[RunDeps, str]) -> None:
             ctx.deps.remember_chronology(
                 result, id, dimension, [metric, *extras], filter
             )
-        return (
-            _rate_comparison(result, rate_comparison)
-            if rate_comparison is not None
-            else result
-        )
+        if rate_comparison is None:
+            return result
+        compared = _rate_comparison(result, rate_comparison)
+        ctx.deps.remember_rate_scope(compared, id, dimension, rate_comparison, filter)
+        return compared
 
 
 async def _stage_proposal(
@@ -1016,6 +1218,7 @@ def _register_superset_tools(agent: Agent[RunDeps, str]) -> None:
         widgets: Annotated[list[ModelWidgetDraft], Field(min_length=1, max_length=8)],
         title_translations: ModelTitleTranslations | None = None,
         summary: DashboardSummary | None = None,
+        preserve_requested_layout: bool = False,
     ) -> object:
         """Stage one dashboard preview for separate approval.
 
@@ -1025,7 +1228,27 @@ def _register_superset_tools(agent: Agent[RunDeps, str]) -> None:
         that widget. Other widgets use scalar metric and optional scalar dimension.
         Use ranked-bar for ranked category comparisons in Dashboard V2.
         Supply a requested dashboard narrative as top-level summary text.
+        In an open V2 analysis, show all three rate measures in each verified
+        grouping for the selected rate. Use preserve_requested_layout only when
+        an explicit layout request excludes these supporting views.
         """
+        if not preserve_requested_layout and ctx.deps.hints.dashboard_type != "v1":
+            if missing := _missing_rate_views(widgets, ctx.deps.verified_rate_scopes):
+                return {
+                    "error": "Include the workload, affected count, and rate for each "
+                    "listed grouping. Use grouped tables or complementary charts with "
+                    "the same exact filter and cite both leaders in each grouping.",
+                    "missing_rate_views": missing,
+                }
+            if summary and (
+                leaders := _missing_affected_leaders(widgets, summary, ctx.deps)
+            ):
+                return {
+                    "error": "Name a highest affected-count group from each listed "
+                    "scope in the summary using its exact source label. Distinguish "
+                    "workload from rate leaders and acknowledge any tie.",
+                    "missing_affected_count_leaders": leaders,
+                }
         return await _stage_proposal(
             ctx.deps,
             DashboardDraft(
@@ -1105,7 +1328,8 @@ def build_agent(model: Model) -> Agent[RunDeps, str]:
         instructions=INSTRUCTIONS,
         tool_timeout=18,
         retries=1,
-        model_settings=ModelSettings(max_tokens=4_096),
+        # Reasoning and the structured proposal share the provider completion.
+        model_settings=ModelSettings(max_tokens=8_192),
         capabilities=[Instrumentation(settings=PRIVATE_INSTRUMENTATION)],
     )
     agent.instructions(_host_hints)

@@ -27,7 +27,13 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.exceptions import (
+    ContentFilterError,
+    IncompleteToolCall,
+    OutputTokenLimitExceeded,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -771,6 +777,7 @@ def test_rate_comparison_uses_scoped_baseline_and_preserves_observed_ties() -> N
         ("High volume", 40, 100, 0.4),
         ("High rate west", 30, 50, 0.6),
         ("High rate east", 30, 50, 0.6),
+        ("Largest workload", 5, 120, 5 / 120),
         ("No eligible records", 0, 0, None),
     ]
     evidence = {
@@ -828,8 +835,19 @@ def test_rate_comparison_uses_scoped_baseline_and_preserves_observed_ties() -> N
                         "High rate east",
                     ]
                     assert compared["highest_observed_rate"]["tied_count"] == 2
+                    assert compared["highest_observed_workload"] == {
+                        "groups": [
+                            {
+                                "group": "Largest workload",
+                                "numerator": 5,
+                                "denominator": 120,
+                                "rate": 5 / 120,
+                            }
+                        ],
+                        "tied_count": 1,
+                    }
                     assert compared["truncated"] is True
-                    assert compared["verified_groups"] == 3
+                    assert compared["verified_groups"] == 4
                     assert compared["unverified_groups"] == 1
                     yield "Only the measured groups were compared."
                     return
@@ -867,6 +885,221 @@ def test_rate_comparison_uses_scoped_baseline_and_preserves_observed_ties() -> N
         event.get("delta") == "Only the measured groups were compared."
         for event in events
     )
+
+
+@pytest.mark.parametrize(
+    ("preserve_requested_layout", "channel_complete", "mode"),
+    [
+        (False, True, "summary"),
+        (True, True, "summary"),
+        (False, False, "summary"),
+        (False, True, "no_summary"),
+        (False, True, "temporal"),
+    ],
+)
+def test_open_rate_dashboard_requires_live_support_for_both_groupings(
+    preserve_requested_layout: bool,
+    channel_complete: bool,
+    mode: str,
+) -> None:
+    """Require live measure bindings in a second verified rate grouping."""
+    comparison = {"numerator": "late", "denominator": "served", "rate": "late_rate"}
+    scope_filter = {"column": "period", "value": "this_year"}
+    gateway_proposals: list[dict[str, Any]] = []
+    expected_missing = {
+        "datasetId": 47,
+        "dimension": "channel",
+        "metrics": ["served", "late", "late_rate"],
+        "filter": scope_filter,
+    }
+    channel_rate = {
+        "type": "echarts",
+        "chartStyle": "ranked-bar",
+        "datasetId": 47,
+        "metric": "late_rate",
+        "dimension": "channel",
+        "filter": scope_filter,
+    }
+    incomplete_summary = (
+        "Scoped district workload leads; Scoped channel workload 30 is nearby."
+    )
+    reviewed_summary = (
+        "تصدّر SCOPED\u00a0DISTRICT workload وشارك مكتب الساحل في الصدارة."
+    )
+
+    def grouped_table(dimension: str, filters: dict[str, str]) -> dict[str, object]:
+        return {
+            "type": "ag-grid-table",
+            "datasetId": 47,
+            "metrics": ["served", "late", "late_rate"],
+            "dimensions": [dimension],
+            "filter": filters,
+        }
+
+    incomplete_widgets = [
+        grouped_table("district", scope_filter),
+        {**channel_rate, "dimension": "district"},
+        channel_rate,
+        grouped_table("channel", {"column": "period", "value": "last_year"}),
+    ]
+    complete_widgets = [*incomplete_widgets, grouped_table("channel", scope_filter)]
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        call = json.loads(request.content)
+        arguments = call["arguments"]
+        if call["name"] == "propose_dashboard":
+            gateway_proposals.append(arguments)
+            return httpx.Response(200, json={**arguments, "approvalToken": "signed"})
+        if call["name"] == "get_dataset":
+            return httpx.Response(
+                200,
+                json={"temporal_columns": ["channel"] if mode == "temporal" else []},
+            )
+        assert call["name"] == "aggregate_dataset"
+        channel = arguments["dimension"] == "channel"
+        rows = [
+            {
+                "group": "Scoped channel workload 3"
+                if channel
+                else "Scoped district workload",
+                "value": 1 / 3,
+                "values": {"served": 30, "late": 10, "late_rate": 1 / 3},
+            },
+            {
+                "group": "Scoped rate name",
+                "value": 0.5,
+                "values": {"served": 10, "late": 5, "late_rate": 0.5},
+            },
+        ]
+        if channel:
+            rows.append(
+                {
+                    "group": "مكتب الساحل",
+                    "value": 0.5,
+                    "values": {"served": 20, "late": 10, "late_rate": 0.5},
+                }
+            )
+            if not channel_complete:
+                rows.append(
+                    {
+                        "group": "No eligible cases",
+                        "value": None,
+                        "values": {"served": 0, "late": 0, "late_rate": None},
+                    }
+                )
+        return httpx.Response(
+            200,
+            json={
+                "order": "dimension_asc",
+                "truncated": False,
+                "baseline": (
+                    {"served": 60, "late": 25, "late_rate": 25 / 60}
+                    if channel
+                    else {"served": 40, "late": 15, "late_rate": 0.375}
+                ),
+                "rows": rows,
+            },
+        )
+
+    initial_summary = None if mode == "no_summary" else incomplete_summary
+    steps: list[tuple[str, dict[str, object]]] = [("get_dataset", {"id": 47})]
+    steps.extend(
+        (
+            "aggregate_dataset",
+            {
+                "id": 47,
+                "metric": "late_rate",
+                "order": "dimension_asc",
+                "dimension": dimension,
+                "filter": scope_filter,
+                "rate_comparison": comparison,
+            },
+        )
+        for dimension in ("district", "channel")
+    )
+    steps.extend(
+        (
+            "propose_dashboard",
+            {
+                "title": "Review outcomes",
+                "summary": summary,
+                "widgets": widgets,
+                "preserve_requested_layout": preserve_requested_layout,
+            },
+        )
+        for widgets, summary in (
+            (incomplete_widgets, initial_summary),
+            (complete_widgets, initial_summary),
+            (complete_widgets, reviewed_summary),
+        )
+    )
+    expected_feedback = {
+        4: ("missing_rate_views", [expected_missing]),
+        5: (
+            "missing_affected_count_leaders",
+            [
+                {
+                    "datasetId": 47,
+                    "dimension": "channel",
+                    "affected_count_leaders": (
+                        "Scoped channel workload 3",
+                        "مكتب الساحل",
+                    ),
+                    "tied_count": 2,
+                }
+            ],
+        ),
+    }
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        evidence = [
+            part.content
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        step = len(evidence)
+        if step == 3:
+            compared = evidence[-1]["rate_comparison"]
+            assert compared["truncated"] is False
+            assert compared["complete"] is channel_complete
+            assert compared["unverified_groups"] == (0 if channel_complete else 1)
+        if step in expected_feedback:
+            key, outcome = expected_feedback[step]
+            assert evidence[-1][key] == outcome
+        name, arguments = steps[step]
+        yield {
+            0: DeltaToolCall(
+                name=name,
+                tool_call_id=f"paired-{step}",
+                json_args=json.dumps(arguments),
+            )
+        }
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        model=FunctionModel(stream_function=generate),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        events = _events(
+            client.post("/ag-ui", headers=_authorization("superset"), json=REQUEST)
+        )
+    assert len(gateway_proposals) == 1
+    assert gateway_proposals[0]["widgets"] == (
+        incomplete_widgets
+        if preserve_requested_layout or not channel_complete
+        else complete_widgets
+    )
+    expected_summary = (
+        reviewed_summary
+        if mode == "summary" and channel_complete and not preserve_requested_layout
+        else initial_summary
+    )
+    assert gateway_proposals[0].get("summary") == expected_summary
+    assert events[-1]["outcome"]["type"] == "success"
 
 
 def test_truncated_chronology_blocks_line_until_matching_scope_is_complete() -> None:
@@ -1736,12 +1969,40 @@ def test_superset_proposal_requires_separate_approval(
 
 
 @pytest.mark.parametrize(
-    ("failure_type", "expected_category"),
-    [(UsageLimitExceeded, "input_tokens_limit"), (RuntimeError, "internal_error")],
+    ("failure_type", "prefix", "expected_category"),
+    [
+        (UsageLimitExceeded, "Exceeded the input_tokens_limit", "input_tokens_limit"),
+        (RuntimeError, "Exceeded the input_tokens_limit", "internal_error"),
+        (ContentFilterError, "Provider refused output", "provider_content_filter"),
+        (IncompleteToolCall, "Truncated arguments", "incomplete_tool_call"),
+        (OutputTokenLimitExceeded, "Truncated completion", "model_output_token_limit"),
+        (
+            UnexpectedModelBehavior,
+            "Streamed response ended without content or tool calls",
+            "provider_empty_stream",
+        ),
+        (
+            UnexpectedModelBehavior,
+            "Exceeded maximum output retries (1)",
+            "output_retries_exhausted",
+        ),
+        (
+            UnexpectedModelBehavior,
+            "Output validation failed during streaming",
+            "output_validation_failed",
+        ),
+        (
+            UnexpectedModelBehavior,
+            "Invalid response from test chat completions endpoint",
+            "provider_invalid_completion",
+        ),
+        (UnexpectedModelBehavior, "Unknown response error", "invalid_model_output"),
+    ],
 )
 def test_stream_classifies_failures_without_relaying_provider_text(
     caplog: pytest.LogCaptureFixture,
     failure_type: type[Exception],
+    prefix: str,
     expected_category: str,
 ) -> None:
     """Preserve fixed diagnostics even when the adapter receives private text."""
@@ -1751,7 +2012,7 @@ def test_stream_classifies_failures_without_relaying_provider_text(
         messages: Sequence[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str]:
         if messages:
-            raise failure_type(f"Exceeded the input_tokens_limit: {private_text}")
+            raise failure_type(f"{prefix}: {private_text}")
         yield "No messages received."
 
     app = create_app(
