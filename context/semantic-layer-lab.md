@@ -769,3 +769,83 @@ All attempts and reviewer inputs are preserved locally under
 754 backend unit tests, 97 agent tests, and 48 frontend tests. Targeted
 frontend type checks, mypy, Ruff, and the repository-configured Pylint run
 for the two changed backend files passed.
+
+### Rate support, follow-up, and native table navigation
+
+Verified ranked rate charts query the saved rate and eligible count together.
+They show the inclusive minimum sample size and mark observations below it
+without changing the observed rates. The chart's native table also shows the
+count and its support status. The default of 120 eligible observations is a
+provisional rule for operational triage. If
+the saved dataset, rate, or grouping changes, the chart drops the stale mark.
+
+Open analytical drafts link a concrete follow-up to a measured group.
+Copilot may describe verified period ranges and partial periods. The guard
+rejects process-stability claims drawn from descriptive trend queries. [NIST guidance
+on assessing process stability](https://www.itl.nist.gov/div898/handbook/ppc/section4/ppc45.htm)
+
+Inline data-bound grids in the V2 reader default to a native table. The
+interactive grid remains available and retains its local sort and filter
+state. On the same published fixture, Orca 43.1 and Firefox ESR reproduced
+the structural navigation exception in English and Arabic before the fix.
+After the fix, the same keys read the column headers and row values with
+no error. Switching views preserved the displayed data. Separate Superset
+viewer sessions preserved their RLS counts (North 2, South 4) and distinct
+cache entries on cold and warm reads.
+
+The fresh held-out case used 8,360 synthetic environmental permit reviews
+and a preregistered oracle. Only the CSV and neutral brief entered Copilot.
+The first browser startup timed out before the agent was called. The next
+two runs reached native evidence and exhausted the cumulative output budget
+before creating a proposal. The agent now reuses complete evidence and
+reserves a 14,000-token output budget for authenticated Superset runs with
+gateway tools. Standalone keeps its 10,000-token limit. Per-completion, time,
+request, and tool limits still apply.
+
+The first completed draft distinguished the workload leaders from the supported
+rate leaders and called for an audit of case reasons at Estuary Applications
+Office and for Industrial discharge renewal. November was identified as
+partial. The report made no process-stability claim. The readback matched
+150 tool values and 149 native values per desktop and mobile view. Both
+ranked charts showed the localized cutoff. The groups of 67 and 79 were
+marked below it, and two groups of exactly 120 remained eligible. At 390 ×
+844, each language fit three loaded KPIs and two complete chart cards.
+Opus 5.5 and Fable 5.2 each scored it 8/12. Both called for a separate
+workload action and direct readback of the report scope in both locales.
+
+The tested web and agent images began `a2eb21825a00` and `fa2895d99c26`.
+Verification included 771 backend tests, 104 agent tests, 70 targeted
+frontend tests, and 39 extension tests. Scoped TypeScript, Ruff, mypy,
+and the configured backend Pylint checks passed. Evidence is preserved under
+`nxtbi/out/semantic-lab/government-readiness/fixture-d-run-4/`, `advisor-d/`,
+and `orca-validation/grid-final/`.
+
+The next generated draft used a fresh session with one exact prompt and no
+earlier assistant messages. It reported 8,360 completed initial reviews,
+January 1–November 14, 2025, including 352 reviews in partial November.
+It recommended a return-criteria audit for the supported rate leaders and
+a queue and rework check at the affected-count leader. Both actions and the
+scope were visible. The Arabic view rendered localized titles and chart
+captions alongside the English source summary. The exact draft passed the
+English and Arabic Orca workload-table check and the 390 × 844 keyboard
+and density probes. The independent audit checked 153 tool values and both
+cutoff charts.
+
+The benchmark web and agent images began `1a6e2449a6d2` and `56940fce1c13`.
+The final change expanded the shared summary bound to 1,024 characters
+and distinguished the required rate and workload follow-ups. All 96 Copilot
+backend tests on that image and all 109 agent tests passed. The SDK retest
+passed 17 tests, including the Unicode length boundary.
+
+Opus scored the original blind draft 9/12 and Fable scored it 8/12. Both
+verified the scope and separate actions. The analyst clarified that the
+21.4%–28.4% range applies to complete months. Partial November was 19.3%.
+Both advisors verified the revised clause. The original draft and scores
+remain archived separately from the edited revision.
+
+Revision 2 of [Permit Return-Rate Operations Dashboard](http://127.0.0.1:58901/dashboard/v2/13/)
+was published in the isolated synthetic lab after delegated analyst review.
+The published document digest begins `c4572024aab3`. Publication readback
+preserved the approved document and passed the numeric, English and Arabic
+keyboard, cutoff, and 390 × 844 density checks. The latest evidence is under
+`nxtbi/out/semantic-lab/government-readiness/fixture-d-reviewed-publication/`.
