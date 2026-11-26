@@ -183,9 +183,67 @@ Ctrl+C disposes of the preview.
 
 The proof exercises Superset’s authenticated browser/API path and native
 MCP using FastMCP’s in-process transport under the disposable lab principal.
-Live Dremio driver and identity delegation, remote MCP authentication, and
-connection of the bilingual resolver to Copilot remain separate lab work.
+Live Dremio driver and identity delegation, and remote MCP authentication remain separate lab work.
 The provider is scoped to local synthetic data.
+
+## Draft semantic dashboards in Copilot
+
+Open NxtBI Copilot in the semantic lab and choose **Semantic catalog**.
+Select the dashboard language and enter **average property price** or
+**متوسط سعر العقار**. Copilot asks which approved definition you mean.
+Choose average transaction price or weighted price per square meter, review
+the total and the property-type breakdown, then select **Save dashboard**.
+Open the saved Classic dashboard from the receipt.
+
+The lab uses the same approved semantic view for previews and native
+chart queries. Each dashboard saves an editable KPI and table with a stable
+semantic datasource binding. It stores Arabic and English dashboard and
+chart captions. The breakdown column headers use the creation language.
+Query values and selections remain the same when captions switch.
+
+The feature requires the lab's `NXTBI_COPILOT_SEMANTIC_LAB` setting, an
+installed Property Market provider and access to its registered view. The
+author needs the native Chart and Dashboard permissions. Approval is
+signed for the active actor, view, metric, model version and locale, then
+rechecked before an atomic save. The catalog tool resolves approved aliases
+and runs native queries without a model call.
+
+Use the repository's Node version and installed frontend dependencies
+to build and run the browser proof from the repository root.
+
+~~~bash
+npm --prefix nxtbi/copilot/superset-extension/frontend run build
+python nxtbi/copilot/superset-extension/package_bundle.py
+python -X utf8 -u nxtbi/semantic_lab/host/run.py --copilot
+~~~
+
+The runner mounts the compiled extension and current gateway source, uses
+the cached `nxtbi/copilot-agent:zero-code-bi` image on a private Docker bridge,
+and starts a fresh lab database. Browser evidence goes under
+`nxtbi/out/semantic-lab/`. The runner removes its containers and network.
+
+### Copilot browser evidence
+
+On November 26, 2026, the lab ran against
+`nxtbi/superset-fork:copilot-localization-verified` and a newly packaged
+`nxtbi.ai-copilot-0.1.0.supx` with SHA-256
+`69a9907bd8b0eab80506e4caca294bd2c64fafe589de240e47ebaefda4895e2d`.
+The archive manifest carries the canonical extension ID required by
+Superset's packaged extension loader.
+
+Chromium clarified both requests, previewed their exact totals and
+property-type breakdowns, and saved two Classic dashboards through Copilot.
+The English dashboard saved average transaction price at AED 400,000.
+The Arabic dashboard saved weighted price at AED 3,737.70 per m² and reopened
+in RTL. Opening the same Arabic dashboard in an English session switched its
+dashboard and chart captions to English and preserved the semantic chart
+bindings and values.
+
+The Copilot SDK passed 23 tests, the extension passed 27 tests and
+TypeScript checking, and the Superset Copilot backend passed 30 tests.
+The lab and semantic SDK suite passed 240 tests with four capability skips.
+Screenshots and logs are in
+`nxtbi/out/semantic-lab/nxtbi-semantic-lab-fd8376fc95a9/`.
 
 ## Evidence from this lab
 

@@ -58,6 +58,14 @@ from superset.copilot.contracts import (
     ToolRequest,
     verify_claims,
 )
+from superset.copilot.semantic_catalog import (
+    approve_semantic_dashboard,
+    semantic_catalog_available,
+    SemanticCatalogApprovalError,
+    SemanticCatalogPreviewError,
+    SemanticCatalogUnavailableError,
+    stage_semantic_dashboard,
+)
 from superset.copilot.services import (
     aggregate_dataset,
     CopilotAccessError,
@@ -232,10 +240,62 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
     method_permission_name = {
         "run": "read",
         "approve": "write",
+        "semantic_catalog": "read",
+        "draft_semantic_catalog": "write",
+        "approve_semantic_catalog": "write",
         "get_history": "read",
         "save_history": "read",
         "upload_csv": "read",
     }
+
+    @expose("/semantic_catalog", methods=("GET",))
+    @protect()
+    def semantic_catalog(self) -> Response:
+        """Report availability for the authenticated dashboard author."""
+        _actor()
+        response = jsonify(available=semantic_catalog_available())
+        response.cache_control.no_store = True
+        return response
+
+    @expose("/semantic_catalog/draft", methods=("POST",))
+    @protect()
+    def draft_semantic_catalog(self) -> Response:
+        """Resolve a metric request and preview a bounded native dashboard draft."""
+        actor = _actor()
+        try:
+            result = stage_semantic_dashboard(_body(4096), actor.id, _secret())
+        except (SemanticCatalogUnavailableError, SupersetSecurityException):
+            return self.response(404, message="The semantic catalog is unavailable.")
+        except SemanticCatalogPreviewError:
+            return self.response(502, message="The semantic preview could not run.")
+        except ValueError:
+            return self.response(422, message="Check the requested semantic metric.")
+        response = jsonify(result)
+        response.cache_control.no_store = True
+        return response
+
+    @expose("/semantic_catalog/approve", methods=("POST",))
+    @protect()
+    def approve_semantic_catalog(self) -> Response:
+        """Save a confirmed semantic draft through native dashboard commands."""
+        actor = _actor()
+        try:
+            dashboard_id, created = approve_semantic_dashboard(
+                _body(4096), actor.id, _secret()
+            )
+        except SemanticCatalogUnavailableError:
+            return self.response(404, message="The semantic catalog is unavailable.")
+        except (SemanticCatalogApprovalError, SupersetSecurityException):
+            return self.response(403, message="This dashboard approval is unavailable.")
+        except CommandException as error:
+            return self.response(error.status, message=str(error.message))
+        except ValueError:
+            return self.response(422, message="Check the semantic dashboard draft.")
+        response = self.response(
+            201 if created else 200, id=dashboard_id, url=f"/dashboard/{dashboard_id}/"
+        )
+        response.cache_control.no_store = True
+        return response
 
     @expose("/upload/", methods=("POST",))
     @protect()

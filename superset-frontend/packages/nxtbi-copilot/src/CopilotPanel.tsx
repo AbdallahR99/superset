@@ -1368,6 +1368,7 @@ export function CopilotPanel({
               </div>
             )}
           </div>
+          {host.renderAuthoringTools?.(contentLocale)}
           {host.listDatasets && host.approve && (
             <ExistingDatasetPicker
               locale={shellLocale}

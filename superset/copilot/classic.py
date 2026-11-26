@@ -17,7 +17,8 @@
 
 """Materialize a verified Copilot proposal as a classic dashboard."""
 
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any, cast, Literal
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -26,7 +27,12 @@ from superset import db
 from superset.commands.chart.create import CreateChartCommand
 from superset.commands.dashboard.create import CreateDashboardCommand
 from superset.commands.dashboard.exceptions import DashboardCreateFailedError
-from superset.copilot.contracts import DashboardProposal, ProposalWidget
+from superset.copilot.contracts import (
+    ContentLocale,
+    DashboardProposal,
+    ProposalWidget,
+    TitleTranslations,
+)
 from superset.copilot.localization import LOCALIZATION_KEY
 from superset.dashboard_v2.document import load_stored_document
 from superset.models.dashboard import Dashboard
@@ -36,6 +42,17 @@ from superset.utils import json
 from superset.utils.core import get_user_id
 from superset.utils.decorators import transaction
 from superset.widgets.data import resolved_filters_to_adhoc
+
+
+@dataclass(frozen=True)
+class ClassicChartSpec:
+    """A verified datasource and native form data for a Classic chart."""
+
+    datasource_id: int
+    datasource_type: Literal["table", "semantic_view"]
+    title: str
+    form_data: dict[str, Any]
+    title_translations: TitleTranslations
 
 
 def classic_chart_form_data(
@@ -83,7 +100,7 @@ def classic_chart_form_data(
     return form_data
 
 
-def _classic_layout(proposal: DashboardProposal, charts: list[Slice]) -> dict[str, Any]:
+def _classic_layout(title: str, charts: list[Slice]) -> dict[str, Any]:
     """Build classic grid rows retaining the proposal's chart order and sizing."""
     row_ids: list[str] = []
     position: dict[str, Any] = {
@@ -98,16 +115,19 @@ def _classic_layout(proposal: DashboardProposal, charts: list[Slice]) -> dict[st
         "HEADER_ID": {
             "id": "HEADER_ID",
             "type": "HEADER",
-            "meta": {"text": proposal.title},
+            "meta": {"text": title},
         },
     }
-    kpis = sum(widget.type == "metric-tile" for widget in proposal.widgets)
+    kpis = sum(cast(str, chart.viz_type) == "big_number_total" for chart in charts)
     kpi_width = 12 // max(2, min(kpis, 4))
     remaining = 0
     row_id = ""
-    for widget, chart in zip(proposal.widgets, charts, strict=True):
-        is_kpi = widget.type == "metric-tile"
-        width = kpi_width if is_kpi else 12 if widget.chart_style == "line" else 6
+    for chart in charts:
+        viz_type = cast(str, chart.viz_type)
+        is_kpi = viz_type == "big_number_total"
+        width = (
+            kpi_width if is_kpi else 12 if viz_type == "echarts_timeseries_line" else 6
+        )
         if width > remaining:
             row_id = f"ROW-copilot-{len(row_ids) + 1}"
             row_ids.append(row_id)
@@ -139,28 +159,32 @@ def _classic_layout(proposal: DashboardProposal, charts: list[Slice]) -> dict[st
 
 
 def _classic_metadata(
-    proposal: DashboardProposal, charts: list[Slice]
+    title: str,
+    title_translations: TitleTranslations,
+    content_locale: ContentLocale | None,
+    charts: list[Slice],
+    chart_specs: list[ClassicChartSpec],
 ) -> dict[str, Any]:
     """Store approved captions alongside their original native chart titles."""
     localization: dict[str, Any] = {
-        "sourceLocale": proposal.content_locale or "en",
+        "sourceLocale": content_locale or "en",
     }
-    if proposal.title_translations:
+    if title_translations:
         localization["title"] = {
-            "source": proposal.title,
-            "translations": proposal.title_translations,
+            "source": title,
+            "translations": title_translations,
         }
     captions = {
         str(chart.id): {
             "source": chart.slice_name,
-            "translations": widget.title_translations,
+            "translations": spec.title_translations,
         }
-        for widget, chart in zip(proposal.widgets, charts, strict=True)
-        if widget.title_translations
+        for spec, chart in zip(chart_specs, charts, strict=True)
+        if spec.title_translations
     }
     if captions:
         localization["widgets"] = captions
-    if len(localization) > 1 or proposal.content_locale:
+    if len(localization) > 1 or content_locale:
         return {LOCALIZATION_KEY: localization}
     return {}
 
@@ -189,39 +213,43 @@ def _existing_dashboard(approval_uuid: UUID) -> Dashboard | None:
 
 @transaction(on_error=None)
 def _save_classic_dashboard(
-    proposal: DashboardProposal,
     approval_uuid: UUID,
-    percentages: dict[tuple[int, str], int],
+    title: str,
+    title_translations: TitleTranslations,
+    content_locale: ContentLocale | None,
+    chart_specs: list[ClassicChartSpec],
 ) -> tuple[int, bool]:
     """Save the dashboard and all its charts in a single transaction."""
     if existing := _existing_dashboard(approval_uuid):
-        return existing.id, False
+        return cast(int, existing.id), False
 
     charts: list[Slice] = []
-    for widget in proposal.widgets:
-        form_data = classic_chart_form_data(
-            widget, percentages.get((widget.dataset_id, widget.metric))
-        )
+    for spec in chart_specs:
         chart = CreateChartCommand(
             {
-                "slice_name": widget.title or widget.metric[:250],
-                "viz_type": form_data["viz_type"],
-                "datasource_id": widget.dataset_id,
-                "datasource_type": "table",
-                "params": json.dumps(form_data),
+                "slice_name": spec.title,
+                "viz_type": spec.form_data["viz_type"],
+                "datasource_id": spec.datasource_id,
+                "datasource_type": spec.datasource_type,
+                "params": json.dumps(spec.form_data),
             }
         ).run()
         charts.append(cast(Slice, chart))
     db.session.flush()
 
-    layout = _classic_layout(proposal, charts)
-    metadata = {**_classic_metadata(proposal, charts), "positions": layout}
+    layout = _classic_layout(title, charts)
+    metadata = {
+        **_classic_metadata(
+            title, title_translations, content_locale, charts, chart_specs
+        ),
+        "positions": layout,
+    }
     dashboard = cast(
         Dashboard,
         CreateDashboardCommand(
             {
                 "uuid": approval_uuid,
-                "dashboard_title": proposal.title,
+                "dashboard_title": title,
                 "json_metadata": json.dumps(metadata),
                 "position_json": json.dumps(layout),
                 "published": False,
@@ -230,7 +258,28 @@ def _save_classic_dashboard(
     )
     if {chart.id for chart in dashboard.slices} != {chart.id for chart in charts}:
         raise DashboardCreateFailedError()
-    return dashboard.id, True
+    return cast(int, dashboard.id), True
+
+
+def save_classic_dashboard(
+    *,
+    approval_uuid: UUID,
+    title: str,
+    title_translations: TitleTranslations,
+    content_locale: ContentLocale | None,
+    chart_specs: list[ClassicChartSpec],
+) -> tuple[int, bool]:
+    """Persist verified chart specifications, resolving a retry to its original save."""
+    try:
+        return _save_classic_dashboard(
+            approval_uuid, title, title_translations, content_locale, chart_specs
+        )
+    except IntegrityError as ex:
+        if existing := _existing_dashboard(approval_uuid):
+            return cast(int, existing.id), False
+        raise DashboardCreateFailedError() from ex
+    except SQLAlchemyError as ex:
+        raise DashboardCreateFailedError() from ex
 
 
 def create_classic_dashboard(
@@ -238,12 +287,22 @@ def create_classic_dashboard(
     approval_uuid: UUID,
     percentages: dict[tuple[int, str], int],
 ) -> tuple[int, bool]:
-    """Resolve a retry to its original saved dashboard after a concurrent save."""
-    try:
-        return _save_classic_dashboard(proposal, approval_uuid, percentages)
-    except IntegrityError as ex:
-        if existing := _existing_dashboard(approval_uuid):
-            return existing.id, False
-        raise DashboardCreateFailedError() from ex
-    except SQLAlchemyError as ex:
-        raise DashboardCreateFailedError() from ex
+    """Compile a validated table-backed proposal and save it atomically."""
+    return save_classic_dashboard(
+        approval_uuid=approval_uuid,
+        title=proposal.title,
+        title_translations=proposal.title_translations,
+        content_locale=proposal.content_locale,
+        chart_specs=[
+            ClassicChartSpec(
+                datasource_id=widget.dataset_id,
+                datasource_type="table",
+                title=widget.title or widget.metric[:250],
+                form_data=classic_chart_form_data(
+                    widget, percentages.get((widget.dataset_id, widget.metric))
+                ),
+                title_translations=widget.title_translations,
+            )
+            for widget in proposal.widgets
+        ],
+    )

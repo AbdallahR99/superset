@@ -25,7 +25,8 @@ import shutil
 import subprocess
 import sys
 import time
-from contextlib import suppress
+from collections.abc import Callable
+from contextlib import ExitStack, suppress
 from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from uuid import uuid4
@@ -33,8 +34,13 @@ from uuid import uuid4
 HOST = Path(__file__).resolve().parent
 LAB = HOST.parent
 OUT = LAB.parent / "out" / "semantic-lab"
+REPO = LAB.parents[1]
+COPILOT_BUNDLE = (
+    LAB.parent / "copilot" / "superset-extension" / "nxtbi.ai-copilot-0.1.0.supx"
+)
 
 DEFAULT_IMAGE = "nxtbi/superset-fork:copilot-localization-verified"
+DEFAULT_AGENT_IMAGE = "nxtbi/copilot-agent:zero-code-bi"
 LAB_AUTH_ENV = "NXTBI_SEMANTIC_LAB_PASSWORD"
 
 # Every run starts with an empty, container-local metadata database.
@@ -51,15 +57,19 @@ exec gunicorn --workers 1 --threads 4 --bind 0.0.0.0:8088 'superset.app:create_a
 """
 
 
-def wait_for_health(port: int, timeout: float = 135) -> None:
-    """Wait for the loopback web service to serve its health endpoint."""
+def wait_for_health(binding: str, timeout: float = 135) -> str:
+    """Validate the loopback binding and wait for the app's health endpoint."""
+    address, port_text = binding.rsplit(":", 1)
+    if address != "127.0.0.1":
+        raise RuntimeError("The semantic lab port must be bound to loopback.")
+    port = int(port_text)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         connection = HTTPConnection("127.0.0.1", port, timeout=2)
         try:
             connection.request("GET", "/health")
             if connection.getresponse().status == 200:
-                return
+                return f"http://{binding}"
         except (OSError, HTTPException):
             pass
         finally:
@@ -68,13 +78,15 @@ def wait_for_health(port: int, timeout: float = 135) -> None:
     raise RuntimeError("Superset health check timed out.")
 
 
-def run_browser(base_url: str, out: Path, env: dict[str, str]) -> int:
+def run_browser(
+    base_url: str, out: Path, env: dict[str, str], *, script: str = "browser_smoke.py"
+) -> int:
     """Run the checked-in browser flow without passing credentials on the CLI."""
     return subprocess.run(  # noqa: S603 - Local browser smoke test.
         [
             sys.executable,
             "-u",
-            str(LAB / "tests" / "browser_smoke.py"),
+            str(LAB / "tests" / script),
             "--base-url",
             base_url,
             "--artifact-dir",
@@ -86,13 +98,82 @@ def run_browser(base_url: str, out: Path, env: dict[str, str]) -> int:
     ).returncode
 
 
+def run_checks(
+    docker: Callable[..., subprocess.CompletedProcess[str]],
+    container_id: str,
+    base_url: str,
+    out: Path,
+    accounts: dict[str, str],
+    *,
+    save_log: Callable[[str, str], None],
+    serve: bool,
+    mcp: bool,
+    copilot: bool,
+) -> int:
+    """Seed the native view, then run the selected verification path."""
+    browser_env = {
+        **os.environ,
+        **accounts,
+        "NXTBI_SEMANTIC_LAB_KEEP_ASSETS": str(int(serve or mcp or copilot)),
+    }
+    if return_code := run_browser(base_url, out, browser_env):
+        return return_code
+    if serve:
+        print(f"Property market preview: {base_url}/dashboard/list/", flush=True)
+        while True:
+            time.sleep(1)
+    if mcp:
+        result = docker(
+            "exec",
+            container_id,
+            "python",
+            "/semantic-lab-host/mcp_smoke.py",
+            "--username",
+            accounts["NXTBI_SEMANTIC_LAB_USER"],
+        )
+        save_log("mcp.log", result.stdout + result.stderr)
+        print(f"Native MCP smoke passed. See {out}/mcp.log.", flush=True)
+    if copilot:
+        docker(
+            "exec",
+            container_id,
+            "python",
+            "-c",
+            "import os, requests; "
+            "agent = os.environ['NXTBI_COPILOT_AGENT_URL']; "
+            "url = agent.removesuffix('/ag-ui') + '/health'; "
+            "requests.get(url, timeout=5).raise_for_status()",
+        )
+        return run_browser(
+            base_url, out, browser_env, script="copilot_browser_smoke.py"
+        )
+    return 0
+
+
+def snapshot_copilot_bundle(bundle_dir: Path) -> None:
+    """Copy the packaged extension once so the lab loads a fixed artifact."""
+    if not COPILOT_BUNDLE.is_file():
+        raise RuntimeError("Build and package the Copilot extension before --copilot.")
+    bundle_dir.mkdir()
+    shutil.copy2(COPILOT_BUNDLE, bundle_dir)
+
+
 def run_lab(
-    image: str, docker_path: str, *, serve: bool, mcp: bool, password: str | None
+    image: str,
+    docker_path: str,
+    *,
+    serve: bool,
+    mcp: bool,
+    password: str | None,
+    copilot_agent_image: str | None = None,
 ) -> int:
     """Start one loopback container, run the selected checks, and dispose of it."""
     name = f"nxtbi-semantic-lab-{uuid4().hex[:12]}"
     out = OUT / name
     out.mkdir(parents=True)
+    bundle_dir = out / "extensions"
+    if copilot_agent_image:
+        snapshot_copilot_bundle(bundle_dir)
     print(f"Lab logs and screenshots: {out}", flush=True)
     accounts = {
         "NXTBI_SEMANTIC_LAB_USER": "lab_admin",
@@ -106,11 +187,27 @@ def run_lab(
         "NXTBI_SEMANTIC_LAB_APP_SECRET": app_secret,
         "SUPERSET_CONFIG_PATH": "/semantic-lab-host/superset_config.py",
     }
-    redactions = (
+    redactions = [
         accounts[LAB_AUTH_ENV],
         accounts["NXTBI_SEMANTIC_LAB_VIEWER_PASSWORD"],
         app_secret,
-    )
+    ]
+    agent_name = f"{name}-agent"
+    agent_env: dict[str, str] = {}
+    if copilot_agent_image:
+        shared_secret = secrets.token_hex(32)
+        container_env.update(
+            NXTBI_COPILOT_SEMANTIC_LAB="1",
+            NXTBI_COPILOT_AGENT_URL=f"http://{agent_name}:8100/ag-ui",
+            NXTBI_COPILOT_SHARED_SECRET=shared_secret,
+        )
+        agent_env = {
+            "NXTBI_COPILOT_SHARED_SECRET": shared_secret,
+            "NXTBI_COPILOT_TOOL_URL": (
+                f"http://{name}:8088/api/v1/nxtbi_copilot/internal/tools"
+            ),
+        }
+        redactions.append(shared_secret)
 
     def save_log(filename: str, message: str) -> None:
         """Store lab logs without authentication secrets."""
@@ -122,7 +219,7 @@ def run_lab(
         """Run Docker with diagnostics and lab secrets kept out of command arguments."""
         result = subprocess.run(  # noqa: S603 - Fixed CLI, explicit fixture arguments.
             [docker_path, *parts],
-            env={**os.environ, **container_env},
+            env={**os.environ, **container_env, **agent_env},
             capture_output=True,
             encoding="utf-8",
             errors="replace",
@@ -134,66 +231,87 @@ def run_lab(
             raise RuntimeError(f"Docker {parts[0]} failed. See {out}/docker-error.log.")
         return result
 
-    env_args = [part for key in container_env for part in ("--env", key)]
-    container_id = docker(
-        "run",
-        "--detach",
-        "--name",
-        name,
-        "--pull",
-        "never",
-        "--network",
-        "bridge",
-        "--publish",
-        "127.0.0.1::8088",
-        "--mount",
-        f"type=bind,src={HOST},dst=/semantic-lab-host,readonly",
-        "--mount",
-        f"type=bind,src={LAB / 'property_market'},dst=/semantic-lab-extension,readonly",
-        *env_args,
-        "--entrypoint",
-        "/bin/sh",
-        image,
-        "-ec",
-        BOOTSTRAP,
-    ).stdout.strip()
+    def stop(container_id: str, log_name: str) -> None:
+        """Collect redacted diagnostics before removing this run's container."""
+        try:
+            with suppress(OSError, subprocess.SubprocessError):
+                logs = docker("logs", container_id, required=False)
+                save_log(log_name, logs.stdout + logs.stderr)
+        finally:
+            docker("rm", "--force", container_id, required=False)
+
     try:
-        binding = docker("port", container_id, "8088/tcp").stdout.strip()
-        address, port_text = binding.rsplit(":", 1)
-        if address != "127.0.0.1":
-            raise RuntimeError("The semantic lab port must be bound to loopback.")
-        wait_for_health(int(port_text))
-        base_url = f"http://{binding}"
-        print(f"Semantic lab ready at {base_url} ({name})", flush=True)
-        browser_env = {
-            **os.environ,
-            **accounts,
-            "NXTBI_SEMANTIC_LAB_KEEP_ASSETS": str(int(serve or mcp)),
-        }
-        return_code = run_browser(base_url, out, browser_env)
-        if return_code == 0 and serve:
-            print(f"Property market preview: {base_url}/dashboard/list/", flush=True)
-            while True:
-                time.sleep(1)
-        if return_code == 0 and mcp:
-            result = docker(
-                "exec",
+        with ExitStack() as cleanup:
+            web_arguments: list[str] = []
+            network = "bridge"
+            if copilot_agent_image:
+                network = name
+                docker("network", "create", network)
+                cleanup.callback(docker, "network", "rm", network, required=False)
+                agent_id = docker(
+                    "run",
+                    "--detach",
+                    "--name",
+                    agent_name,
+                    "--pull",
+                    "never",
+                    "--network",
+                    network,
+                    *[part for key in agent_env for part in ("--env", key)],
+                    copilot_agent_image,
+                ).stdout.strip()
+                cleanup.callback(stop, agent_id, "copilot-agent.log")
+                web_arguments = [
+                    "--mount",
+                    f"type=bind,src={bundle_dir},dst=/semantic-lab-bundles,readonly",
+                    "--mount",
+                    f"type=bind,src={REPO / 'superset' / 'copilot'},"
+                    "dst=/app/superset/copilot,readonly",
+                ]
+
+            container_id = docker(
+                "run",
+                "--detach",
+                "--name",
+                name,
+                "--pull",
+                "never",
+                "--network",
+                network,
+                "--publish",
+                "127.0.0.1::8088",
+                "--mount",
+                f"type=bind,src={HOST},dst=/semantic-lab-host,readonly",
+                "--mount",
+                f"type=bind,src={LAB / 'property_market'},"
+                "dst=/semantic-lab-extension,readonly",
+                *web_arguments,
+                *[part for key in container_env for part in ("--env", key)],
+                "--entrypoint",
+                "/bin/sh",
+                image,
+                "-ec",
+                BOOTSTRAP,
+            ).stdout.strip()
+            cleanup.callback(stop, container_id, "superset.log")
+
+            binding = docker("port", container_id, "8088/tcp").stdout.strip()
+            base_url = wait_for_health(binding)
+            print(f"Semantic lab ready at {base_url} ({name})", flush=True)
+
+            return run_checks(
+                docker,
                 container_id,
-                "python",
-                "/semantic-lab-host/mcp_smoke.py",
-                "--username",
-                accounts["NXTBI_SEMANTIC_LAB_USER"],
+                base_url,
+                out,
+                accounts,
+                save_log=save_log,
+                serve=serve,
+                mcp=mcp,
+                copilot=bool(copilot_agent_image),
             )
-            save_log("mcp.log", result.stdout + result.stderr)
-            print(f"Native MCP smoke passed. See {out}/mcp.log.", flush=True)
-        return return_code
     except KeyboardInterrupt:
         return 0 if serve else 130
-    finally:
-        with suppress(OSError, subprocess.SubprocessError):
-            logs = docker("logs", container_id, required=False)
-            save_log("superset.log", logs.stdout + logs.stderr)
-        docker("rm", "--force", container_id, required=False)
 
 
 def main() -> int:
@@ -205,6 +323,14 @@ def main() -> int:
         "--serve", action="store_true", help="Seed the dashboard and wait for Ctrl+C"
     )
     modes.add_argument("--mcp", action="store_true", help="Also verify native MCP")
+    modes.add_argument(
+        "--copilot", action="store_true", help="Also verify bilingual Copilot saves"
+    )
+    parser.add_argument(
+        "--agent-image",
+        default=DEFAULT_AGENT_IMAGE,
+        help="Local Copilot agent image used by --copilot",
+    )
     args = parser.parse_args()
     docker_path = shutil.which("docker")
     if docker_path is None:
@@ -219,6 +345,7 @@ def main() -> int:
         serve=args.serve,
         mcp=args.mcp,
         password=password,
+        copilot_agent_image=args.agent_image if args.copilot else None,
     )
 
 

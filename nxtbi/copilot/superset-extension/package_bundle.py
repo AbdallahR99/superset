@@ -45,6 +45,7 @@ def main() -> None:
         key: package[key]
         for key in ("publisher", "name", "displayName", "version", "permissions")
     }
+    manifest["id"] = f"{publisher}.{name}"
     manifest["frontend"] = {
         "remoteEntry": entries[0].name,
         "moduleFederationName": "nxtbi_aiCopilot",

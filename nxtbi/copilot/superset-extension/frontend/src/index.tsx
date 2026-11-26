@@ -28,7 +28,9 @@ import {
   readPageContext,
   resolveDashboardLink,
 } from './pageContext';
-import { createSessionTransport } from './transport';
+import SemanticCatalogDraft from './SemanticCatalogDraft';
+import { createSemanticTransport } from './semanticTransport';
+import { createSessionTransport, createSessionWriter } from './transport';
 import { createWidgetCatalog } from './widgetCatalog';
 
 declare const __webpack_public_path__: string;
@@ -37,6 +39,10 @@ const ProposalEditor = lazy(() => import('./ProposalEditor'));
 
 const base = deploymentBase(window.location.origin, __webpack_public_path__);
 const transport = createSessionTransport(base, language);
+const semanticTransport = createSemanticTransport(
+  base,
+  createSessionWriter(base),
+);
 
 function dashboardTypes(): readonly DashboardType[] {
   const bootstrap = document
@@ -144,6 +150,13 @@ function Panel() {
         const destination = resolveDashboardLink(base, url);
         if (destination) window.location.assign(destination);
       },
+      renderAuthoringTools: contentLocale => (
+        <SemanticCatalogDraft
+          locale={contentLocale}
+          transport={semanticTransport}
+          dashboardHref={url => resolveDashboardLink(base, url)}
+        />
+      ),
       renderProposal: (proposal, onChange, previewLocale) => (
         <Suspense
           fallback={

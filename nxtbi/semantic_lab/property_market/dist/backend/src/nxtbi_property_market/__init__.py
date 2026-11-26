@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 from superset_core.semantic_layers.config import SemanticCredentialReadiness
 from superset_core.semantic_layers.context import (
@@ -37,6 +39,7 @@ from superset_core.semantic_layers.types import (
 from superset_core.semantic_layers.view import SemanticView
 
 from . import queries
+from .metric_search import resolve_metric
 from .model import DIMENSIONS, METRICS, TIME_DIMENSIONS
 
 VIEW_NAME = "property_transactions"
@@ -74,6 +77,15 @@ class PropertyTransactionsView(SemanticView):
     def get_metrics(self) -> set[Metric]:
         """Return the approved measures."""
         return set(METRICS.values())
+
+    def resolve_catalog_metric(
+        self, phrase: str, locale: Literal["en", "ar"]
+    ) -> tuple[str, ...]:
+        """Resolve only approved metric names through the bilingual catalog."""
+        return tuple(
+            candidate.metric_id
+            for candidate in resolve_metric(phrase, locale).candidates
+        )
 
     def get_compatible_metrics(
         self,

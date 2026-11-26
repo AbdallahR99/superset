@@ -86,6 +86,27 @@ function formActivity(
   };
 }
 
+test('supplies the selected dashboard language to host authoring tools', async () => {
+  const user = userEvent.setup();
+  const host: CopilotHost = {
+    dashboardTypes: ['v1'],
+    context: () => ({}),
+    run: jest.fn<
+      ReturnType<CopilotHost['run']>,
+      Parameters<CopilotHost['run']>
+    >(),
+    approve: jest.fn<
+      ReturnType<NonNullable<CopilotHost['approve']>>,
+      Parameters<NonNullable<CopilotHost['approve']>>
+    >(),
+    renderAuthoringTools: locale => <p>Authoring language {locale}</p>,
+  };
+  render(<CopilotPanel host={host} />);
+  expect(screen.getByText('Authoring language en')).toBeVisible();
+  await user.selectOptions(screen.getByLabelText('Dashboard language'), 'ar');
+  expect(screen.getByText('Authoring language ar')).toBeVisible();
+});
+
 test('keeps interactive results in turn order and resolves actions against their own edits', async () => {
   const user = userEvent.setup();
   jest

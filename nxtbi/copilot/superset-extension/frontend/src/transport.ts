@@ -119,15 +119,21 @@ function readConversation(value: unknown): CopilotConversation | undefined {
   };
 }
 
-export function createSessionTransport(base: string, language = () => 'en') {
-  const uploadIds = new WeakMap<File, string>();
-  async function write(
-    path: 'run' | 'approve' | 'history' | 'upload/',
+export function createSessionWriter(base: string) {
+  return async function write(
+    path:
+      | 'run'
+      | 'approve'
+      | 'history'
+      | 'upload/'
+      | 'semantic_catalog/draft'
+      | 'semantic_catalog/approve',
     body: unknown,
     accept: string,
-    signal: AbortSignal,
+    signal?: AbortSignal,
   ) {
     const session: RequestInit = {
+      mode: 'same-origin',
       credentials: 'same-origin',
       redirect: 'error',
       signal,
@@ -153,8 +159,12 @@ export function createSessionTransport(base: string, language = () => 'en') {
       },
       body: multipart ? body : JSON.stringify(body),
     });
-  }
+  };
+}
 
+export function createSessionTransport(base: string, language = () => 'en') {
+  const write = createSessionWriter(base);
+  const uploadIds = new WeakMap<File, string>();
   return {
     run(input: RunInput, signal: AbortSignal): Promise<Response> {
       return write('run', input, 'text/event-stream', signal);
