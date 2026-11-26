@@ -332,3 +332,76 @@ All 34 main-demo smoke checks passed, along with 16 Copilot backend tests,
 35 agent tests, 18 extension tests, and 175 SDK and Widget Jest tests.
 GovAI timed out during verification. The one-click draft completed live
 through Superset, and agent tests covered the normal model-assisted route.
+
+## Copilot and Dashboard V2 lifecycle
+
+Uploaded-data and snapshot drafts show an **Evidence used** card with the
+source, saved measure, query scope, and up to five checked comparison groups.
+The evidence describes the original draft. Edited chart previews remain
+available for review before approval. Completed interactive replies keep their
+own state while the chat is open. Copilot history stores the text transcript
+and saved dashboard link. Publishing is a separate Dashboard V2 action after
+saving the draft. Dashboard V2 history records the document that the successful
+save replaced so a retry can attribute the right widget change. Floating
+Copilot stays below the builder's modal dialogs.
+
+Run the lifecycle against locally built backend and agent images. Install
+Python `requests` and `playwright`, and run `python -m playwright install
+chromium` before the first run. Use the repository's pinned Node version and
+run from the repository root.
+
+```bash
+npm ci --prefix superset-frontend
+npm ci --prefix superset-frontend/packages/superset-widgets/example
+npm --prefix nxtbi/copilot/superset-extension/frontend run build
+python nxtbi/copilot/superset-extension/package_bundle.py
+docker build --target superset --build-arg BUILD_TRANSLATIONS=true -t nxtbi/superset-fork:copilot-lifecycle .
+docker build --target agent -f nxtbi/copilot/Dockerfile -t nxtbi/copilot-agent:copilot-lifecycle .
+python nxtbi/copilot/tests/lifecycle_fixture/run.py --superset-image nxtbi/superset-fork:copilot-lifecycle --agent-image nxtbi/copilot-agent:copilot-lifecycle
+```
+
+The runner starts fresh PostgreSQL, Superset, authenticated MCP, and a Widget
+SDK example on loopback. The web process handles the open stream and its
+signed agent callbacks concurrently. The test creates and publishes a dashboard
+from synthetic data and tears down its own services afterward. Logs and screenshots
+are written under `nxtbi/out/copilot-lifecycle/`. If Docker's default address
+pools are full, pass an unused private IPv4 CIDR with `--subnet`. Use `--provider-env
+nxtbi/copilot/.env --run-model-probe` to include the natural-language check
+when the model endpoint is reachable. That check sends only a request about
+the synthetic fixture.
+
+The one-click CSV planner skips a raw date series that would exceed the
+100-point widget limit. Monthly rollups require matching time-grain support
+across preview, Dashboard V2, and the Widget SDK. The sample datasets reviewed
+have 399–664 occupied dates and 23–36 occupied months.
+
+The draft's evidence uses the A2UI catalog and data returned by authorized
+queries. [A2UI 1.0 schema](https://a2ui.org/specification/v1.0/schemas/)
+[Looker Conversational Analytics](https://docs.cloud.google.com/looker/docs/conversational-analytics-overview)
+
+### November 26 lifecycle verification
+
+The disposable Chromium run passed against Superset
+`nxtbi/superset-fork:copilot-lifecycle-verified`
+(`sha256:d0639c7a0ecee37e268551c7340bd242d079ce56a5d05444ada3af6d8dc34179`),
+agent `nxtbi/copilot-agent:copilot-lifecycle`
+(`sha256:ec463842ab7c0496c5da74f0c6975abc78bd1316fd76104d12d944bd203f7fa0`),
+and packaged extension archive SHA-256
+`fd59a5b0cb6947173babe98bdf93bfce0c16e4e43c8db5ffa53c1e07911123b7`.
+
+The run applied fresh PostgreSQL migrations and used authenticated MCP.
+Chromium imported the CSV, checked native A2UI values, changed a widget title
+and refreshed the live preview, and approved the draft. Dashboard V2 persisted
+an item edit through undo, redo, save, history, publish and reopen. The same
+Widget SDK host rendered revenue 550 for the session user and 250 for both
+North-scoped guest embeds. The Arabic Copilot shell rendered in RTL.
+
+Focused checks passed 344 Copilot and dashboard frontend tests, 14 ChatHost
+Jest tests, 38 agent tests, 27 Dashboard V2 command tests, and 18 extension
+tests. Extension TypeScript and the compiled bundles passed. On Windows,
+the mypy hook reports Linux-only signal attributes in the baseline. The
+pinned mypy check targeting Linux passed for all nine changed Python paths.
+
+A synthetic GovAI streaming request timed out before receiving HTTP. This
+run verifies the one-click CSV workflow. Natural-language generation against
+GovAI and live Keycloak SSO remain outside this run's verified coverage.
