@@ -137,7 +137,7 @@ export function editDashboardTitle<T extends DashboardTitles>(
 
 interface DashboardWidgetBase extends DashboardTitles {
   datasetId: number;
-  chartStyle?: 'bar' | 'line';
+  chartStyle?: 'bar' | 'ranked-bar' | 'line';
   filter?: { column: string; value: string | number | boolean };
 }
 
@@ -308,7 +308,9 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
         validTranslations(item.titleTranslations) &&
         (item.chartStyle === undefined ||
           (item.type === 'echarts' &&
-            ['bar', 'line'].includes(item.chartStyle))) &&
+            (['bar', 'line'].includes(item.chartStyle) ||
+              (item.chartStyle === 'ranked-bar' &&
+                proposal.dashboardType !== 'v1')))) &&
         (item.filter === undefined ||
           (item.filter &&
             typeof item.filter.column === 'string' &&

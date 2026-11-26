@@ -100,7 +100,9 @@ class WidgetDraft(BaseModel):
         default=None, min_length=1, max_length=6
     )
     dimensions: list[DatasetFieldId] | None = Field(default=None, max_length=4)
-    chart_style: Literal["bar", "line"] | None = Field(default=None, alias="chartStyle")
+    chart_style: Literal["bar", "ranked-bar", "line"] | None = Field(
+        default=None, alias="chartStyle"
+    )
     filter: DatasetFilter | None = None
     title: LABEL | None = None
     title_translations: TitleTranslations | None = Field(
@@ -112,6 +114,8 @@ class WidgetDraft(BaseModel):
         """Allow one scalar measure or a complete grouped table binding."""
         if self.chart_style is not None and self.type != "echarts":
             raise ValueError("chartStyle requires an echarts widget.")
+        if self.chart_style == "ranked-bar" and self.dimension is None:
+            raise ValueError("A ranked bar requires a grouping column.")
         if not ({"metrics", "dimensions"} & self.model_fields_set):
             if self.metric is None:
                 raise ValueError("A widget requires a saved metric.")
@@ -149,7 +153,7 @@ class DashboardDraft(BaseModel):
     def requires_dashboard_v2(self) -> bool:
         """Identify draft features available only in Dashboard V2."""
         return self.summary is not None or any(
-            w.metrics is not None for w in self.widgets
+            w.metrics is not None or w.chart_style == "ranked-bar" for w in self.widgets
         )
 
 

@@ -26,6 +26,7 @@ import hmac
 import re
 import time
 from dataclasses import dataclass, field
+from itertools import groupby
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator, StringConstraints
@@ -38,6 +39,7 @@ APPROVAL_AUDIENCE = "nxtbi-dashboard-approval"
 RUN_TTL = 240
 APPROVAL_TTL = 900
 MAX_BODY_BYTES = 128 * 1024
+RANKED_CATEGORY_LIMIT = 12
 
 ShortText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
@@ -77,7 +79,9 @@ class ProposalWidget(Contract):
     title_translations: TitleTranslations = Field(
         default_factory=dict, alias="titleTranslations"
     )
-    chart_style: Literal["bar", "line"] | None = Field(default=None, alias="chartStyle")
+    chart_style: Literal["bar", "line", "ranked-bar"] | None = Field(
+        default=None, alias="chartStyle"
+    )
     filter: AggregateFilter | None = None
 
     @model_validator(mode="after")
@@ -133,9 +137,14 @@ class DashboardProposal(Contract):
         """Restrict the extended proposal fields to Dashboard V2."""
         if self.dashboard_type == "v1" and (
             self.summary is not None
-            or any(widget.metrics is not None for widget in self.widgets)
+            or any(
+                widget.metrics is not None or widget.chart_style == "ranked-bar"
+                for widget in self.widgets
+            )
         ):
-            raise ValueError("Compound tables and summaries require Dashboard V2.")
+            raise ValueError(
+                "Compound tables, summaries and ranked charts require Dashboard V2."
+            )
         return self
 
 
@@ -345,14 +354,20 @@ def _table_header(name: str, label: str | None) -> str:
 
 def _table_columns(
     widget: ProposalWidget, metadata: ProposalMetadata
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Define grouped columns first and format only saved temporal dimensions."""
-    columns = []
+    columns: list[dict[str, Any]] = []
+    header_layout = {"wrapHeaderText": True, "autoHeaderHeight": True}
     for name in widget.dimension_names:
         key = (widget.dataset_id, name)
-        column = {
+        column: dict[str, Any] = {
             "field": name,
             "headerName": _table_header(name, metadata.dimension_labels.get(key)),
+            "minWidth": 160,
+            "flex": 2,
+            "wrapText": True,
+            "autoHeight": True,
+            **header_layout,
         }
         if key in metadata.temporal_dimensions:
             column["valueFormat"] = "date"
@@ -363,37 +378,148 @@ def _table_columns(
             "headerName": _table_header(
                 name, metadata.metric_labels.get((widget.dataset_id, name))
             ),
+            "minWidth": 132,
+            "flex": 1,
+            **header_layout,
         }
         for name in widget.metric_names
     ]
 
 
-def _chart_display(widget: ProposalWidget) -> dict[str, Any]:
-    """Compile native ECharts props for a scalar category chart."""
+def _theme_value(token: str) -> dict[str, dict[str, str]]:
+    """Bind a native chart option to a Superset theme token."""
+    return {"$bind": {"source": "theme", "token": token}}
+
+
+def _chart_value_axis(
+    label: str, d3format: str | None, is_trend: bool
+) -> dict[str, Any]:
+    """Describe the value scale using safe, supported saved format details."""
+    axis_label: dict[str, Any] = {
+        "fontSize": 11,
+        "color": _theme_value("colorTextSecondary"),
+    }
+    axis: dict[str, Any] = {
+        "type": "value",
+        "name": label,
+        "nameLocation": "middle",
+        "nameGap": 54 if is_trend else 32,
+        "nameTextStyle": {"width": 170, "overflow": "break"},
+        "axisLabel": axis_label,
+        "splitLine": {"lineStyle": {"color": _theme_value("colorBorderSecondary")}},
+    }
+    if fixed := re.fullmatch(r"(\$)?,?\.([0-9]|10)f", d3format or ""):
+        axis["minInterval"] = 10 ** -int(fixed[2])
+        if fixed[1]:
+            axis_label["formatter"] = "${value}"
+    elif d3format in {"d", ",d"}:
+        axis["minInterval"] = 1
+    return axis
+
+
+def _chart_display(
+    widget: ProposalWidget, metadata: ProposalMetadata
+) -> dict[str, Any]:
+    """Compile a legacy bar, ranked category comparison or chronological native line."""
     is_trend = widget.chart_style == "line"
+    metric = widget.metric_names[0]
     axis_binding = {"source": "dimension", "alias": widget.dimension}
+    metric_binding = {"$bind": {"source": "metric", "alias": metric}}
+    if widget.chart_style in {None, "bar"}:
+        return {
+            "crossFilter": True,
+            "echartsOptions": {
+                "animation": False,
+                "grid": {"left": 64, "right": 24, "bottom": 40, "top": 48},
+                "tooltip": {"trigger": "axis", "renderMode": "richText"},
+                "xAxis": {
+                    "type": "category",
+                    "axisLabel": {"hideOverlap": True},
+                    "data": {"$bind": axis_binding},
+                },
+                "yAxis": {"type": "value"},
+                "series": [{"type": "bar", "data": metric_binding}],
+                **({"title": {"text": widget.title}} if widget.title else {}),
+            },
+        }
+    key = (widget.dataset_id, metric)
+    label = _table_header(metric, metadata.metric_labels.get(key))
+    category_label: dict[str, Any] = {
+        "color": _theme_value("colorTextSecondary"),
+        "fontSize": 11,
+        "hideOverlap": True,
+    }
+    category_axis: dict[str, Any] = {
+        "type": "category",
+        "axisLabel": category_label,
+        "data": {"$bind": axis_binding},
+    }
+    series: dict[str, Any] = {
+        "type": "line" if is_trend else "bar",
+        "name": label,
+        "data": metric_binding,
+    }
     if is_trend:
         axis_binding["format"] = "date"
+        series.update(
+            smooth=False,
+            connectNulls=False,
+            showSymbol=True,
+            symbol="circle",
+            symbolSize=7,
+            lineStyle={"width": 2.5},
+        )
+    else:
+        category_axis["inverse"] = True
+        category_label.update(width=148, overflow="break")
+        series.update(barMaxWidth=24, realtimeSort=True)
+    value_axis = _chart_value_axis(label, metadata.metric_formats.get(key), is_trend)
     options: dict[str, Any] = {
         "animation": False,
-        "grid": {"left": 64, "right": 24, "bottom": 40, "top": 48},
-        "tooltip": {"trigger": "axis", "renderMode": "richText"},
-        "xAxis": {
-            "type": "category",
-            "axisLabel": {"hideOverlap": True},
-            "data": {"$bind": axis_binding},
+        "aria": {"enabled": True},
+        "color": [_theme_value("colorPrimary")],
+        "grid": {
+            "left": 14,
+            "right": 14,
+            "top": 16,
+            "bottom": 14,
+            "outerBoundsMode": "same",
+            "outerBoundsContain": "all",
         },
-        "yAxis": {"type": "value"},
-        "series": [
-            {
-                "type": widget.chart_style or "bar",
-                "data": {"$bind": {"source": "metric", "alias": widget.metric}},
-            }
-        ],
+        "legend": {"show": False},
+        "tooltip": {
+            "trigger": "axis",
+            "renderMode": "richText",
+            "confine": True,
+            "axisPointer": {"type": "line" if is_trend else "shadow"},
+        },
+        "xAxis": category_axis if is_trend else value_axis,
+        "yAxis": value_axis if is_trend else category_axis,
+        "series": [series],
     }
     if widget.title:
         options["title"] = {"text": widget.title}
     return {"crossFilter": not is_trend, "echartsOptions": options}
+
+
+def _dashboard_layout(proposal: DashboardProposal) -> tuple[list[str], dict[str, int]]:
+    """Keep proposal order, insert the summary, and pair adjacent charts."""
+    children: list[str] = []
+    chart_spans: dict[str, int] = {}
+    pending_summary = ["summary"] if proposal.summary else []
+    groups = groupby(
+        enumerate(proposal.widgets, 1), key=lambda item: item[1].type == "echarts"
+    )
+    for is_chart, widgets in groups:
+        node_ids = [f"widget_{index}" for index, _ in widgets]
+        if is_chart:
+            children.extend(pending_summary)
+            pending_summary = []
+            chart_spans.update(dict.fromkeys(node_ids, 12))
+            if len(node_ids) % 2:
+                chart_spans[node_ids[-1]] = 24
+        children.extend(node_ids)
+    return children + pending_summary, chart_spans
 
 
 def make_document(
@@ -402,7 +528,7 @@ def make_document(
 ) -> dict[str, Any]:
     """Compile the allowed widget choices through the Dashboard V2 document format."""
     metadata = metadata or ProposalMetadata()
-    children: list[str] = []
+    children, chart_spans = _dashboard_layout(proposal)
     nodes: dict[str, Any] = {
         "root": {"type": "grid", "layout": {"columns": 24}, "children": children}
     }
@@ -410,15 +536,18 @@ def make_document(
     kpi_span = 24 // max(2, min(kpi_count, 4))
     for index, widget in enumerate(proposal.widgets, 1):
         node_id = f"widget_{index}"
-        children.append(node_id)
         dimensions = widget.dimension_names if widget.type != "metric-tile" else []
         metric_names = widget.metric_names
+        is_trend = widget.chart_style == "line"
+        is_chart = widget.type == "echarts"
+        is_ranked = widget.chart_style == "ranked-bar"
         props: dict[str, Any] = {
             "dataBinding": {
                 "datasetId": widget.dataset_id,
                 "metrics": metric_names,
                 "dimensions": dimensions,
-                "rowLimit": 100,
+                "rowLimit": RANKED_CATEGORY_LIMIT if is_ranked else 100,
+                **({"orderByMetric": True} if is_ranked else {}),
             }
         }
         if widget.filter:
@@ -438,25 +567,21 @@ def make_document(
         compound_table = widget.metrics is not None
         if compound_table:
             props["columnDefs"] = _table_columns(widget, metadata)
-        is_trend = widget.chart_style == "line"
         if (compound_table and dimensions) or is_trend:
             props["dataBinding"]["orderByDimension"] = True
-        if widget.type == "echarts":
-            props.update(_chart_display(widget))
+        if is_chart:
+            props.update(_chart_display(widget, metadata))
         nodes[node_id] = {
             "type": widget.type,
             "layout": {
                 "colSpan": kpi_span
                 if widget.type == "metric-tile"
-                else 24
-                if is_trend or compound_table
-                else 12,
-                "rowSpan": 4 if widget.type == "metric-tile" else 9,
+                else chart_spans.get(node_id, 24 if compound_table else 12),
+                "rowSpan": 4 if widget.type == "metric-tile" else 11 if is_chart else 9,
             },
             "props": props,
         }
     if proposal.summary:
-        children.append("summary")
         nodes["summary"] = {
             "type": "markdown",
             "layout": {"colSpan": 24, "rowSpan": 4},

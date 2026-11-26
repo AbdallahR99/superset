@@ -50,12 +50,79 @@ test('builds a metric tile binding without dimensions or executable options', ()
   );
 });
 
-test('uses the same allowlisted data binding for table and chart previews', () => {
+test('ranks a bounded set of categories with horizontal bars and readable labels', () => {
   const input = { datasetId: 10, metric: 'sum__amount', dimension: 'region' };
   const table = widgetPreview({ ...input, type: 'ag-grid-table' });
-  const chart = widgetPreview({ ...input, type: 'echarts' });
-  assert.deepEqual(table?.props.dataBinding, chart?.props.dataBinding);
-  assert.deepEqual(chart?.props.echartsOptions, {
+  const chart = widgetPreview(
+    { ...input, type: 'echarts', chartStyle: 'ranked-bar' },
+    'd',
+    {
+      metrics: new Map([['sum__amount', 'Amount']]),
+      dimensions: new Map(),
+    },
+  );
+  assert.deepEqual(table?.props.dataBinding, {
+    datasetId: 10,
+    metrics: ['sum__amount'],
+    dimensions: ['region'],
+    rowLimit: 100,
+  });
+  assert.deepEqual(chart?.props.dataBinding, {
+    datasetId: 10,
+    metrics: ['sum__amount'],
+    dimensions: ['region'],
+    rowLimit: 12,
+    orderByMetric: true,
+  });
+  assert.equal(chart?.props.crossFilter, true);
+  assert.ok(chart);
+  const options = chart.props.echartsOptions as {
+    xAxis: { type: string; minInterval: number; name: string };
+    yAxis: unknown;
+    series: unknown;
+  };
+  assert.equal(options.xAxis.type, 'value');
+  assert.equal(options.xAxis.minInterval, 1);
+  assert.equal(options.xAxis.name, 'Amount');
+  assert.deepEqual(options.yAxis, {
+    type: 'category',
+    inverse: true,
+    axisLabel: {
+      width: 148,
+      overflow: 'break',
+      fontSize: 11,
+      hideOverlap: true,
+    },
+    data: { $bind: { source: 'dimension', alias: 'region' } },
+  });
+  assert.deepEqual(options.series, [
+    {
+      type: 'bar',
+      name: 'Amount',
+      data: { $bind: { source: 'metric', alias: 'sum__amount' } },
+      barMaxWidth: 24,
+      realtimeSort: true,
+    },
+  ]);
+});
+
+test('keeps explicit and default legacy bar proposals vertical and unranked', () => {
+  const base = {
+    type: 'echarts',
+    datasetId: 10,
+    metric: 'count',
+    dimension: 'region',
+  } as const;
+  const preview = widgetPreview(base);
+  assert.deepEqual(widgetPreview({ ...base, chartStyle: 'bar' }), preview);
+  assert.ok(preview);
+  assert.deepEqual(preview.props.dataBinding, {
+    datasetId: 10,
+    metrics: ['count'],
+    dimensions: ['region'],
+    rowLimit: 100,
+  });
+  assert.deepEqual(preview.props.echartsOptions, {
     animation: false,
     grid: { left: 64, right: 24, bottom: 40, top: 48 },
     tooltip: { trigger: 'axis', renderMode: 'richText' },
@@ -66,13 +133,52 @@ test('uses the same allowlisted data binding for table and chart previews', () =
     },
     yAxis: { type: 'value' },
     series: [
-      {
-        type: 'bar',
-        data: { $bind: { source: 'metric', alias: 'sum__amount' } },
-      },
+      { type: 'bar', data: { $bind: { source: 'metric', alias: 'count' } } },
     ],
   });
-  assert.equal(chart?.props.crossFilter, true);
+});
+
+test('shows real points and gaps on a chronologically ordered trend', () => {
+  const preview = widgetPreview({
+    type: 'echarts',
+    datasetId: 10,
+    chartStyle: 'line',
+    metric: 'amount',
+    dimension: 'sale_month',
+  });
+  assert.ok(preview);
+  assert.equal(preview.props.crossFilter, false);
+  assert.deepEqual(preview.props.dataBinding, {
+    datasetId: 10,
+    metrics: ['amount'],
+    dimensions: ['sale_month'],
+    orderByDimension: true,
+    rowLimit: 100,
+  });
+  const options = preview.props.echartsOptions as {
+    xAxis: unknown;
+    series: unknown;
+  };
+  assert.deepEqual(options.xAxis, {
+    type: 'category',
+    axisLabel: { fontSize: 11, hideOverlap: true },
+    data: {
+      $bind: { source: 'dimension', alias: 'sale_month', format: 'date' },
+    },
+  });
+  assert.deepEqual(options.series, [
+    {
+      type: 'line',
+      name: 'amount',
+      data: { $bind: { source: 'metric', alias: 'amount' } },
+      showSymbol: true,
+      symbol: 'circle',
+      symbolSize: 7,
+      smooth: false,
+      connectNulls: false,
+      lineStyle: { width: 2.5 },
+    },
+  ]);
 });
 
 test('leaves an incomplete widget preview idle until its binding can run', () => {
@@ -132,11 +238,29 @@ test('previews every compound table field in selection order with saved labels a
     orderByDimension: true,
     rowLimit: 100,
   });
+  const metricColumn = {
+    flex: 1,
+    minWidth: 132,
+    wrapHeaderText: true,
+    autoHeaderHeight: true,
+  };
+  const dimensionColumn = {
+    ...metricColumn,
+    flex: 2,
+    minWidth: 160,
+    wrapText: true,
+    autoHeight: true,
+  };
   assert.deepEqual(preview?.props.columnDefs, [
-    { field: 'month', headerName: 'Month', valueFormat: 'date' },
-    { field: 'district', headerName: 'District' },
-    { field: 'revenue', headerName: 'Revenue' },
-    { field: 'orders', headerName: 'orders' },
+    {
+      ...dimensionColumn,
+      field: 'month',
+      headerName: 'Month',
+      valueFormat: 'date',
+    },
+    { ...dimensionColumn, field: 'district', headerName: 'District' },
+    { ...metricColumn, field: 'revenue', headerName: 'Revenue' },
+    { ...metricColumn, field: 'orders', headerName: 'orders' },
   ]);
   assert.deepEqual(
     widgetPreview({

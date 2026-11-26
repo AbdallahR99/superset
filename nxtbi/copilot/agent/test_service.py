@@ -747,6 +747,138 @@ def test_dataset_evidence_reaches_model(
     assert any(event.get("delta") == "The dataset was assessed." for event in events)
 
 
+def test_analytical_upload_chat_uses_evidence_and_native_chart_proposal() -> None:
+    """A selected upload in chat can support different measured chart questions."""
+    headers = _authorization("superset")
+    dataset_id = 47
+    metric = "avg_delivery_days"
+    measured_queries = [
+        ("get_dataset", {"id": dataset_id}),
+        (
+            "aggregate_dataset",
+            {"id": dataset_id, "metric": metric, "dimension": "region"},
+        ),
+        (
+            "aggregate_dataset",
+            {"id": dataset_id, "metric": metric, "dimension": "week"},
+        ),
+    ]
+    responses = [
+        {
+            "id": dataset_id,
+            "metrics": [metric],
+            "groupable_columns": ["region", "week"],
+            "temporal_columns": ["week"],
+            "metric_details": [
+                {"metric_name": metric, "description": "Completed shipments only"}
+            ],
+        },
+        {
+            "dataset_id": dataset_id,
+            "metric": metric,
+            "dimension": "region",
+            "rows": [{"group": "North", "value": 5}, {"group": "South", "value": 2}],
+            "truncated": False,
+        },
+        {
+            "dataset_id": dataset_id,
+            "metric": metric,
+            "dimension": "week",
+            "rows": [
+                {"group": "2026-11-02", "value": 4},
+                {"group": "2026-11-09", "value": 3},
+            ],
+            "truncated": False,
+        },
+    ]
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == headers["Authorization"]
+        call = json.loads(request.content)
+        name, args = call["name"], call["arguments"]
+        calls.append((name, args))
+        if name == "propose_dashboard":
+            return httpx.Response(200, json={**args, "approvalToken": "proposal-only"})
+        return httpx.Response(200, json=responses[len(calls) - 1])
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        assert "propose_uploaded_dataset_dashboard" not in {
+            tool.name for tool in info.function_tools
+        }
+        assert "User-selected uploaded dataset ID: 47." in str(messages)
+        evidence = [
+            part.content
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        assert evidence == responses[: len(evidence)]
+        step = len(evidence)
+        if step < len(measured_queries):
+            name, args = measured_queries[step]
+        else:
+            name = "propose_dashboard"
+            args = {
+                "title": "Where to investigate delivery delays",
+                "summary": (
+                    "Investigate North first: completed shipments averaged 5 days "
+                    "there versus 2 in South. The two recorded weekly averages fell "
+                    "from 4 to 3 days and exclude shipments still in transit."
+                ),
+                "widgets": [
+                    {
+                        "type": "echarts",
+                        "datasetId": dataset_id,
+                        "metric": metric,
+                        "dimension": dimension,
+                        "chartStyle": style,
+                        "title": title,
+                    }
+                    for style, dimension, title in (
+                        ("ranked-bar", "region", "Average delivery days by region"),
+                        ("line", "week", "Weekly average delivery days"),
+                    )
+                ],
+            }
+        yield {
+            0: DeltaToolCall(
+                name=name, tool_call_id=f"analysis-{step}", json_args=json.dumps(args)
+            )
+        }
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        model=FunctionModel(stream_function=generate),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    payload = {
+        **REQUEST,
+        "messages": [
+            {
+                "id": "m1",
+                "role": "user",
+                "content": "Build a dashboard to show where to investigate delays.",
+            }
+        ],
+        "context": [{"description": "uploaded_dataset_id", "value": str(dataset_id)}],
+    }
+    with TestClient(app) as client:
+        events = _events(client.post("/ag-ui", headers=headers, json=payload))
+    assert calls[:-1] == measured_queries
+    assert calls[-1][0] == "propose_dashboard"
+    proposal = next(event for event in events if event["type"] == "CUSTOM")["value"]
+    assert proposal["dashboardType"] == "v2"
+    assert [widget["chartStyle"] for widget in proposal["widgets"]] == [
+        "ranked-bar",
+        "line",
+    ]
+    assert "5 days" in proposal["summary"]
+    assert "exclude shipments still in transit" in proposal["summary"]
+
+
 def test_model_filter_decodes_only_strict_objects() -> None:
     """A quoted JSON object from the model becomes a typed gateway filter."""
     adapter = TypeAdapter(service.ModelFilter)
@@ -816,10 +948,26 @@ def test_dashboard_summary_is_bounded() -> None:
             DashboardDraft.model_validate({**draft, "summary": invalid})
 
 
+@pytest.mark.parametrize("style", ["bar", "line", "ranked-bar"])
+def test_only_ranked_bar_requires_v2(style: str) -> None:
+    """Ordinary bars and lines retain their Classic-compatible wire format."""
+    chart = {
+        "type": "echarts",
+        "datasetId": 5,
+        "metric": "population",
+        "dimension": "district",
+        "chartStyle": style,
+    }
+    draft = DashboardDraft.model_validate({"title": "Population", "widgets": [chart]})
+    assert draft.requires_dashboard_v2 == (style == "ranked-bar")
+    if style == "ranked-bar":
+        with pytest.raises(ValidationError, match="requires a grouping column"):
+            WidgetDraft.model_validate({**chart, "dimension": None})
+
+
 @pytest.mark.parametrize("distinct_dates", [31, 634])
-@pytest.mark.parametrize("use_shortcut", [False, True])
 def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
-    distinct_dates: int, use_shortcut: bool
+    distinct_dates: int,
 ) -> None:
     """The selected file yields verified metrics and avoids partial daily charts."""
     dataset_id = 47
@@ -886,43 +1034,17 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
             }
         return httpx.Response(200, json=result)
 
-    async def generate(
-        messages: Sequence[ModelMessage], info: AgentInfo
-    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
-        assert "propose_uploaded_dataset_dashboard" in {
-            tool.name for tool in info.function_tools
-        }
-        assert "User-selected uploaded dataset ID: 47." in str(messages)
-        for message in messages:
-            for part in message.parts:
-                if isinstance(part, ToolReturnPart):
-                    assert approval not in str(part.content)
-                    assert part.content["headline"]["rows"][0]["value"] == 6_439_445.27
-                    yield "I verified the full-file order value."
-                    return
-        yield {
-            0: DeltaToolCall(
-                name="propose_uploaded_dataset_dashboard",
-                tool_call_id="csv-dashboard",
-                json_args='{"title":"Orders overview"}',
-            )
-        }
-
     app = create_app(
         Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
-        model=None if use_shortcut else FunctionModel(stream_function=generate),
         tool_transport=httpx.MockTransport(gateway),
     )
-    context = [{"description": "uploaded_dataset_id", "value": "47"}]
-    if use_shortcut:
-        context.extend(
-            [
-                {"description": "uploaded_dataset_action", "value": "draft"},
-                {"description": "locale", "value": "ar"},
-                {"description": "content_locale", "value": "en"},
-                {"description": "dashboard_type", "value": "v1"},
-            ]
-        )
+    context = [
+        {"description": "uploaded_dataset_id", "value": "47"},
+        {"description": "uploaded_dataset_action", "value": "draft"},
+        {"description": "locale", "value": "ar"},
+        {"description": "content_locale", "value": "en"},
+        {"description": "dashboard_type", "value": "v1"},
+    ]
     with TestClient(app) as client:
         events = _events(
             client.post(
@@ -938,15 +1060,11 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
     assert proposal["name"] == "nxtbi.dashboard-proposal"
     assert proposal["value"]["approvalToken"] == approval
     nodes = _evidence_nodes(events)
-    assert nodes["title"]["text"] == (
-        "الأدلة المستخدمة" if use_shortcut else "Evidence used"
-    )
+    assert nodes["title"]["text"] == "الأدلة المستخدمة"
     assert nodes["source"]["text"] == "Demo orders · #47"
     assert nodes["headline"]["value"] == "6,439,445.27"
     assert nodes["headline"]["label"] == "Total order value"
-    assert nodes["headline"]["detail"] == (
-        "كل الصفوف المتاحة (2,000)" if use_shortcut else "All accessible rows (2,000)"
-    )
+    assert nodes["headline"]["detail"] == "كل الصفوف المتاحة (2,000)"
     assert nodes["comparison"]["rows"] == [
         {"group": "active", "value": "3,500,000"},
         {"group": "pending", "value": "2,939,445.27"},
@@ -960,9 +1078,7 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
     }
     assert widgets[1]["titleTranslations"] == {"en": "Records", "ar": "السجلات"}
     assert proposal["value"]["contentLocale"] == "en"
-    assert proposal["value"].get("dashboardType", "v2") == (
-        "v1" if use_shortcut else "v2"
-    )
+    assert proposal["value"]["dashboardType"] == "v1"
     assert widgets[-1]["dimension"] == "status"
     assert widgets[-1]["chartStyle"] == "bar"
     assert any(widget.get("chartStyle") == "line" for widget in widgets) == (

@@ -135,6 +135,30 @@ the observed scope and values. The draft preview runs its own queries, so skip
 unrelated exploration and call propose_dashboard promptly. Provide a requested
 dashboard summary in the optional top-level summary field as one or two plain-text
 sentences, up to 512 characters. Grouped tables and summaries require Dashboard V2.
+For a dashboard requested to compare results, find insights, or support a decision,
+use this plan even for a selected upload or stock/snapshot source. Preserve the
+explicitly requested widget count, chart or table types, fields, filters, and order.
+Resolve the dataset once. Use get_dataset to find saved measures and grouping
+columns. Read the metric descriptions and choose one decision the data can inform. Use
+profile_dataset once when you need to verify suitable periods or categories. Run
+two targeted aggregate_dataset queries for the complementary comparisons when
+the data supports them. Match the scope and grouping of each chart to its evidence.
+When comparing two saved measures, use a common grouping and time scope and
+disclose any difference in which records are eligible for each measure.
+For an open analytical Dashboard V2 layout, lead with two native echarts widgets
+when supported: a ranked-bar comparing a useful category by a saved measure and a
+line showing the same measure over meaningful, verified periods. If the time
+evidence is missing, truncated, or too granular, use a second category chart for a
+distinct question using a verified grouping or measure. Use fewer charts if only
+one valid comparison exists. Add a KPI or table only when it serves a separate purpose.
+Use chartStyle ranked-bar for a ranked horizontal V2 comparison of up to 12 groups.
+Use chartStyle bar for an ordinary, unranked category chart or in Classic dashboards.
+Never treat rank-limited aggregate results as a complete time series.
+Write the V2 summary as one or two sentences with specific group or period names,
+numbers, comparison scope, and a concrete decision or follow-up justified by those
+values. Include one applicable limitation, such as missing groups, checked-period
+coverage, an eligibility rule, or a synthetic sample. Never imply causality or
+generalize beyond the measured scope. If a comparison is unavailable, state the gap.
 For questions about which datasets are ready for a demo dashboard, answer the
 discovery question before creating a draft. Start with list_datasets without a
 name filter unless the user specifies a subject. Inspect get_dataset for up to four
@@ -167,24 +191,16 @@ Verify the denominator and its scope before interpreting any share. If snapshot
 scope cannot be verified, show the registered measure by period and explain the gap.
 Preserve saved aggregations and distinguish an unknown unit from a known currency
 or percentage. Never infer freshness or a date range from the presence of a date.
-For requests about the selected CSV upload, use the supplied uploaded dataset ID.
-For an ordinary dashboard draft, call propose_uploaded_dataset_dashboard directly.
-It reads scoped metadata, measures a saved metric, selects useful chart dimensions,
-and stages a draft across accessible rows. Treat transaction dates as event dates.
-For specific analyses use get_dataset and scoped evidence
-tools on that ID. Use only saved metrics. Do not infer joins with other uploads.
-For a population or other stock/snapshot dashboard without explicit table layout,
-resolve the named dataset once with list_datasets when its ID is ambiguous. After
-get_dataset, call
-propose_snapshot_dashboard immediately. It checks the latest observed temporal
-value and scoped aggregates, then stages the preview. Skip manual exploratory
-queries and use its returned measures to summarize the result briefly. The verified
-drafts include an evidence panel sourced from measured queries. Lead with the decision
-the draft supports and one observed comparison when available. Mention the source,
-scope and any material coverage or unit gap. Describe other charts as proposed views
-when you have no measured trend or comparison for them.
-For a focused opportunity question, profile the temporal field once and run one
-grouped measure with a filter on the observed period. One supporting measure
+For requests about a selected CSV upload, use the supplied uploaded dataset ID in
+get_dataset and scoped evidence tools. Treat transaction dates as event dates.
+Use only saved metrics. Do not infer joins with other uploads. For a basic stock
+overview, propose_snapshot_dashboard is a shortcut for a latest snapshot, a trend,
+and categorical comparisons. It checks the latest observed temporal value and
+scoped aggregates, then stages a preview with an evidence panel. Use get_dataset
+and the scoped evidence tools for user-directed analysis and custom layouts.
+For a focused opportunity question that asks for an answer without a dashboard,
+profile the temporal field once and run one grouped measure with a filter on the
+observed period. One supporting measure
 is enough. Then give one concise Markdown answer with the observed comparison,
 period, unit and caveat. Use a Markdown table if needed. Reserve a generated
 surface for requested interactivity or a preview. Finish after sharing the answer.
@@ -372,15 +388,6 @@ async def _prepare_superset_tool(
     return definition if ctx.deps.has_superset_tools else None
 
 
-async def _prepare_uploaded_tool(
-    ctx: RunContext[RunDeps], definition: ToolDefinition
-) -> ToolDefinition | None:
-    """Expose the import-specific tool only when a Superset CSV is selected."""
-    if ctx.deps.hints.uploaded_dataset_id is None:
-        return None
-    return await _prepare_superset_tool(ctx, definition)
-
-
 def _host_hints(ctx: RunContext[RunDeps]) -> str:
     hints = ctx.deps.hints
     ids = {
@@ -395,6 +402,7 @@ def _host_hints(ctx: RunContext[RunDeps]) -> str:
     return (
         f"Verified host: {ctx.deps.claims.host}. UI language: {hints.locale}. "
         f"Dashboard content language: {hints.content_locale or hints.locale}. "
+        f"Dashboard format: {hints.dashboard_type or 'v2'}. "
         f"User-provided active resource IDs: {ids}. Verify each with its tool."
         + (
             f" User-selected uploaded dataset ID: {hints.uploaded_dataset_id}."
@@ -446,7 +454,7 @@ def _register_dataset_tools(agent: Agent[RunDeps, str]) -> None:
         dimension: LABEL | None = None,
         filter: ModelFilter | None = None,
     ) -> object:
-        """Read a saved measure as a total or by group, optionally filtered."""
+        """Read a saved measure as a total or up to ten ranked groups."""
         arguments: dict[str, object] = {"id": id, "metric": metric}
         if dimension is not None:
             arguments["dimension"] = dimension
@@ -468,7 +476,7 @@ async def _stage_proposal(
     kind = deps.hints.dashboard_type or draft.dashboard_type
     if draft.requires_dashboard_v2:
         if kind == "v1":
-            return {"error": "Grouped tables and summaries require Dashboard V2."}
+            return {"error": "This dashboard draft requires Dashboard V2."}
         kind = "v2"
     locale = deps.hints.content_locale or draft.content_locale
     if locale is None and (
@@ -716,22 +724,6 @@ async def _plan_uploaded_dashboard(
     )
 
 
-def _register_uploaded_tool(agent: Agent[RunDeps, str]) -> None:
-    """Let natural-language requests use the same scoped upload planner."""
-
-    @agent.tool(prepare=_prepare_uploaded_tool, sequential=True)
-    async def propose_uploaded_dataset_dashboard(
-        ctx: RunContext[RunDeps],
-        title: LABEL,
-        metric: LABEL | None = None,
-        title_translations: ModelTitleTranslations | None = None,
-    ) -> object:
-        """Review the selected CSV and stage a proposed dashboard for approval."""
-        return await _plan_uploaded_dashboard(
-            ctx.deps, title, metric, title_translations
-        )
-
-
 def _register_superset_tools(agent: Agent[RunDeps, str]) -> None:
     """Expose the saved chart, dashboard and proposal tools."""
 
@@ -771,6 +763,7 @@ def _register_superset_tools(agent: Agent[RunDeps, str]) -> None:
         A Dashboard V2 grouped table uses type ag-grid-table, metrics with 1–6 saved
         names and dimensions with 0–4 column names. Omit metric and dimension in
         that widget. Other widgets use scalar metric and optional scalar dimension.
+        Use ranked-bar for ranked category comparisons in Dashboard V2.
         Supply a requested dashboard narrative as top-level summary text.
         """
         return await _stage_proposal(
@@ -858,7 +851,6 @@ def build_agent(model: Model) -> Agent[RunDeps, str]:
     agent.instructions(_host_hints)
     _register_dataset_tools(agent)
     _register_snapshot_tool(agent)
-    _register_uploaded_tool(agent)
     _register_superset_tools(agent)
     _register_surface_tools(agent)
     return agent

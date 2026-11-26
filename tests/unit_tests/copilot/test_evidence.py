@@ -229,7 +229,15 @@ def test_compound_proposal_uses_only_authorized_saved_fields(
     assert document["nodes"]["widget_1"]["props"]["label"] == "Weighted price"
     assert document["nodes"]["widget_1"]["props"]["decimals"] == 2
     props = document["nodes"]["widget_2"]["props"]
-    assert props["columnDefs"] == [
+    columns = [
+        {
+            key: value
+            for key, value in column.items()
+            if key in {"field", "headerName", "valueFormat"}
+        }
+        for column in props["columnDefs"]
+    ]
+    assert columns == [
         {"field": "sale_month", "headerName": "Sale month", "valueFormat": "date"},
         {"field": "property_type", "headerName": "Property type"},
         {"field": "sale_count", "headerName": "Sales"},

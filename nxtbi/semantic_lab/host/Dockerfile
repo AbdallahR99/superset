@@ -20,6 +20,7 @@ ARG SUPERSET_BASE_IMAGE=nxtbi/superset-fork:copilot-localization-verified
 
 FROM ${SUPERSET_ASSETS_IMAGE} AS assets
 WORKDIR /app/superset-frontend
+COPY superset-frontend/packages/superset-core/src/dashboard/index.ts packages/superset-core/src/dashboard/index.ts
 COPY superset-frontend/packages/superset-core/src/widgets/ packages/superset-core/src/widgets/
 COPY superset-frontend/packages/superset-widgets/src/ packages/superset-widgets/src/
 COPY superset-frontend/src/core/dashboard/EmbedWidgetModal.tsx src/core/dashboard/EmbedWidgetModal.tsx
@@ -30,5 +31,8 @@ RUN npm run build > /tmp/semantic-lab-assets.log 2>&1 || { tail -n 100 /tmp/sema
 FROM ${SUPERSET_BASE_IMAGE}
 COPY --from=assets /app/superset/static/assets /app/superset/static/assets
 COPY --from=assets /app/superset/static/service-worker.js /app/superset/static/service-worker.js
+COPY --chown=superset:superset superset/commands/dashboard_v2/ /app/superset/commands/dashboard_v2/
+COPY --chown=superset:superset superset/commands/widget/ /app/superset/commands/widget/
 COPY --chown=superset:superset superset/copilot/ /app/superset/copilot/
+COPY --chown=superset:superset superset/dashboard_v2/ /app/superset/dashboard_v2/
 COPY --chown=superset:superset superset/widgets/ /app/superset/widgets/

@@ -430,6 +430,13 @@ def build_widget_query(
     }
     if binding.get("orderByDimension") is True and dimensions:
         query["orderby"] = [(dimension, True) for dimension in dimensions]
+    elif (
+        binding.get("orderByMetric") is True
+        and dimensions
+        and metrics
+        and isinstance(metrics[0], str)
+    ):
+        query["orderby"] = [(metrics[0], False)]
     return dataset_id, query, form_data
 
 

@@ -16,6 +16,7 @@
 # under the License.
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 from unittest.mock import MagicMock
@@ -40,8 +41,12 @@ from superset.commands.widget.saved import (
     CreateSavedWidgetCommand,
     UpdateSavedWidgetCommand,
 )
+from superset.connectors.sqla.models import SqlaTable, SqlMetric, TableColumn
 from superset.exceptions import SupersetSecurityException
+from superset.models.core import Database
+from superset.widgets.controls import DataBinding
 from superset.widgets.data import (
+    build_widget_query,
     FilterValidationError,
     props_dataset_id,
     resolved_filters_to_adhoc,
@@ -374,6 +379,92 @@ def test_data_and_values_commands_dispatch(mocker: MockerFixture) -> None:
 
     with pytest.raises(WidgetInvalidError):
         WidgetDataCommand({"id": "x"}, "not-a-list").run()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_order"),
+    [
+        ({}, [("sum__num", False)]),
+        ({"orderByDimension": True}, [("state", True)]),
+        ({"orderByMetric": False}, None),
+        ({"dimensions": []}, None),
+    ],
+)
+def test_ranked_query_round_trips_binding_and_applies_order_with_limit(
+    overrides: dict[str, Any], expected_order: list[tuple[str, bool]] | None
+) -> None:
+    binding = {
+        **BAR_PROPS["dataBinding"],
+        "orderByMetric": True,
+        "rowLimit": 12,
+        **overrides,
+    }
+    stored = DataBinding.model_validate(binding).model_dump(
+        by_alias=True, exclude_unset=True
+    )
+    assert stored == binding
+
+    _, query, _ = build_widget_query({"dataBinding": stored}, [])
+    assert query.get("orderby") == expected_order
+    assert query["row_limit"] == 12
+
+
+def test_ranked_query_does_not_use_an_adhoc_metric_as_an_ordering_key() -> None:
+    adhoc = {
+        "expressionType": "SIMPLE",
+        "aggregate": "SUM",
+        "column": {"column_name": "num"},
+    }
+    _, query, _ = build_widget_query(
+        {
+            "dataBinding": {
+                **BAR_PROPS["dataBinding"],
+                "metrics": [adhoc, "sum__num"],
+                "orderByMetric": True,
+            }
+        },
+        [],
+    )
+    assert query["metrics"] == [adhoc, "sum__num"]
+    assert "orderby" not in query
+
+
+def test_ranked_query_compiles_metric_order_before_limit() -> None:
+    _, query, _ = build_widget_query(
+        {
+            "dataBinding": {
+                **BAR_PROPS["dataBinding"],
+                "orderByMetric": True,
+                "rowLimit": 12,
+            }
+        },
+        [],
+    )
+    table = SqlaTable(
+        database=Database(database_name="db", sqlalchemy_uri="sqlite://"),
+        table_name="observations",
+        columns=[
+            TableColumn(column_name="state", type="TEXT"),
+            TableColumn(column_name="num", type="INTEGER"),
+        ],
+        metrics=[SqlMetric(metric_name="sum__num", expression="SUM(num)")],
+    )
+    statement = table.get_sqla_query(
+        columns=query["columns"],
+        metrics=query["metrics"],
+        filter=query["filters"],
+        extras=query["extras"],
+        orderby=query["orderby"],
+        row_limit=query["row_limit"],
+        is_timeseries=False,
+    ).sqla_query
+    with table.database.get_sqla_engine() as engine:
+        sql = str(
+            statement.compile(
+                dialect=engine.dialect, compile_kwargs={"literal_binds": True}
+            )
+        )
+    assert re.search(r"ORDER BY [^\n]+ DESC\s+LIMIT 12\b", sql, re.IGNORECASE)
 
 
 def test_guest_inline_props_accept_safe_shapes() -> None:

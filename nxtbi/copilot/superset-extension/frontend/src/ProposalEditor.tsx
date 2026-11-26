@@ -118,6 +118,7 @@ const labels = {
     unavailable: "Preview unavailable for this widget.",
     chartStyle: "Chart style",
     bar: "Bar chart",
+    "ranked-bar": "Ranked bars",
     line: "Line chart",
     scope: "Fixed filter",
     clearScope: "Remove filter",
@@ -155,6 +156,7 @@ const labels = {
     unavailable: "معاينة هذا العنصر غير متوفرة.",
     chartStyle: "نمط المخطط",
     bar: "مخطط أعمدة",
+    "ranked-bar": "أشرطة مرتبة",
     line: "مخطط خطي",
     scope: "عامل تصفية ثابت",
     clearScope: "إزالة عامل التصفية",
@@ -244,6 +246,10 @@ export default function ProposalEditor({
 }: ProposalEditorProps) {
   const text = labels[dashboardLocale(locale)];
   const canonicalLocale = proposal.contentLocale ?? dashboardLocale(locale);
+  const chartStyles =
+    proposal.dashboardType === "v1"
+      ? (["bar", "line"] as const)
+      : (["bar", "ranked-bar", "line"] as const);
   const previewDirection = previewLocale === "ar" ? "rtl" : "ltr";
   const widgetTitleMaxLength =
     proposal.dashboardType === "v1" && previewLocale === canonicalLocale ? 250 : 256;
@@ -372,6 +378,8 @@ export default function ProposalEditor({
           const translatedTitle = dashboardTitleIn(widget, canonicalLocale, previewLocale);
           const title = translatedTitle || widget.title;
           const titleLocale = translatedTitle ? previewLocale : canonicalLocale;
+          const displayType =
+            widget.type === "echarts" ? (widget.chartStyle ?? "bar") : widget.type;
           const preview =
             snapshot === widget &&
             widgetPreview({ ...widget, title }, selectedMetric?.d3format, previewFields);
@@ -379,7 +387,7 @@ export default function ProposalEditor({
             <article className="nxtbi-proposal-widget" key={index}>
               <header className="nxtbi-proposal-widget__header">
                 <h4>
-                  <bdi lang={title ? titleLocale : locale}>{title || text[widget.type]}</bdi>
+                  <bdi lang={title ? titleLocale : locale}>{title || text[displayType]}</bdi>
                 </h4>
                 {dataset && (
                   <p>
@@ -393,13 +401,23 @@ export default function ProposalEditor({
                 dir={previewDirection}
               >
                 {preview ? (
-                  <Widget
-                    type={preview.type}
-                    props={preview.props}
-                    showTitle={false}
-                    renderError={() => <p role="status">{text.unavailable}</p>}
-                    style={{ height: preview.type === "metric-tile" ? 88 : 236 }}
-                  />
+                  <div
+                    className="nxtbi-proposal-widget__canvas"
+                    data-preview={
+                      displayType === "ranked-bar"
+                        ? "bar"
+                        : displayType === "bar"
+                          ? undefined
+                          : displayType
+                    }
+                  >
+                    <Widget
+                      type={preview.type}
+                      props={preview.props}
+                      showTitle={false}
+                      renderError={() => <p role="status">{text.unavailable}</p>}
+                    />
+                  </div>
                 ) : (
                   <p role="status">
                     {dataset && widget.type === "echarts" && !dimensions.length
@@ -469,7 +487,10 @@ export default function ProposalEditor({
                       <select
                         value={widget.chartStyle ?? "bar"}
                         onChange={(event) => {
-                          const chartStyle = event.target.value === "line" ? "line" : "bar";
+                          const chartStyle = chartStyles.find(
+                            (style) => style === event.target.value,
+                          );
+                          if (!chartStyle) return;
                           const temporal = dataset?.columns.some(
                             (column) => column.column_name === widget.dimension && column.is_dttm,
                           );
@@ -481,8 +502,11 @@ export default function ProposalEditor({
                           });
                         }}
                       >
-                        <option value="bar">{text.bar}</option>
-                        <option value="line">{text.line}</option>
+                        {chartStyles.map((style) => (
+                          <option key={style} value={style}>
+                            {text[style]}
+                          </option>
+                        ))}
                       </select>
                     </label>
                   )}

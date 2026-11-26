@@ -71,6 +71,9 @@ export async function fetchQueryData(
   binding: DataBindingSpec,
   options: dashboardApi.FetchQueryDataOptions = {},
 ): Promise<QueryDataResult> {
+  const dimensions = (binding.dimensions ?? []).filter(
+    dimension => typeof dimension === 'string' && dimension !== '',
+  );
   const formData = {
     datasource: `${binding.datasetId}__table`,
     // Drop empty/blank inputs the schema-driven control panel can seed (an
@@ -80,9 +83,7 @@ export async function fetchQueryData(
     metrics: (binding.metrics ?? []).filter(
       metric => metric != null && metric !== '',
     ),
-    groupby: (binding.dimensions ?? []).filter(
-      dimension => typeof dimension === 'string' && dimension !== '',
-    ),
+    groupby: dimensions,
     adhoc_filters: (binding.filters ?? []).filter(
       filter =>
         filter != null &&
@@ -96,13 +97,18 @@ export async function fetchQueryData(
   } as unknown as QueryFormData;
 
   const queryContext = buildQueryContext(formData, query => {
-    const dimensions = binding.dimensions?.filter(dimension =>
-      Boolean(dimension),
-    );
-    if (!binding.orderByDimension || !dimensions?.length) return [query];
-    return [
-      { ...query, orderby: dimensions.map(dimension => [dimension, true]) },
-    ];
+    if (!dimensions.length) return [query];
+    if (binding.orderByDimension) {
+      return [
+        { ...query, orderby: dimensions.map(dimension => [dimension, true]) },
+      ];
+    }
+    const metric = binding.metrics?.[0];
+    return binding.orderByMetric === true &&
+      typeof metric === 'string' &&
+      metric.trim()
+      ? [{ ...query, orderby: [[metric, false]] }]
+      : [query];
   });
 
   let json: { result?: ChartDataResponseResult[] } | undefined;

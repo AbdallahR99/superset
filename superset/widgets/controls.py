@@ -136,6 +136,9 @@ class DataBinding(MetricControl):
     order_by_dimension: SkipJsonSchema[bool] = Field(
         default=False, alias="orderByDimension"
     )
+    order_by_metric: SkipJsonSchema[bool] = Field(
+        default=False, alias="orderByMetric", strict=True
+    )
     row_limit: int = Field(
         default=1000,
         ge=1,

@@ -35,7 +35,11 @@ from superset.copilot.services import delegated_mcp_token
 from superset.dashboard_v2.document import normalize_document
 from superset.dashboards.schemas import validate_json_metadata
 from superset.utils import json
-from superset.widgets.safety import column_defs_problem, MAX_COLUMN_TEXT_LENGTH
+from superset.widgets.safety import (
+    column_defs_problem,
+    echarts_option_problem,
+    MAX_COLUMN_TEXT_LENGTH,
+)
 
 
 def test_run_claims_are_bound_to_the_type_and_time() -> None:
@@ -100,6 +104,9 @@ def test_proposal_compiles_only_registered_data_references() -> None:
     assert props["echartsOptions"]["series"][0]["data"]["$bind"]["alias"] == (
         "purchase_total"
     )
+    assert props["echartsOptions"]["xAxis"]["type"] == "category"
+    assert props["echartsOptions"]["yAxis"]["type"] == "value"
+    assert "realtimeSort" not in props["echartsOptions"]["series"][0]
 
 
 def test_proposal_rejects_undeclared_fields() -> None:
@@ -179,11 +186,21 @@ def test_compound_table_headers_obey_native_column_rules() -> None:
         "columnDefs"
     ]
     assert column_defs_problem(columns) is None
-    assert columns == [
+    headers = [
+        {key: column[key] for key in ("field", "headerName")} for column in columns
+    ]
+    assert headers == [
         {"field": "sale_month", "headerName": "sale_month"},
         {"field": "count_sales", "headerName": long_label[:MAX_COLUMN_TEXT_LENGTH]},
         {"field": "weighted_price", "headerName": "Price"},
     ]
+    assert columns[0]["minWidth"] > columns[1]["minWidth"]
+    assert columns[0]["flex"] > columns[1]["flex"]
+    assert columns[0]["wrapText"]
+    assert columns[0]["autoHeight"]
+    assert all(
+        column["wrapHeaderText"] and column["autoHeaderHeight"] for column in columns
+    )
 
 
 @pytest.mark.parametrize(
@@ -301,11 +318,121 @@ def test_proposal_preserves_snapshot_filters_percentages_and_trend_order() -> No
     assert (props["percentage"], props["decimals"]) == (True, 1)
     trend_props = nodes["widget_5"]["props"]
     assert trend_props["dataBinding"]["orderByDimension"] is True
+    assert "orderByMetric" not in trend_props["dataBinding"]
     assert trend_props["echartsOptions"]["xAxis"]["data"]["$bind"]["format"] == "date"
-    assert trend_props["echartsOptions"]["series"][0]["type"] == "line"
+    series = trend_props["echartsOptions"]["series"][0]
+    assert (series["type"], series["smooth"], series["connectNulls"]) == (
+        "line",
+        False,
+        False,
+    )
+    assert series["showSymbol"]
+    assert series["symbolSize"] > 0
     assert percent_precision(".1%") == 1
     assert percent_precision("%") == 0
     assert percent_precision(",.0f") is None
+
+
+def test_analytical_dashboard_pairs_ranked_charts_in_proposal_order() -> None:
+    table = {
+        "type": "ag-grid-table",
+        "datasetId": 23,
+        "metrics": ["mean_price", "weighted_price"],
+        "dimensions": ["property_type"],
+    }
+    kpi = {"type": "metric-tile", "datasetId": 23, "metric": "mean_price"}
+    chart = {
+        "type": "echarts",
+        "datasetId": 23,
+        "metric": "weighted_price",
+        "dimension": "property_type",
+        "chartStyle": "ranked-bar",
+        "title": "Weighted price by property type",
+    }
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "Property prices",
+            "widgets": [table, kpi, chart, {**chart, "metric": "mean_price"}],
+            "summary": "The property types rank differently across the two measures.",
+        }
+    )
+    metadata = ProposalMetadata(
+        metric_formats={(23, "weighted_price"): ",.2f"},
+        metric_labels={(23, "weighted_price"): "Area-weighted price (AED/m²)"},
+    )
+
+    nodes = make_document(proposal, metadata)["nodes"]
+    assert nodes["root"]["children"] == [
+        "widget_1",
+        "widget_2",
+        "summary",
+        "widget_3",
+        "widget_4",
+    ]
+    assert nodes["widget_3"]["layout"] == nodes["widget_4"]["layout"]
+    assert nodes["widget_3"]["layout"]["colSpan"] == 12
+    props = nodes["widget_3"]["props"]
+    assert props["dataBinding"]["rowLimit"] == 12
+    assert props["dataBinding"]["orderByMetric"] is True
+    assert "orderByDimension" not in props["dataBinding"]
+    assert props["crossFilter"] is True
+    options = props["echartsOptions"]
+    assert echarts_option_problem(options) is None
+    assert options["xAxis"]["type"] == "value"
+    assert options["xAxis"]["minInterval"] == 0.01
+    assert options["yAxis"]["type"] == "category"
+    assert options["yAxis"]["inverse"] is True
+    assert options["yAxis"]["data"] == {
+        "$bind": {"source": "dimension", "alias": "property_type"}
+    }
+    assert options["series"][0]["realtimeSort"] is True
+    assert options["series"][0]["name"] == "Area-weighted price (AED/m²)"
+    assert options["series"][0]["data"] == {
+        "$bind": {"source": "metric", "alias": "weighted_price"}
+    }
+
+
+def test_chart_layout_keeps_separated_charts_and_legacy_bar_behavior() -> None:
+    chart = {
+        "type": "echarts",
+        "datasetId": 23,
+        "metric": "mean_price",
+        "dimension": "property_type",
+        "chartStyle": "bar",
+    }
+    table = {"type": "ag-grid-table", "datasetId": 23, "metric": "mean_price"}
+    payload = {
+        "title": "Property prices",
+        "widgets": [chart, table, chart, chart, chart],
+        "summary": "Property prices by category",
+    }
+    nodes = make_document(DashboardProposal.model_validate(payload))["nodes"]
+    assert nodes["root"]["children"] == [
+        "summary",
+        "widget_1",
+        "widget_2",
+        "widget_3",
+        "widget_4",
+        "widget_5",
+    ]
+    assert [
+        nodes[f"widget_{index}"]["layout"]["colSpan"] for index in (1, 3, 4, 5)
+    ] == [
+        24,
+        12,
+        12,
+        24,
+    ]
+    props = nodes["widget_1"]["props"]
+    assert props["dataBinding"]["rowLimit"] == 100
+    assert "orderByMetric" not in props["dataBinding"]
+
+    classic = {"title": "Property prices", "dashboardType": "v1", "widgets": [chart]}
+    assert DashboardProposal.model_validate(classic).widgets[0].chart_style == "bar"
+    with pytest.raises(ValidationError, match="ranked charts require Dashboard V2"):
+        DashboardProposal.model_validate(
+            {**classic, "widgets": [{**chart, "chartStyle": "ranked-bar"}]}
+        )
 
 
 def test_mcp_delegation_is_read_only_and_user_scoped() -> None:

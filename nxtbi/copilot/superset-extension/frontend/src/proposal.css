@@ -69,6 +69,23 @@
   color: var(--copilot-muted);
 }
 
+.nxtbi-proposal-widget__canvas {
+  min-inline-size: 0;
+  block-size: 17rem;
+}
+
+.nxtbi-proposal-widget__canvas[data-preview='metric-tile'] {
+  block-size: 5.5rem;
+}
+
+.nxtbi-proposal-widget__canvas[data-preview='ag-grid-table'] {
+  block-size: 18rem;
+}
+
+.nxtbi-proposal-widget__canvas[data-preview='bar'] {
+  block-size: 22rem;
+}
+
 .nxtbi-proposal-widget__settings {
   border-block-start: 1px solid var(--copilot-border);
 }

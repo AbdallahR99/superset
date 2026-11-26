@@ -78,6 +78,116 @@ interface PreviewFields {
   dimensions: ReadonlyMap<string, { label: string; temporal: boolean }>;
 }
 
+function chartOptions(
+  metric: string,
+  dimension: string,
+  metricLabel: string,
+  style: NonNullable<ProposedWidget['chartStyle']>,
+  title?: string,
+  d3format?: string,
+) {
+  if (style === 'bar') {
+    return {
+      animation: false,
+      ...(title && { title: { text: title } }),
+      grid: { left: 64, right: 24, bottom: 40, top: 48 },
+      tooltip: { trigger: 'axis', renderMode: 'richText' },
+      xAxis: {
+        type: 'category',
+        axisLabel: { hideOverlap: true },
+        data: { $bind: { source: 'dimension', alias: dimension } },
+      },
+      yAxis: { type: 'value' },
+      series: [
+        { type: 'bar', data: { $bind: { source: 'metric', alias: metric } } },
+      ],
+    };
+  }
+
+  const isTrend = style === 'line';
+  const fixedPrecision = d3format?.match(/^\$?,?\.([0-9]|10)f$/);
+  const minInterval = fixedPrecision
+    ? 10 ** -Number(fixedPrecision[1])
+    : /^,?d$/.test(d3format ?? '')
+      ? 1
+      : undefined;
+  const categoryAxis = {
+    type: 'category',
+    ...(isTrend ? {} : { inverse: true }),
+    axisLabel: {
+      fontSize: 11,
+      hideOverlap: true,
+      ...(isTrend ? {} : { width: 148, overflow: 'break' }),
+    },
+    data: {
+      $bind: {
+        source: 'dimension',
+        alias: dimension,
+        ...(isTrend && { format: 'date' }),
+      },
+    },
+  };
+  const valueAxis = {
+    type: 'value',
+    name: metricLabel,
+    nameLocation: 'middle',
+    nameGap: isTrend ? 54 : 32,
+    nameTextStyle: { width: 170, overflow: 'break' },
+    axisLabel: {
+      fontSize: 11,
+      ...(fixedPrecision &&
+        d3format?.startsWith('$') && { formatter: '${value}' }),
+    },
+    splitLine: {
+      lineStyle: {
+        color: { $bind: { source: 'theme', token: 'colorBorderSecondary' } },
+      },
+    },
+    ...(minInterval !== undefined && { minInterval }),
+  };
+
+  return {
+    animation: false,
+    ...(title && { title: { text: title } }),
+    aria: { enabled: true },
+    color: [{ $bind: { source: 'theme', token: 'colorPrimary' } }],
+    grid: {
+      left: 14,
+      right: 14,
+      top: 16,
+      bottom: 14,
+      outerBoundsMode: 'same',
+      outerBoundsContain: 'all',
+    },
+    legend: { show: false },
+    tooltip: {
+      trigger: 'axis',
+      renderMode: 'richText',
+      confine: true,
+      axisPointer: { type: isTrend ? 'line' : 'shadow' },
+    },
+    xAxis: isTrend ? categoryAxis : valueAxis,
+    yAxis: isTrend ? valueAxis : categoryAxis,
+    series: [
+      {
+        type: isTrend ? 'line' : 'bar',
+        name: metricLabel,
+        data: { $bind: { source: 'metric', alias: metric } },
+        ...(isTrend
+          ? {
+              showSymbol: true,
+              symbol: 'circle',
+              symbolSize: 7,
+              smooth: false,
+              connectNulls: false,
+              lineStyle: { width: 2.5 },
+            }
+          : { barMaxWidth: 24, realtimeSort: true }),
+      },
+    ],
+  };
+}
+
 export function widgetPreview(
   widget: ProposedWidget,
   d3format?: string,
@@ -85,6 +195,7 @@ export function widgetPreview(
 ): WidgetPreview | undefined {
   const { type, datasetId, title, chartStyle, filter } = widget;
   const isTrend = chartStyle === 'line';
+  const isRanked = type === 'echarts' && chartStyle === 'ranked-bar';
   const metric = widget.metric?.trim();
   const dimension = widget.dimension?.trim();
   const metrics = widget.metrics ?? (metric ? [metric] : []);
@@ -106,7 +217,8 @@ export function widgetPreview(
     datasetId,
     metrics,
     dimensions,
-    rowLimit: 100,
+    rowLimit: isRanked ? 12 : 100,
+    ...(isRanked && { orderByMetric: true }),
     ...((isTrend || (widget.metrics && dimensions.length > 0)) && {
       orderByDimension: true,
     }),
@@ -146,12 +258,22 @@ export function widgetPreview(
           return {
             field,
             headerName: metadata?.label || field,
+            flex: 2,
+            minWidth: 160,
+            wrapHeaderText: true,
+            autoHeaderHeight: true,
+            wrapText: true,
+            autoHeight: true,
             ...(metadata?.temporal && { valueFormat: 'date' }),
           };
         }),
         ...metrics.map(field => ({
           field,
           headerName: fields?.metrics.get(field) || field,
+          flex: 1,
+          minWidth: 132,
+          wrapHeaderText: true,
+          autoHeaderHeight: true,
         })),
       ];
       return {
@@ -170,30 +292,14 @@ export function widgetPreview(
         props: {
           dataBinding,
           crossFilter: !isTrend,
-          echartsOptions: {
-            animation: false,
-            ...(title?.trim() && { title: { text: title.trim() } }),
-            grid: { left: 64, right: 24, bottom: 40, top: 48 },
-            tooltip: { trigger: 'axis', renderMode: 'richText' },
-            xAxis: {
-              type: 'category',
-              axisLabel: { hideOverlap: true },
-              data: {
-                $bind: {
-                  source: 'dimension',
-                  alias: dimension,
-                  ...(isTrend && { format: 'date' }),
-                },
-              },
-            },
-            yAxis: { type: 'value' },
-            series: [
-              {
-                type: chartStyle ?? 'bar',
-                data: { $bind: { source: 'metric', alias: metric } },
-              },
-            ],
-          },
+          echartsOptions: chartOptions(
+            metric,
+            dimension,
+            fields?.metrics.get(metric) || metric,
+            chartStyle ?? 'bar',
+            title?.trim(),
+            d3format,
+          ),
         },
       };
     default:

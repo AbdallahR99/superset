@@ -296,6 +296,8 @@ export interface DataBindingSpec {
   filters?: Record<string, unknown>[];
   /** Sort by the selected grouping columns in ascending order. */
   orderByDimension?: boolean;
+  /** Sort grouped rows by the first saved metric descending, unless ordered by dimension. */
+  orderByMetric?: boolean;
   rowLimit?: number;
 }
 

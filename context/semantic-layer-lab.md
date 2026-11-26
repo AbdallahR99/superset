@@ -549,23 +549,63 @@ price for `Unknown`. The persisted note explained April's zero sales and one
 registration. The browser rerun corrected a locator that assumed the grid
 cell was an immediate child of a row. No dashboard edits were needed.
 
-The loopback preview is `http://127.0.0.1:55502/dashboard/v2/1/`. The
-`copilot/nxtbi-lifecycle-e98231b10b044ed3977e2c7b3fd70692/` benchmark folder
-contains `full-exact-prompt-verified.json`, the published screenshot, and the
-local preview sign-in and cleanup files. The preview ran Superset image
-`sha256:f5fee453dc441a085be6a79d44a0fef3d78af6ccca664e4f35b86d08d2ab1742`
-and agent image
-`sha256:3f057df6527b9fbff9075621cf3b06aca932f00c3a315438f89ff9694417752b`.
-The MCP service passed its port 5008 readiness probe. The fixture inherits
-an image health check for the web port, which Docker reports against the MCP
-container even though that port is unused there.
-
-Regression checks passed for 723 Superset Python tests, 757 frontend Jest
-tests, 32 extension tests, and 78 agent tests. The extension type check,
-scoped mypy, and Ruff checks passed.
+The final loopback preview is `http://127.0.0.1:60418/dashboard/v2/1/`. The
+`copilot/nxtbi-lifecycle-b77976e33b6d4aa6bd60be46ce46a180/` benchmark folder
+contains `full-exact-prompt-verified.json`, the published screenshot, and
+local sign-in and cleanup files.
 
 The BinxtGen preview and its disposable database were stopped. Dremio
 delegation remains deferred. The available configuration establishes
 one warehouse principal, and the verified server denied reads of its
 version and inbound impersonation settings. Two sanctioned warehouse
 test viewers and their governed test scope are still unavailable.
+
+### Analytical dashboards
+
+Natural-language requests against an uploaded dataset use the authorized
+evidence tools before making a proposal. The explicit draft action still
+offers a quick overview. For an open analytical brief, Copilot checks
+comparable saved measures, chooses charts that answer different questions,
+and leads with a measured finding, an applicable caveat, and a decision.
+When the request specifies the layout, Copilot preserves the requested
+widgets and fields. Chart-bearing V2 dashboards group the findings and
+charts in the order proposed, with the finding above the first chart.
+Ranked comparisons use an opt-in horizontal bar style. Both query paths
+order by the saved metric before applying the 12-category limit. Missing
+values remain blank. Ordinary bars retain their vertical layout and
+100-row limit. Chronological charts show points and preserve gaps for null
+observations. The preview uses the same native widgets and query bindings
+as the saved dashboard.
+
+The lab image copies the semantic dashboard and widget authoring, query,
+and reader-access code already mounted by the business-case runner. This
+keeps the standalone image aligned with the checked-out branch.
+
+The live pricing benchmark used the same six synthetic transactions and
+saved measures. After querying both measures, Copilot generated two ranked
+charts and explained the reversal. Villas averaged AED 570,000 per
+transaction against AED 380,000 for apartments. Apartments averaged
+AED 6,000/m² on an area-weighted basis against AED 2,714.29/m² for villas.
+The proposal recommended using price per square meter for area-based
+pricing and gathering more area-complete transactions before setting rates.
+The Unknown category kept its blank weighted result.
+
+Chromium approved and published the unchanged proposal, then reopened it in a
+new session. Both native queries matched the CSV oracle. Their SQL sorted by
+the saved metric descending before the limit. Canvas checks verified the
+displayed ranking in both charts. The pricing dashboard is at
+`http://127.0.0.1:57525/dashboard/v2/1/`. The benchmark artifacts, screenshot,
+and local sign-in details are under
+`copilot/nxtbi-lifecycle-8df4956ed11747a79c3a1f0a28f2d32e/`.
+
+Both final browser benchmarks ran Superset image
+`sha256:8c75bb4f15e759fc5a0804402e75e1ee2ece3868034813f2fb06222de0dea6ae`,
+agent image
+`sha256:d6f1638930647d524a322ad717c98cd9ba3dd8886fc6208b6a441e848ce9a717`,
+and extension entry `remoteEntry.9d949975784bde7a0ecd.js`. The MCP service
+passed its port 5008 readiness probe. The fixture inherits a web-port health
+check for the MCP container, where that port is unused.
+
+Regression checks passed for 731 Superset Python tests, 762 frontend Jest
+tests, 34 extension tests, and 80 agent tests. The extension type check and
+the repository's changed-file checks passed.
