@@ -447,3 +447,72 @@ two intended reader scopes through the actual BI query and cache path
 before publishing tenant-sensitive data. A fixed warehouse credential
 executes on behalf of that principal even when the UI authenticates viewers
 individually. [Dremio principal function](https://docs.dremio.com/current/reference/sql/sql-functions/functions/QUERY_USER/)
+
+## Live Dremio and generation comparison
+
+The live read-only probe uses the official ADBC Flight SQL driver 1.13.0,
+certificate verification, and the already configured HTTPS route for the
+development warehouse. `SELECT 1, QUERY_USER()` passed and the effective
+user matched the provided account. Direct TCP timed out. The account
+received access denials for `sys.version` and `sys.options`, including
+the read scoped to `exec.impersonation.inbound_policies`. Flight SQL
+version metadata was also unavailable. The separately pinned
+`sqlalchemy-dremio==3.0.4` dialect loaded and compiled SQL but its live
+connection raised `FlightInternalError` before executing a query.
+
+Run with `adbc-driver-flightsql==1.13.0`,
+`adbc-driver-manager==1.13.0`, `python-dotenv`, and PyArrow available.
+Use the existing local connection file containing `DREMIO_HOST`,
+`DREMIO_PORT`, `DREMIO_USER`, and `DREMIO_PASSWORD`.
+
+~~~bash
+python nxtbi/semantic_lab/dremio_connection_probe.py --env-file <local-config> --configured-proxy
+~~~
+
+Use `--configured-proxy` where the workstation already has an explicit
+HTTPS route for the endpoint. Output reports only the authentication
+check and metadata visibility. Delegation status remains unknown.
+End-to-end
+delegation and RLS need the deployed Dremio version, two approved
+warehouse viewer identities, the governed test view, and expected rows
+for each identity. Then compare fresh sessions with `QUERY_USER()` and
+the same bounded fixture query.
+[Dremio inbound impersonation](https://docs.dremio.com/current/security/rbac/inbound-impersonation/) ·
+[OAuth impersonation](https://docs.dremio.com/current/reference/api/oauth-token/#exchange-a-pat-with-user-impersonation) ·
+[Flight JDBC compatibility](https://docs.dremio.com/current/release-notes/arrow-flight-sql-jdbc/)
+
+### Same-input generation
+
+Both applications used the same synthetic six-row CSV, English prompt,
+and live OpenAI-compatible model. The request asked for four headline
+measures, two distinct date-role tables with three measures each, and the
+April comparison. The test used freshly generated results and recorded
+semantic gaps before making any edits.
+
+- **BinxtGen** generated a plan and published version 2. Nine reader
+  visual queries returned successfully. The AED 400,000 arithmetic
+  mean was correct. Records per property (1.5) replaced transaction
+  count (6), distinct property count (4) was missing, and the AED
+  456,000 mean of eligible prices replaced AED 3,737.70/m². The tables
+  kept both distinct date roles, the Unknown row, and April's zero
+  sales versus one registration. Their rows were unsorted and they used
+  the substitute count and weighted measures.
+- **Copilot** ran the exact request against native CSV upload and again
+  against the same data with approved saved measures. The latter
+  returned the four exact headline values in authenticated tool results.
+  Both AG-UI streams ended before a proposal could be saved. The
+  generic proposal contract accepts one measure and one optional group-by
+  per table, so it cannot represent the exact two requested tables.
+- **Copilot reduced control** generated four KPI tiles and two count-only
+  date tables with a separate English-only prompt. Native approval,
+  publication and a fresh Chromium reopen succeeded. All six chart
+  requests returned HTTP 200 and the four raw KPI values matched the
+  fixture. The weighted display rounded to 3,738. Dates were rendered
+  as epoch milliseconds, neither table was chronological, and both
+  omitted the requested property-type and multi-measure breakdown. The
+  first reduced attempt rejected the model's string-encoded optional
+  translations. The successful retry omitted that optional argument.
+
+The artifacts, input hashes, and individual run outcomes are under
+`nxtbi/out/semantic-lab/generation-parity/`. The published fixture was
+synthetic. Warehouse viewer delegation remains a separate live check.
