@@ -20,29 +20,96 @@ import type { DashboardProposal } from '@nxtbi/copilot';
 
 export type ProposedWidget = DashboardProposal['widgets'][number];
 
+export function changeWidgetDataset(
+  widget: ProposedWidget,
+  datasetId: number,
+): ProposedWidget {
+  return widget.metrics === undefined
+    ? {
+        ...widget,
+        datasetId,
+        metric: '',
+        dimension: undefined,
+        filter: undefined,
+      }
+    : { ...widget, datasetId, metrics: [], dimensions: [], filter: undefined };
+}
+
+export function changeWidgetType(
+  widget: ProposedWidget,
+  type: ProposedWidget['type'],
+): ProposedWidget {
+  if (widget.type === type) return widget;
+  if (widget.metrics === undefined) {
+    return {
+      ...widget,
+      type,
+      chartStyle: type === 'echarts' ? widget.chartStyle : undefined,
+    };
+  }
+  const { metrics, dimensions, ...shared } = widget;
+  return {
+    ...shared,
+    type,
+    metric: metrics[0] ?? '',
+    dimension: type === 'echarts' ? dimensions[0] : undefined,
+  };
+}
+
+export function expandTableFields(widget: ProposedWidget): ProposedWidget {
+  if (widget.type !== 'ag-grid-table' || widget.metrics !== undefined)
+    return widget;
+  const { metric, dimension, ...shared } = widget;
+  return {
+    ...shared,
+    type: 'ag-grid-table',
+    metrics: metric ? [metric] : [],
+    dimensions: dimension ? [dimension] : [],
+  };
+}
+
 interface WidgetPreview {
   type: ProposedWidget['type'];
   props: Record<string, unknown>;
 }
 
+interface PreviewFields {
+  metrics: ReadonlyMap<string, string>;
+  dimensions: ReadonlyMap<string, { label: string; temporal: boolean }>;
+}
+
 export function widgetPreview(
   widget: ProposedWidget,
   d3format?: string,
+  fields?: PreviewFields,
 ): WidgetPreview | undefined {
   const { type, datasetId, title, chartStyle, filter } = widget;
   const isTrend = chartStyle === 'line';
-  const metric = widget.metric.trim();
+  const metric = widget.metric?.trim();
   const dimension = widget.dimension?.trim();
-  if (!Number.isSafeInteger(datasetId) || datasetId < 1 || !metric) {
+  const metrics = widget.metrics ?? (metric ? [metric] : []);
+  const dimensions =
+    widget.dimensions ??
+    (dimension && type !== 'metric-tile' ? [dimension] : []);
+  if (!Number.isSafeInteger(datasetId) || datasetId < 1 || !metrics.length) {
+    return undefined;
+  }
+  if (
+    widget.metrics &&
+    new Set([...metrics, ...dimensions]).size !==
+      metrics.length + dimensions.length
+  ) {
     return undefined;
   }
 
   const dataBinding = {
     datasetId,
-    metrics: [metric],
-    dimensions: dimension && type !== 'metric-tile' ? [dimension] : [],
+    metrics,
+    dimensions,
     rowLimit: 100,
-    ...(isTrend && { orderByDimension: true }),
+    ...((isTrend || (widget.metrics && dimensions.length > 0)) && {
+      orderByDimension: true,
+    }),
     ...(filter && {
       filters: [
         {
@@ -58,23 +125,46 @@ export function widgetPreview(
 
   switch (type) {
     case 'metric-tile': {
+      if (!metric) return undefined;
       const precision = d3format?.match(/^(?:\.([0-9]))?%$/);
+      const fixedPrecision = d3format?.match(/^,?\.([0-9]|10)f$/);
       return {
         type,
         props: {
           dataBinding,
-          label: title?.trim() || metric,
-          ...(precision && {
-            percentage: true,
-            decimals: Number(precision[1] ?? 0),
-          }),
+          label: title?.trim() || fields?.metrics.get(metric) || metric,
+          ...(precision
+            ? { percentage: true, decimals: Number(precision[1] ?? 0) }
+            : fixedPrecision && { decimals: Number(fixedPrecision[1]) }),
         },
       };
     }
-    case 'ag-grid-table':
-      return { type, props: { dataBinding, label: title?.trim() } };
+    case 'ag-grid-table': {
+      const columnDefs = widget.metrics && [
+        ...dimensions.map(field => {
+          const metadata = fields?.dimensions.get(field);
+          return {
+            field,
+            headerName: metadata?.label || field,
+            ...(metadata?.temporal && { valueFormat: 'date' }),
+          };
+        }),
+        ...metrics.map(field => ({
+          field,
+          headerName: fields?.metrics.get(field) || field,
+        })),
+      ];
+      return {
+        type,
+        props: {
+          dataBinding,
+          label: title?.trim(),
+          ...(columnDefs && { columnDefs }),
+        },
+      };
+    }
     case 'echarts':
-      if (!dimension) return undefined;
+      if (!metric || !dimension) return undefined;
       return {
         type,
         props: {

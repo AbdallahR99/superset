@@ -267,6 +267,7 @@ SAFE_COLUMNS: list[dict[str, Any]] = [
         "cellDataType": "number",
     },
     {"field": "num"},
+    {"field": "event_date", "valueFormat": "date"},
 ]
 
 UNSAFE_COLUMNS: dict[str, Any] = {
@@ -288,6 +289,8 @@ UNSAFE_COLUMNS: dict[str, Any] = {
     "text_as_boolean": [{"field": "a", "hide": "true"}],
     "unknown_column_type": [{"field": "a", "type": "myCustomType"}],
     "unknown_cell_data_type": [{"field": "a", "cellDataType": "currency"}],
+    "unknown_value_format": [{"field": "a", "valueFormat": "custom"}],
+    "non_text_value_format": [{"field": "a", "valueFormat": {"type": "date"}}],
     "unknown_sort": [{"field": "a", "sort": "sideways"}],
     "unknown_pinned": [{"field": "a", "pinned": "top"}],
     "not_an_object": ["field"],

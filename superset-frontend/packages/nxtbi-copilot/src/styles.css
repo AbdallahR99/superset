@@ -365,6 +365,12 @@
   font-size: 0.85em;
 }
 
+.nxtbi-copilot__proposal-summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .nxtbi-copilot__proposal label,
 .nxtbi-copilot__draft-options label {
   display: grid;

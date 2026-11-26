@@ -340,6 +340,7 @@ AG_GRID_COLUMN_SETTINGS: dict[str, type] = {
     "headerTooltip": str,
     "type": str,
     "cellDataType": str,
+    "valueFormat": str,
     "sort": str,
     "pinned": str,
     "width": float,
@@ -368,6 +369,7 @@ _COLUMN_ENUMS: dict[str, frozenset[str]] = {
     "cellDataType": frozenset(
         {"text", "number", "boolean", "date", "dateString", "object"}
     ),
+    "valueFormat": frozenset({"date"}),
     "sort": frozenset({"asc", "desc"}),
     "pinned": frozenset({"left", "right"}),
 }
@@ -402,6 +404,7 @@ def column_defs_problem(column_defs: Any, root: str = "columnDefs") -> str | Non
     getters and formatters, class rules, tooltips built from expressions and
     every other setting AG Grid would execute or mount are not on the list
     and are therefore rejected by name.
+    ``valueFormat`` names a built-in display format implemented by the widget.
 
     :param column_defs: The ``columnDefs`` value of a widget definition
     :param root: The name the list is reported under in messages

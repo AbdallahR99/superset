@@ -265,7 +265,8 @@ class AgGridTableControls(WidgetControls):
         title="Column definitions",
         description=(
             "Optional AG Grid column definitions. When empty, columns are "
-            "derived one-to-one from the query result columns."
+            "derived one-to-one from the query result columns. "
+            'Use "valueFormat": "date" to display a temporal column in UTC.'
         ),
         json_schema_extra={"x-control": "code", "x-language": "json"},
     )

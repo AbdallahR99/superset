@@ -24,6 +24,7 @@ import {
   Typography,
 } from '@superset-ui/core/components';
 import type { ColDef } from '@superset-ui/core/components/ThemedAgGridReact';
+import { formatTemporalLabel } from '../resolveBindings';
 import type { WidgetProps } from '../types';
 import { useWidgetData } from '../useWidgetData';
 
@@ -51,7 +52,7 @@ function deriveColumnDefs(columns: string[]): ColDef[] {
  *
  * Text settings (`headerName`, `headerTooltip`) are drawn by AG Grid as text
  * content. Settings that name something (`type`, `cellDataType`, `sort`,
- * `pinned`) accept only the built-in names below.
+ * `pinned`, `valueFormat`) accept only the built-in names below.
  *
  * The settings are the ones the server accepts when a definition is stored
  * (`AG_GRID_COLUMN_SETTINGS` in `superset/widgets/safety.py`), which refuses
@@ -71,6 +72,7 @@ export const COLUMN_SETTINGS: Readonly<Record<string, ColumnRule>> = {
   headerTooltip: 'string',
   type: ['numericColumn', 'rightAligned'],
   cellDataType: ['text', 'number', 'boolean', 'date', 'dateString', 'object'],
+  valueFormat: ['date'],
   sort: ['asc', 'desc'],
   pinned: ['left', 'right'],
   width: 'number',
@@ -118,7 +120,13 @@ function columnSetting(
   return value;
 }
 
-/** The declarative part of authored column definitions; see {@link COLUMN_SETTINGS}. */
+function formatDateCell({ value }: { value?: unknown }): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(formatTemporalLabel(value))
+    : '';
+}
+
+/** Build grid columns from the allowed settings in authored definitions. */
 export function sanitizeColumnDefs(columnDefs: unknown): ColDef[] {
   if (!Array.isArray(columnDefs)) return [];
   return columnDefs.slice(0, MAX_COLUMNS).flatMap(entry => {
@@ -134,9 +142,14 @@ export function sanitizeColumnDefs(columnDefs: unknown): ColDef[] {
     });
     // A column that names no field shows nothing; schema-driven forms seed
     // such empty entries.
-    return typeof column.field === 'string' && column.field !== ''
-      ? [column as ColDef]
-      : [];
+    if (typeof column.field !== 'string' || column.field === '') return [];
+
+    const { valueFormat, ...gridColumn } = column;
+    // AG Grid still sorts by the raw field.
+    if (valueFormat === 'date') {
+      return [{ ...gridColumn, valueFormatter: formatDateCell } as ColDef];
+    }
+    return [gridColumn as ColDef];
   });
 }
 

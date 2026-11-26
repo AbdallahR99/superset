@@ -39,7 +39,14 @@ from pydantic_ai.models.test import TestModel as PydanticTestModel
 
 from . import app as service
 from .app import _search_arguments, create_app, Settings
-from .contracts import MAX_BODY_BYTES, parse_run, sign_context, verify_gateway_token
+from .contracts import (
+    DashboardDraft,
+    MAX_BODY_BYTES,
+    parse_run,
+    sign_context,
+    verify_gateway_token,
+    WidgetDraft,
+)
 from .surfaces import CATALOG_ID, dashboard_evidence, SurfaceDraft
 
 SIGNING_KEY = "standalone-unit-test-fixture-" * 2
@@ -757,6 +764,58 @@ def test_model_filter_decodes_only_strict_objects() -> None:
             adapter.validate_python(invalid)
 
 
+def test_model_title_translations_decode_only_supported_captions() -> None:
+    """Only the model boundary can normalize a provider-encoded title object."""
+    adapter = TypeAdapter(service.ModelTitleTranslations)
+    assert adapter.validate_python('{"en":"Demo"}').en == "Demo"
+    for invalid in ('{"en":23}', '{"fr":"Demo"}', "[]", "null"):
+        with pytest.raises(ValidationError):
+            adapter.validate_python(invalid)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"type": "metric-tile"},
+        {"metric": "population"},
+        {"dimension": None},
+        {"metrics": []},
+        {"metrics": [f"metric{i}" for i in range(7)]},
+        {"dimensions": [f"group{i}" for i in range(5)]},
+        {"dimensions": ["population"]},
+        {"dimensions": None},
+    ],
+)
+def test_grouped_table_requires_exclusive_bounded_arrays(
+    overrides: dict[str, object],
+) -> None:
+    """Reject incompatible widget types and invalid grouped bindings."""
+    valid = {
+        "type": "ag-grid-table",
+        "datasetId": 5,
+        "metrics": ["population"],
+        "dimensions": [],
+    }
+    assert WidgetDraft.model_validate(valid).dimensions == []
+    with pytest.raises(ValidationError):
+        WidgetDraft.model_validate({**valid, **overrides})
+
+
+def test_dashboard_summary_is_bounded() -> None:
+    """Only a short, nonempty summary is forwarded with a dashboard draft."""
+    draft = {
+        "title": "Demo dashboard",
+        "widgets": [{"type": "metric-tile", "datasetId": 5, "metric": "population"}],
+    }
+    summary = "a" * 512
+    assert (
+        DashboardDraft.model_validate({**draft, "summary": summary}).summary == summary
+    )
+    for invalid in (" ", summary + "a"):
+        with pytest.raises(ValidationError):
+            DashboardDraft.model_validate({**draft, "summary": invalid})
+
+
 @pytest.mark.parametrize("distinct_dates", [31, 634])
 @pytest.mark.parametrize("use_shortcut", [False, True])
 def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
@@ -1222,7 +1281,12 @@ def test_upload_shortcut_requires_a_signed_superset_dataset() -> None:
     assert attempts == [{"name": "get_dataset", "arguments": {"id": 47}}]
 
 
-def test_superset_proposal_requires_separate_approval() -> None:
+@pytest.mark.parametrize(
+    ("grouped", "validated"), [(False, True), (True, True), (True, False)]
+)
+def test_superset_proposal_requires_separate_approval(
+    grouped: bool, validated: bool
+) -> None:
     """The only Superset write-like tool yields a preview and opaque approval token."""
     headers = _authorization("superset")
     widgets = [
@@ -1240,7 +1304,36 @@ def test_superset_proposal_requires_separate_approval() -> None:
             "chartStyle": "line",
         },
     ]
-    request_arguments = {"title": "Demo dashboard", "widgets": widgets}
+    request_arguments: dict[str, object] = {
+        "title": "Demo dashboard",
+        "widgets": widgets,
+    }
+    tool_arguments = request_arguments
+    if grouped:
+        table = {
+            "type": "ag-grid-table",
+            "datasetId": 5,
+            "metrics": ["population", "households"],
+            "dimensions": ["district", "year"],
+            "title": "Population and households",
+        }
+        captions = {"en": "Demo dashboard", "ar": "لوحة تجريبية"}
+        table_captions = {"en": "Population and households", "ar": "السكان والأسر"}
+        summary = "The data compares population and households by district and year."
+        tool_arguments = {
+            "title": "Demo dashboard",
+            "title_translations": json.dumps(captions),
+            "summary": summary,
+            "widgets": [{**table, "titleTranslations": json.dumps(table_captions)}],
+        }
+        request_arguments = {
+            "title": "Demo dashboard",
+            "titleTranslations": captions,
+            "summary": summary,
+            "contentLocale": "en",
+            "dashboardType": "v2",
+            "widgets": [{**table, "titleTranslations": table_captions}],
+        }
     approval = "opaque-gateway-approval-token"
     calls: list[object] = []
 
@@ -1249,6 +1342,8 @@ def test_superset_proposal_requires_separate_approval() -> None:
         assert request.method == "POST"
         assert request.headers["Authorization"] == headers["Authorization"]
         calls.append(json.loads(request.content))
+        if not validated:
+            return httpx.Response(200, json=request_arguments)
         return httpx.Response(
             200, json={**request_arguments, "approvalToken": approval}
         )
@@ -1271,13 +1366,15 @@ def test_superset_proposal_requires_separate_approval() -> None:
             for part in msg.parts:
                 if isinstance(part, ToolReturnPart):
                     assert approval not in str(part.content)
+                    if grouped:
+                        raise RuntimeError("The provider failed during follow-up text")
                     yield "Approval is required."
                     return
         yield {
             0: DeltaToolCall(
                 name="propose_dashboard",
                 tool_call_id="proposal-tool",
-                json_args=json.dumps(request_arguments),
+                json_args=json.dumps(tool_arguments),
             )
         }
 
@@ -1287,12 +1384,28 @@ def test_superset_proposal_requires_separate_approval() -> None:
         tool_transport=httpx.MockTransport(gateway),
     )
     with TestClient(app) as client:
-        events = _events(client.post("/ag-ui", headers=headers, json=REQUEST))
+        response = client.post("/ag-ui", headers=headers, json=REQUEST)
     assert calls == [{"name": "propose_dashboard", "arguments": request_arguments}]
+    if not validated:
+        assert response.status_code == 200
+        assert "RUN_ERROR" in response.text
+        assert "RUN_FINISHED" not in response.text
+        assert "nxtbi.dashboard-proposal" not in response.text
+        return
+    events = _events(response)
     proposal = next(event for event in events if event["type"] == "CUSTOM")
     assert proposal["name"] == "nxtbi.dashboard-proposal"
     assert proposal["value"] == {**request_arguments, "approvalToken": approval}
     assert all(approval not in str(event) for event in events if event is not proposal)
+    result = next(event for event in events if event["type"] == "TOOL_CALL_RESULT")
+    assert result["toolCallId"] == "proposal-tool"
+    assert json.loads(result["content"])["status"] == "pending_approval"
+    assert events.index(proposal) < events.index(result) < len(events) - 1
+    assert events[-1]["outcome"]["type"] == "success"
+    assert (
+        any(event.get("delta") == "Approval is required." for event in events)
+        != grouped
+    )
 
 
 def test_unrecognized_a2ui_action_is_rejected() -> None:

@@ -337,11 +337,15 @@ function canApprove(proposal: DashboardProposal): boolean {
   return (
     Boolean(proposal.title.trim()) &&
     proposal.widgets.every(widget =>
-      Boolean(
-        widget.metric.trim() &&
-        (widget.type !== 'echarts' || widget.dimension?.trim()),
-      ),
-    )
+      widget.metrics === undefined
+        ? Boolean(
+            widget.metric.trim() &&
+            (widget.type !== 'echarts' || widget.dimension?.trim()),
+          )
+        : widget.metrics.length > 0 &&
+          widget.metrics.every(metric => metric.trim()),
+    ) &&
+    readProposal(proposal) !== undefined
   );
 }
 
@@ -1143,6 +1147,11 @@ export function CopilotPanel({
                       ? copy.classic
                       : copy.builder}
                   </span>
+                )}
+                {proposal.summary && (
+                  <p className="nxtbi-copilot__proposal-summary" dir="auto">
+                    {proposal.summary}
+                  </p>
                 )}
                 {proposal.contentLocale && (
                   <label>

@@ -16,15 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { SupersetProvider, Widget } from "@apache-superset/widgets";
 import {
   dashboardLocale,
   dashboardTitleIn,
   editDashboardTitle,
+  MAX_TABLE_DIMENSIONS,
+  MAX_TABLE_METRICS,
 } from "@nxtbi/copilot";
 import type { DashboardContentLocale, DashboardProposal } from "@nxtbi/copilot";
-import { widgetPreview } from "./widgetPreview";
+import {
+  changeWidgetDataset,
+  changeWidgetType,
+  expandTableFields,
+  widgetPreview,
+} from "./widgetPreview";
 import type { ProposedWidget } from "./widgetPreview";
 import "./proposal.css";
 
@@ -101,6 +108,10 @@ const labels = {
     widgetTitle: "Widget title",
     metric: "Metric",
     dimension: "Dimension",
+    expandTable: "Add table metrics and dimensions",
+    addMetric: "Add a metric",
+    addDimension: "Add a dimension",
+    removeField: "Remove this field",
     dataset: "Dataset",
     refresh: "Refresh previews",
     idle: "Choose a metric and any required dimension to preview this widget.",
@@ -134,6 +145,10 @@ const labels = {
     widgetTitle: "عنوان العنصر",
     metric: "المقياس",
     dimension: "البُعد",
+    expandTable: "إضافة مقاييس وأبعاد للجدول",
+    addMetric: "إضافة مقياس",
+    addDimension: "إضافة بُعد",
+    removeField: "إزالة هذا الحقل",
     dataset: "مجموعة البيانات",
     refresh: "تحديث المعاينات",
     idle: "اختر مقياسًا وأي بُعد مطلوب لمعاينة هذا العنصر.",
@@ -148,6 +163,76 @@ const labels = {
     echarts: "مخطط",
   },
 };
+
+interface FieldSlotsProps {
+  values: string[];
+  options: { name: string; label: string }[];
+  label: string;
+  addLabel: string;
+  emptyLabel: string;
+  removeLabel: string;
+  max: number;
+  required?: boolean;
+  onChange: (values: string[]) => void;
+}
+
+function FieldSlots({
+  values,
+  options,
+  label,
+  addLabel,
+  emptyLabel,
+  removeLabel,
+  max,
+  required,
+  onChange,
+}: FieldSlotsProps) {
+  const id = useId();
+  const canAdd = values.length < max && options.some((option) => !values.includes(option.name));
+  const slots = canAdd || (required && !values.length) ? [...values, ""] : values;
+  return slots.map((value, index) => {
+    const isRequired = required && index === 0;
+    const available = value ? options : options.filter((option) => !values.includes(option.name));
+    const controlId = `${id}-${index}`;
+    return (
+      <div key={index} className="nxtbi-proposal-widget__field">
+        <label htmlFor={controlId}>
+          {value || isRequired ? `${label} ${index + 1}` : addLabel}
+        </label>
+        <select
+          id={controlId}
+          value={value}
+          required={isRequired}
+          disabled={!options.length && (!value || (isRequired && values.length === 1))}
+          onChange={(event) => {
+            const name = event.target.value;
+            if (!name) {
+              onChange(values.filter((_, position) => position !== index));
+              return;
+            }
+            const next = [...values];
+            const previousIndex = next.indexOf(name);
+            if (previousIndex !== -1) next[previousIndex] = value;
+            next[index] = name;
+            onChange(next);
+          }}
+        >
+          <option value="" disabled={!value || (isRequired && values.length === 1)}>
+            {value ? removeLabel : emptyLabel}
+          </option>
+          {value && !available.some((option) => option.name === value) && (
+            <option value={value}>{value}</option>
+          )}
+          {available.map((option) => (
+            <option key={option.name} value={option.name}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  });
+}
 
 export default function ProposalEditor({
   proposal,
@@ -209,12 +294,10 @@ export default function ProposalEditor({
     }
     return () => controller.abort();
   }, [base, ids, retry]);
-  const updateWidget = (index: number, patch: Partial<ProposedWidget>) => {
+  const updateWidget = (index: number, next: ProposedWidget) => {
     onChange({
       ...proposal,
-      widgets: proposal.widgets.map((widget, offset) =>
-        offset === index ? { ...widget, ...patch } : widget,
-      ),
+      widgets: proposal.widgets.map((widget, offset) => (offset === index ? next : widget)),
     });
   };
 
@@ -271,6 +354,19 @@ export default function ProposalEditor({
               (column) => column.groupby && (widget.chartStyle !== "line" || column.is_dttm),
             ) ?? [];
           const selectedMetric = metrics.find((item) => item.metric_name === widget.metric);
+          const metricOptions = metrics.map((item) => ({
+            name: item.metric_name,
+            label: item.verbose_name || item.metric_name,
+          }));
+          const dimensionOptions = dimensions.map((item) => ({
+            name: item.column_name,
+            label: item.verbose_name || item.column_name,
+            temporal: item.is_dttm,
+          }));
+          const previewFields = {
+            metrics: new Map(metricOptions.map((option) => [option.name, option.label])),
+            dimensions: new Map(dimensionOptions.map((option) => [option.name, option])),
+          };
           const datasets = catalog?.result ?? [];
           const snapshot = previewWidgets[index];
           const translatedTitle = dashboardTitleIn(widget, canonicalLocale, previewLocale);
@@ -278,7 +374,7 @@ export default function ProposalEditor({
           const titleLocale = translatedTitle ? previewLocale : canonicalLocale;
           const preview =
             snapshot === widget &&
-            widgetPreview({ ...widget, title }, selectedMetric?.d3format);
+            widgetPreview({ ...widget, title }, selectedMetric?.d3format, previewFields);
           return (
             <article className="nxtbi-proposal-widget" key={index}>
               <header className="nxtbi-proposal-widget__header">
@@ -325,12 +421,10 @@ export default function ProposalEditor({
                     <select
                       value={widget.datasetId}
                       onChange={(event) => {
-                        updateWidget(index, {
-                          datasetId: Number(event.target.value),
-                          metric: "",
-                          dimension: undefined,
-                          filter: undefined,
-                        });
+                        updateWidget(
+                          index,
+                          changeWidgetDataset(widget, Number(event.target.value)),
+                        );
                       }}
                     >
                       {!datasets.some((item) => item.id === widget.datasetId) && (
@@ -359,11 +453,7 @@ export default function ProposalEditor({
                       value={widget.type}
                       onChange={(event) => {
                         const type = widgetTypes.find((value) => value === event.target.value);
-                        if (type)
-                          updateWidget(index, {
-                            type,
-                            chartStyle: type === "echarts" ? widget.chartStyle : undefined,
-                          });
+                        if (type) updateWidget(index, changeWidgetType(widget, type));
                       }}
                     >
                       {widgetTypes.map((type) => (
@@ -384,6 +474,7 @@ export default function ProposalEditor({
                             (column) => column.column_name === widget.dimension && column.is_dttm,
                           );
                           updateWidget(index, {
+                            ...widget,
                             chartStyle,
                             dimension:
                               chartStyle === "line" && !temporal ? undefined : widget.dimension,
@@ -416,55 +507,100 @@ export default function ProposalEditor({
                       }
                     />
                   </label>
-                  <label>
-                    {text.metric}{" "}
-                    <select
-                      value={widget.metric}
-                      required
-                      disabled={!metrics.length}
-                      onChange={(event) => updateWidget(index, { metric: event.target.value })}
-                    >
-                      <option value="" disabled>
-                        {text.chooseMetric}
-                      </option>
-                      {widget.metric &&
-                        !metrics.some((item) => item.metric_name === widget.metric) && (
-                          <option value={widget.metric}>{widget.metric}</option>
+                  {widget.metrics !== undefined ? (
+                    <>
+                      <FieldSlots
+                        values={widget.metrics}
+                        options={metricOptions.filter(
+                          (option) => !widget.dimensions.includes(option.name),
                         )}
-                      {metrics.map((item) => (
-                        <option key={item.metric_name} value={item.metric_name}>
-                          {item.verbose_name || item.metric_name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {widget.type !== "metric-tile" && (
-                    <label>
-                      {text.dimension}{" "}
-                      <select
-                        value={widget.dimension ?? ""}
-                        disabled={!dimensions.length}
-                        required={widget.type === "echarts"}
-                        onChange={(event) =>
-                          updateWidget(index, {
-                            dimension: event.target.value || undefined,
-                          })
+                        label={text.metric}
+                        addLabel={text.addMetric}
+                        emptyLabel={text.chooseMetric}
+                        removeLabel={text.removeField}
+                        max={MAX_TABLE_METRICS}
+                        required
+                        onChange={(values) => updateWidget(index, { ...widget, metrics: values })}
+                      />
+                      <FieldSlots
+                        values={widget.dimensions}
+                        options={dimensionOptions.filter(
+                          (option) => !widget.metrics?.includes(option.name),
+                        )}
+                        label={text.dimension}
+                        addLabel={text.addDimension}
+                        emptyLabel={text.chooseDimension}
+                        removeLabel={text.removeField}
+                        max={MAX_TABLE_DIMENSIONS}
+                        onChange={(values) =>
+                          updateWidget(index, { ...widget, dimensions: values })
                         }
-                      >
-                        <option value="" disabled={widget.type === "echarts"}>
-                          {widget.type === "echarts" ? text.chooseDimension : text.noDimension}
-                        </option>
-                        {widget.dimension &&
-                          !dimensions.some((item) => item.column_name === widget.dimension) && (
-                            <option value={widget.dimension}>{widget.dimension}</option>
-                          )}
-                        {dimensions.map((item) => (
-                          <option key={item.column_name} value={item.column_name}>
-                            {item.verbose_name || item.column_name}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <label>
+                        {text.metric}{" "}
+                        <select
+                          value={widget.metric}
+                          required
+                          disabled={!metrics.length}
+                          onChange={(event) =>
+                            updateWidget(index, { ...widget, metric: event.target.value })
+                          }
+                        >
+                          <option value="" disabled>
+                            {text.chooseMetric}
                           </option>
-                        ))}
-                      </select>
-                    </label>
+                          {widget.metric &&
+                            !metrics.some((item) => item.metric_name === widget.metric) && (
+                              <option value={widget.metric}>{widget.metric}</option>
+                            )}
+                          {metrics.map((item) => (
+                            <option key={item.metric_name} value={item.metric_name}>
+                              {item.verbose_name || item.metric_name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {widget.type !== "metric-tile" && (
+                        <label>
+                          {text.dimension}{" "}
+                          <select
+                            value={widget.dimension ?? ""}
+                            disabled={!dimensions.length}
+                            required={widget.type === "echarts"}
+                            onChange={(event) =>
+                              updateWidget(index, {
+                                ...widget,
+                                dimension: event.target.value || undefined,
+                              })
+                            }
+                          >
+                            <option value="" disabled={widget.type === "echarts"}>
+                              {widget.type === "echarts" ? text.chooseDimension : text.noDimension}
+                            </option>
+                            {widget.dimension &&
+                              !dimensions.some((item) => item.column_name === widget.dimension) && (
+                                <option value={widget.dimension}>{widget.dimension}</option>
+                              )}
+                            {dimensions.map((item) => (
+                              <option key={item.column_name} value={item.column_name}>
+                                {item.verbose_name || item.column_name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {widget.type === "ag-grid-table" && proposal.dashboardType !== "v1" && (
+                        <button
+                          type="button"
+                          onClick={() => updateWidget(index, expandTableFields(widget))}
+                        >
+                          {text.expandTable}
+                        </button>
+                      )}
+                    </>
                   )}
                   {widget.filter && (
                     <div>
@@ -474,7 +610,7 @@ export default function ProposalEditor({
                       </bdi>{" "}
                       <button
                         type="button"
-                        onClick={() => updateWidget(index, { filter: undefined })}
+                        onClick={() => updateWidget(index, { ...widget, filter: undefined })}
                       >
                         {text.clearScope}
                       </button>

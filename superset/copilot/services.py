@@ -45,8 +45,8 @@ from superset.copilot.contracts import (
     GetArguments,
     ListArguments,
     make_document,
-    percent_precision,
     ProfileArguments,
+    ProposalMetadata,
     ProposalWidget,
     ToolRequest,
 )
@@ -432,7 +432,7 @@ def aggregate_dataset(args: AggregateArguments) -> dict[str, Any]:
 
 def _validate_widget_columns(widget: ProposalWidget, dataset: SqlaTable) -> None:
     """Validate each analytical use against the registered dataset column flags."""
-    if widget.dimension and widget.dimension not in {
+    if set(widget.dimension_names) - {
         column.column_name for column in dataset.columns if column.groupby
     }:
         raise ValueError("Choose a groupable dataset column.")
@@ -446,10 +446,35 @@ def _validate_widget_columns(widget: ProposalWidget, dataset: SqlaTable) -> None
         raise ValueError("Choose a temporal dataset column for a line chart.")
 
 
+def _collect_widget_metadata(
+    widget: ProposalWidget, dataset: SqlaTable, metadata: ProposalMetadata
+) -> None:
+    """Validate a widget's dataset bindings and record trusted display metadata."""
+    saved_metrics = {metric.metric_name: metric for metric in dataset.metrics}
+    for name in widget.metric_names:
+        if (metric := saved_metrics.get(name)) is None:
+            raise ValueError("Choose an existing dataset metric.")
+        key = (widget.dataset_id, name)
+        if metric.verbose_name:
+            metadata.metric_labels[key] = metric.verbose_name
+        if metric.d3format:
+            metadata.metric_formats[key] = metric.d3format
+    _validate_widget_columns(widget, dataset)
+    if widget.dimensions:
+        columns = {column.column_name: column for column in dataset.columns}
+        for name in widget.dimensions:
+            column = columns[name]
+            key = (widget.dataset_id, name)
+            if column.verbose_name:
+                metadata.dimension_labels[key] = column.verbose_name
+            if column.is_dttm:
+                metadata.temporal_dimensions.add(key)
+
+
 def validate_proposal_references(
     proposal: DashboardProposal,
-) -> dict[tuple[int, str], int]:
-    """Verify persisted dataset references and return saved percentage precision."""
+) -> ProposalMetadata:
+    """Verify every persisted dataset reference and collect its display metadata."""
     if not security_manager.can_access("can_write", "Dashboard"):
         raise CopilotAccessError("The current user cannot create dashboards.")
     if proposal.dashboard_type == "v1" and not security_manager.can_access(
@@ -459,7 +484,7 @@ def validate_proposal_references(
     if not user_can_view_data_model_metadata():
         raise CopilotAccessError("The requested dataset metadata is unavailable.")
     datasets: dict[int, SqlaTable] = {}
-    percentages: dict[tuple[int, str], int] = {}
+    metadata = ProposalMetadata()
     for widget in proposal.widgets:
         if proposal.dashboard_type == "v1" and len(widget.title or "") > 250:
             raise ValueError("Classic chart titles must be at most 250 characters.")
@@ -469,25 +494,13 @@ def validate_proposal_references(
                 raise CopilotAccessError("The requested dataset is unavailable.")
             dataset.raise_for_access()
             datasets[widget.dataset_id] = dataset
-        dataset = datasets[widget.dataset_id]
-        metric = next(
-            (item for item in dataset.metrics if item.metric_name == widget.metric),
-            None,
-        )
-        if metric is None:
-            raise ValueError("Choose an existing dataset metric.")
-        if (
-            widget.type == "metric-tile"
-            and (precision := percent_precision(metric.d3format)) is not None
-        ):
-            percentages[(widget.dataset_id, widget.metric)] = precision
-        _validate_widget_columns(widget, dataset)
-    return percentages
+        _collect_widget_metadata(widget, datasets[widget.dataset_id], metadata)
+    return metadata
 
 
 def validate_dashboard_proposal(proposal: DashboardProposal) -> dict[str, Any]:
     """Compile validated references and invoke the normal V2 authoring guard."""
-    percentages = validate_proposal_references(proposal)
-    document = normalize_and_validate(make_document(proposal, percentages))
+    metadata = validate_proposal_references(proposal)
+    document = normalize_and_validate(make_document(proposal, metadata))
     raise_for_document_authoring(document, None)
     return document

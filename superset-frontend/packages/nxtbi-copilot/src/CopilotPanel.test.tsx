@@ -22,6 +22,7 @@ import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
 import { BASIC_A2UI_CATALOG_ID } from './a2ui';
 import { CopilotPanel } from './CopilotPanel';
+import { readProposal } from './contracts';
 import type {
   CopilotHost,
   CopilotUploadedDataset,
@@ -427,6 +428,95 @@ test('keeps proposal format, canonical titles, and bindings when previewing and 
     { ...proposal, titleTranslations: { ar: 'تقرير الميزانية' } },
     expect.any(AbortSignal),
   );
+});
+
+test('reviews a plain-text summary and saves all compound fields after title edits', async () => {
+  const user = userEvent.setup();
+  const proposal: DashboardProposal = {
+    title: 'Transaction activity',
+    dashboardType: 'v2',
+    approvalToken: 'test-token',
+    summary: '<strong>Average value rose in May</strong>',
+    widgets: [
+      {
+        type: 'ag-grid-table',
+        datasetId: 1,
+        metrics: ['avg_value', 'transaction_count'],
+        dimensions: ['month', 'category'],
+      },
+      { type: 'metric-tile', datasetId: 1, metric: 'transaction_count' },
+    ],
+  };
+  jest.mocked(readAgUiEvents).mockImplementationOnce(async function* () {
+    yield { type: 'CUSTOM', name: 'nxtbi.dashboard-proposal', value: proposal };
+    yield { type: 'RUN_FINISHED' };
+  });
+  const approve = jest
+    .fn()
+    .mockResolvedValue({ id: 8, url: '/dashboard/v2/8/' });
+  render(
+    <CopilotPanel
+      host={{ context: () => ({}), run: async () => new Response(), approve }}
+    />,
+  );
+  await user.type(
+    screen.getByRole('textbox', { name: 'Ask Copilot' }),
+    'Review transactions',
+  );
+  await user.click(screen.getByRole('button', { name: 'Send' }));
+  const summary = await screen.findByText(proposal.summary!);
+  expect(summary).toHaveTextContent(proposal.summary!);
+  expect(summary.querySelector('strong')).toBeNull();
+  const title = screen.getByRole('textbox', { name: 'Dashboard title' });
+  await user.clear(title);
+  await user.type(title, 'Reviewed activity');
+  await user.click(screen.getByRole('button', { name: 'Review and save' }));
+  expect(approve).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'Save dashboard' }));
+  expect(approve).toHaveBeenCalledWith(
+    { ...proposal, title: 'Reviewed activity' },
+    expect.any(AbortSignal),
+  );
+  const saved = approve.mock.calls[0][0] as DashboardProposal;
+  expect(saved.widgets[0]).not.toHaveProperty('metric');
+  expect(saved.widgets[0]).not.toHaveProperty('dimension');
+});
+
+test('rejects mixed bindings, partial arrays, and V2-only fields in Classic proposals', () => {
+  const proposal = {
+    title: 'Review',
+    approvalToken: 'test-token',
+    dashboardType: 'v2',
+  };
+  const table = {
+    type: 'ag-grid-table',
+    datasetId: 1,
+    metrics: ['count'],
+    dimensions: [],
+  };
+  expect(readProposal({ ...proposal, widgets: [table] })).toMatchObject({
+    widgets: [table],
+  });
+  for (const widget of [
+    { ...table, metric: 'total' },
+    { ...table, dimension: null },
+    { ...table, metrics: [] },
+    { ...table, dimensions: undefined },
+    { ...table, dimensions: ['count'] },
+    { ...table, type: 'metric-tile' },
+    {
+      ...table,
+      metrics: ['one', 'two', 'three', 'four', 'five', 'six', 'seven'],
+    },
+  ]) {
+    expect(readProposal({ ...proposal, widgets: [widget] })).toBeUndefined();
+  }
+  expect(
+    readProposal({ ...proposal, dashboardType: 'v1', widgets: [table] }),
+  ).toBeUndefined();
+  expect(
+    readProposal({ ...proposal, summary: 'a'.repeat(513), widgets: [table] }),
+  ).toBeUndefined();
 });
 
 test('reviews caption-only suggestions before applying them to an existing draft', async () => {

@@ -93,13 +93,15 @@
   border: 0;
 }
 
-.nxtbi-proposal-widget__settings label {
+.nxtbi-proposal-widget__settings label,
+.nxtbi-proposal-widget__field {
   display: grid;
   gap: 0.15rem;
   min-inline-size: 0;
 }
 
-.nxtbi-proposal-widget__settings label :is(input, select) {
+.nxtbi-proposal-widget__settings label :is(input, select),
+.nxtbi-proposal-widget__field select {
   min-inline-size: 0;
   max-inline-size: 100%;
 }

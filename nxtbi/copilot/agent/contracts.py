@@ -43,6 +43,12 @@ Caption = Annotated[
 ]
 CaptionText = Annotated[str, StringConstraints(max_length=256)]
 CaptionList = Annotated[list[CaptionText | None], Field(min_length=1, max_length=9)]
+DatasetFieldId = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
+]
+DashboardSummary = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
+]
 
 
 class GatewayClaims(BaseModel):
@@ -88,8 +94,12 @@ class WidgetDraft(BaseModel):
     dataset_id: Annotated[
         int, Field(alias="datasetId", strict=True, gt=0, le=2_147_483_647)
     ]
-    metric: LABEL
+    metric: LABEL | None = None
     dimension: LABEL | None = None
+    metrics: list[DatasetFieldId] | None = Field(
+        default=None, min_length=1, max_length=6
+    )
+    dimensions: list[DatasetFieldId] | None = Field(default=None, max_length=4)
     chart_style: Literal["bar", "line"] | None = Field(default=None, alias="chartStyle")
     filter: DatasetFilter | None = None
     title: LABEL | None = None
@@ -98,10 +108,27 @@ class WidgetDraft(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_chart_style(self) -> WidgetDraft:
-        """Only an ECharts widget can choose its chart style."""
+    def validate_bindings(self) -> WidgetDraft:
+        """Allow one scalar measure or a complete grouped table binding."""
         if self.chart_style is not None and self.type != "echarts":
             raise ValueError("chartStyle requires an echarts widget.")
+        if not ({"metrics", "dimensions"} & self.model_fields_set):
+            if self.metric is None:
+                raise ValueError("A widget requires a saved metric.")
+            return self
+        if (
+            self.type != "ag-grid-table"
+            or self.metrics is None
+            or self.dimensions is None
+            or {"metric", "dimension"} & self.model_fields_set
+        ):
+            raise ValueError(
+                "Supply both metrics and dimensions only on an ag-grid-table, "
+                "and omit metric and dimension."
+            )
+        field_names = [*self.metrics, *self.dimensions]
+        if len(set(field_names)) != len(field_names):
+            raise ValueError("Select distinct metrics and dimensions.")
         return self
 
 
@@ -111,11 +138,19 @@ class DashboardDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     title: LABEL
     widgets: Annotated[list[WidgetDraft], Field(min_length=1, max_length=8)]
+    summary: DashboardSummary | None = None
     title_translations: TitleTranslations | None = Field(
         default=None, alias="titleTranslations"
     )
     content_locale: ContentLocale | None = Field(default=None, alias="contentLocale")
     dashboard_type: DashboardType | None = Field(default=None, alias="dashboardType")
+
+    @property
+    def requires_dashboard_v2(self) -> bool:
+        """Identify draft features available only in Dashboard V2."""
+        return self.summary is not None or any(
+            w.metrics is not None for w in self.widgets
+        )
 
 
 class DashboardProposal(DashboardDraft):

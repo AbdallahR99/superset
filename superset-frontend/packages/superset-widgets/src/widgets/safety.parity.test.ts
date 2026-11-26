@@ -106,3 +106,20 @@ test('the column settings kept are exactly the ones the server stores, with the 
       .map(key => [key, typeOf(key)]),
   ).toEqual([...server].sort(([left], [right]) => (left < right ? -1 : 1)));
 });
+
+test('the allowed column setting names match the server enums', () => {
+  const match = /^_COLUMN_ENUMS: [^=]+= \{([\s\S]*?)^\}/m.exec(SERVER_RULES);
+  if (!match) throw new Error('_COLUMN_ENUMS was not found in safety.py');
+
+  const server = Object.fromEntries(
+    [...match[1].matchAll(/"(\w+)": frozenset\(\s*\{([^}]*)\}/g)].map(
+      ([, key, values]) => [key, quoted(values).sort()],
+    ),
+  );
+  const client = Object.fromEntries(
+    Object.entries(COLUMN_SETTINGS)
+      .filter(([, rule]) => typeof rule !== 'string')
+      .map(([key, values]) => [key, [...values].sort()]),
+  );
+  expect(client).toEqual(server);
+});

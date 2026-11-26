@@ -16,6 +16,7 @@
 # under the License.
 
 import secrets
+from typing import Any
 
 import jwt
 import pytest
@@ -26,6 +27,7 @@ from superset.copilot.contracts import (
     DashboardProposal,
     make_document,
     percent_precision,
+    ProposalMetadata,
     sign_claims,
     verify_claims,
 )
@@ -33,6 +35,7 @@ from superset.copilot.services import delegated_mcp_token
 from superset.dashboard_v2.document import normalize_document
 from superset.dashboards.schemas import validate_json_metadata
 from superset.utils import json
+from superset.widgets.safety import column_defs_problem, MAX_COLUMN_TEXT_LENGTH
 
 
 def test_run_claims_are_bound_to_the_type_and_time() -> None:
@@ -116,6 +119,145 @@ def test_proposal_rejects_undeclared_fields() -> None:
         )
 
 
+def test_compound_proposal_preserves_native_bindings_and_summary() -> None:
+    summary = "April had **2 sales** across the three observed months."
+    payload = {
+        "title": "Sales",
+        "summary": summary,
+        "widgets": [
+            {
+                "type": "ag-grid-table",
+                "datasetId": 23,
+                "metrics": ["count_sales", "weighted_price"],
+                "dimensions": ["sale_month", "property_type"],
+            }
+        ],
+    }
+    proposal = DashboardProposal.model_validate(payload)
+    widget = proposal.widgets[0]
+    assert widget.metric_names == ["count_sales", "weighted_price"]
+    assert widget.dimension_names == ["sale_month", "property_type"]
+    assert proposal.model_dump(by_alias=True, exclude_unset=True) == payload
+
+    nodes = make_document(proposal)["nodes"]
+    assert nodes["root"]["children"] == ["widget_1", "summary"]
+    assert nodes["widget_1"]["props"]["dataBinding"] == {
+        "datasetId": 23,
+        "dimensions": ["sale_month", "property_type"],
+        "metrics": ["count_sales", "weighted_price"],
+        "orderByDimension": True,
+        "rowLimit": 100,
+    }
+    assert nodes["summary"]["type"] == "markdown"
+    assert nodes["summary"]["props"] == {"content": summary}
+
+
+def test_compound_table_headers_obey_native_column_rules() -> None:
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "Sales",
+            "widgets": [
+                {
+                    "type": "ag-grid-table",
+                    "datasetId": 23,
+                    "metrics": ["count_sales", "weighted_price"],
+                    "dimensions": ["sale_month"],
+                }
+            ],
+        }
+    )
+    long_label = "A" * (MAX_COLUMN_TEXT_LENGTH + 1)
+    metadata = ProposalMetadata(
+        dimension_labels={(23, "sale_month"): "<b>Sale month</b>"},
+        metric_labels={
+            (23, "count_sales"): long_label,
+            (23, "weighted_price"): "Price",
+        },
+    )
+
+    columns = make_document(proposal, metadata)["nodes"]["widget_1"]["props"][
+        "columnDefs"
+    ]
+    assert column_defs_problem(columns) is None
+    assert columns == [
+        {"field": "sale_month", "headerName": "sale_month"},
+        {"field": "count_sales", "headerName": long_label[:MAX_COLUMN_TEXT_LENGTH]},
+        {"field": "weighted_price", "headerName": "Price"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"metric": "count_sales"},
+        {"dimension": None},
+        {"type": "metric-tile"},
+        {"type": "echarts"},
+        {"metrics": []},
+        {"metrics": ["count_sales"] * 7},
+        {"metrics": ["count_sales", "count_sales"]},
+        {"metrics": ["sale_month"]},
+        {"metrics": [{"expressionType": "SQL"}]},
+        {"dimensions": ["sale_month"] * 5},
+        {"dimensions": ["sale_month", "sale_month"]},
+        {"dimensions": None},
+    ],
+)
+def test_compound_proposal_rejects_ambiguous_or_invalid_bindings(
+    changes: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        DashboardProposal.model_validate(
+            {
+                "title": "Sales",
+                "widgets": [
+                    {
+                        "type": "ag-grid-table",
+                        "datasetId": 23,
+                        "metrics": ["count_sales"],
+                        "dimensions": ["sale_month"],
+                        **changes,
+                    }
+                ],
+            }
+        )
+
+
+def test_summary_and_compound_table_are_v2_only() -> None:
+    widget = {
+        "type": "ag-grid-table",
+        "datasetId": 23,
+        "metrics": ["count_sales"],
+        "dimensions": [],
+    }
+    proposal = DashboardProposal.model_validate({"title": "Sales", "widgets": [widget]})
+    binding = make_document(proposal)["nodes"]["widget_1"]["props"]["dataBinding"]
+    assert binding["dimensions"] == []
+    assert "orderByDimension" not in binding
+
+    for extra in (
+        {"dashboardType": "v1", "widgets": [widget]},
+        {
+            "dashboardType": "v1",
+            "summary": "April sales",
+            "widgets": [
+                {"type": "metric-tile", "datasetId": 23, "metric": "count_sales"}
+            ],
+        },
+        {"summary": "x" * 513},
+        {"summary": "  "},
+        {
+            "widgets": [
+                {key: value for key, value in widget.items() if key != "dimensions"}
+            ]
+        },
+    ):
+        with pytest.raises(ValidationError):
+            DashboardProposal.model_validate(
+                {"title": "Sales", "widgets": [widget], **extra}
+            )
+
+
 def test_proposal_preserves_snapshot_filters_percentages_and_trend_order() -> None:
     kpis = [
         {
@@ -141,7 +283,8 @@ def test_proposal_preserves_snapshot_filters_percentages_and_trend_order() -> No
     proposal = DashboardProposal.model_validate(
         {"title": "Population", "widgets": [*kpis, trend]}
     )
-    nodes = make_document(proposal, {(23, "female_share"): 1})["nodes"]
+    metadata = ProposalMetadata(metric_formats={(23, "female_share"): ".1%"})
+    nodes = make_document(proposal, metadata)["nodes"]
     assert [nodes[f"widget_{index}"]["layout"]["colSpan"] for index in range(1, 5)] == [
         6
     ] * 4

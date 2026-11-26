@@ -30,6 +30,8 @@ from superset.commands.dashboard.exceptions import DashboardCreateFailedError
 from superset.copilot.contracts import (
     ContentLocale,
     DashboardProposal,
+    percent_precision,
+    ProposalMetadata,
     ProposalWidget,
     TitleTranslations,
 )
@@ -285,7 +287,7 @@ def save_classic_dashboard(
 def create_classic_dashboard(
     proposal: DashboardProposal,
     approval_uuid: UUID,
-    percentages: dict[tuple[int, str], int],
+    metadata: ProposalMetadata,
 ) -> tuple[int, bool]:
     """Compile a validated table-backed proposal and save it atomically."""
     return save_classic_dashboard(
@@ -297,9 +299,14 @@ def create_classic_dashboard(
             ClassicChartSpec(
                 datasource_id=widget.dataset_id,
                 datasource_type="table",
-                title=widget.title or widget.metric[:250],
+                title=widget.title or widget.metric_names[0][:250],
                 form_data=classic_chart_form_data(
-                    widget, percentages.get((widget.dataset_id, widget.metric))
+                    widget,
+                    percent_precision(
+                        metadata.metric_formats.get(
+                            (widget.dataset_id, widget.metric_names[0])
+                        )
+                    ),
                 ),
                 title_translations=widget.title_translations,
             )

@@ -18,6 +18,7 @@
 """Regression coverage for aggregate-only Copilot evidence."""
 
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +27,7 @@ from pydantic import ValidationError
 from superset.copilot import services
 from superset.copilot.contracts import (
     AggregateArguments,
+    DashboardProposal,
     ProfileArguments,
     ProposalWidget,
 )
@@ -157,6 +159,86 @@ def test_proposal_columns_require_temporal_and_filterable_metadata() -> None:
             ),
             dataset,
         )
+
+
+@pytest.mark.parametrize(
+    ("second_metric", "second_dimension", "error"),
+    [
+        ("weighted_price", "property_type", None),
+        ("unknown_metric", "property_type", "existing dataset metric"),
+        ("weighted_price", "private_notes", "groupable dataset column"),
+    ],
+)
+def test_compound_proposal_uses_only_authorized_saved_fields(
+    second_metric: str, second_dimension: str, error: str | None
+) -> None:
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "Sale months",
+            "widgets": [
+                {"type": "metric-tile", "datasetId": 23, "metric": "weighted_price"},
+                {
+                    "type": "ag-grid-table",
+                    "datasetId": 23,
+                    "metrics": ["sale_count", second_metric],
+                    "dimensions": ["sale_month", second_dimension],
+                },
+            ],
+        }
+    )
+    dataset = MagicMock(deleted_at=None)
+    dataset.metrics = [
+        SimpleNamespace(metric_name="sale_count", verbose_name="Sales", d3format=None),
+        SimpleNamespace(
+            metric_name="weighted_price", verbose_name="Weighted price", d3format=",.2f"
+        ),
+    ]
+    dataset.columns = [
+        SimpleNamespace(
+            column_name="sale_month",
+            verbose_name="Sale month",
+            groupby=True,
+            is_dttm=True,
+        ),
+        SimpleNamespace(
+            column_name="property_type",
+            verbose_name="Property type",
+            groupby=True,
+            is_dttm=False,
+        ),
+        SimpleNamespace(column_name="private_notes", groupby=False),
+    ]
+    database = MagicMock()
+    database.session.get.return_value = dataset
+    with (
+        patch.object(services, "db", database),
+        patch.object(services, "security_manager", MagicMock()),
+        patch.object(services, "user_can_view_data_model_metadata", return_value=True),
+        patch.object(services, "raise_for_document_authoring") as authorize,
+    ):
+        if error:
+            with pytest.raises(ValueError, match=error):
+                services.validate_dashboard_proposal(proposal)
+            authorize.assert_not_called()
+            dataset.raise_for_access.assert_called_once_with()
+            return
+        document = services.validate_dashboard_proposal(proposal)
+
+    authorize.assert_called_once_with(document, None)
+    dataset.raise_for_access.assert_called_once_with()
+    assert document["nodes"]["widget_1"]["props"]["label"] == "Weighted price"
+    assert document["nodes"]["widget_1"]["props"]["decimals"] == 2
+    props = document["nodes"]["widget_2"]["props"]
+    assert props["columnDefs"] == [
+        {"field": "sale_month", "headerName": "Sale month", "valueFormat": "date"},
+        {"field": "property_type", "headerName": "Property type"},
+        {"field": "sale_count", "headerName": "Sales"},
+        {"field": "weighted_price", "headerName": "Weighted price"},
+    ]
+    _, query, _ = services.build_widget_query(props, [])
+    assert query["metrics"] == ["sale_count", "weighted_price"]
+    assert query["columns"] == ["sale_month", "property_type"]
+    assert query["orderby"] == [("sale_month", True), ("property_type", True)]
 
 
 def test_temporal_profile_reports_observed_bounds_and_nulls() -> None:

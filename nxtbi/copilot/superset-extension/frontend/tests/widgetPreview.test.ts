@@ -18,7 +18,13 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { widgetPreview } from '../src/widgetPreview.ts';
+import {
+  changeWidgetDataset,
+  changeWidgetType,
+  expandTableFields,
+  widgetPreview,
+} from '../src/widgetPreview.ts';
+import type { ProposedWidget } from '../src/widgetPreview.ts';
 
 test('builds a metric tile binding without dimensions or executable options', () => {
   assert.deepEqual(
@@ -96,4 +102,110 @@ test('keeps an edited chart title in its declarative widget option', () => {
     (chart?.props.echartsOptions as { title: { text: string } }).title.text,
     'Reviewed chart',
   );
+});
+
+test('previews every compound table field in selection order with saved labels and date formatting', () => {
+  const preview = widgetPreview(
+    {
+      type: 'ag-grid-table',
+      datasetId: 10,
+      metrics: ['revenue', 'orders'],
+      dimensions: ['month', 'district'],
+    },
+    undefined,
+    {
+      metrics: new Map([
+        ['revenue', 'Revenue'],
+        ['month', 'Months counted'],
+      ]),
+      dimensions: new Map([
+        ['month', { label: 'Month', temporal: true }],
+        ['district', { label: 'District', temporal: false }],
+        ['revenue', { label: 'Revenue source', temporal: false }],
+      ]),
+    },
+  );
+  assert.deepEqual(preview?.props.dataBinding, {
+    datasetId: 10,
+    metrics: ['revenue', 'orders'],
+    dimensions: ['month', 'district'],
+    orderByDimension: true,
+    rowLimit: 100,
+  });
+  assert.deepEqual(preview?.props.columnDefs, [
+    { field: 'month', headerName: 'Month', valueFormat: 'date' },
+    { field: 'district', headerName: 'District' },
+    { field: 'revenue', headerName: 'Revenue' },
+    { field: 'orders', headerName: 'orders' },
+  ]);
+  assert.deepEqual(
+    widgetPreview({
+      type: 'ag-grid-table',
+      datasetId: 10,
+      metrics: ['revenue', 'orders'],
+      dimensions: [],
+    })?.props.dataBinding,
+    {
+      datasetId: 10,
+      metrics: ['revenue', 'orders'],
+      dimensions: [],
+      rowLimit: 100,
+    },
+  );
+});
+
+test('uses saved metric labels and fixed decimal precision for a metric tile', () => {
+  const preview = widgetPreview(
+    { type: 'metric-tile', datasetId: 10, metric: 'avg_amount' },
+    ',.2f',
+    {
+      metrics: new Map([['avg_amount', 'Average amount']]),
+      dimensions: new Map([
+        ['avg_amount', { label: 'Reference amount', temporal: false }],
+      ]),
+    },
+  );
+  assert.equal(preview?.props.label, 'Average amount');
+  assert.equal(preview?.props.decimals, 2);
+  assert.equal(preview?.props.percentage, undefined);
+});
+
+test('switching widget type or dataset leaves only the appropriate binding form', () => {
+  const scalar: ProposedWidget = {
+    type: 'ag-grid-table',
+    datasetId: 10,
+    metric: 'revenue',
+    dimension: 'month',
+    title: 'Revenue by month',
+    filter: { column: 'year', value: 2026 },
+  };
+  const expanded = expandTableFields(scalar);
+  assert.deepEqual(expanded, {
+    type: 'ag-grid-table',
+    datasetId: 10,
+    metrics: ['revenue'],
+    dimensions: ['month'],
+    title: scalar.title,
+    filter: scalar.filter,
+  });
+  assert.ok(expanded.metrics);
+  const compound: ProposedWidget = {
+    ...expanded,
+    type: 'ag-grid-table',
+    metrics: ['revenue', 'orders'],
+    dimensions: ['month', 'district'],
+  };
+  assert.deepEqual(changeWidgetType(compound, 'echarts'), {
+    ...scalar,
+    type: 'echarts',
+  });
+  const datasetChanged = changeWidgetDataset(compound, 20);
+  assert.deepEqual(datasetChanged, {
+    ...compound,
+    datasetId: 20,
+    metrics: [],
+    dimensions: [],
+    filter: undefined,
+  });
+  assert.equal(widgetPreview(datasetChanged), undefined);
 });

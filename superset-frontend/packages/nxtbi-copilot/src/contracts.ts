@@ -135,17 +135,36 @@ export function editDashboardTitle<T extends DashboardTitles>(
   };
 }
 
-export interface DashboardWidget extends DashboardTitles {
-  type: 'metric-tile' | 'ag-grid-table' | 'echarts';
+interface DashboardWidgetBase extends DashboardTitles {
   datasetId: number;
-  metric: string;
-  dimension?: string;
   chartStyle?: 'bar' | 'line';
   filter?: { column: string; value: string | number | boolean };
 }
 
+export type DashboardWidget = DashboardWidgetBase &
+  (
+    | {
+        type: 'metric-tile' | 'ag-grid-table' | 'echarts';
+        metric: string;
+        dimension?: string;
+        metrics?: never;
+        dimensions?: never;
+      }
+    | {
+        type: 'ag-grid-table';
+        metric?: never;
+        dimension?: never;
+        metrics: string[];
+        dimensions: string[];
+      }
+  );
+
+export const MAX_TABLE_METRICS = 6;
+export const MAX_TABLE_DIMENSIONS = 4;
+
 export interface DashboardProposal extends DashboardTitles {
   title: string;
+  summary?: string;
   widgets: DashboardWidget[];
   approvalToken: string;
   dashboardType?: DashboardType;
@@ -220,12 +239,50 @@ function validTranslations(
   );
 }
 
+function validFieldNames(value: unknown, max: number): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= max &&
+    value.every(
+      name => typeof name === 'string' && !!name.trim() && name.length <= 256,
+    ) &&
+    new Set(value.map(name => name.trim())).size === value.length
+  );
+}
+
+function validWidgetFields(widget: DashboardWidget): boolean {
+  if (widget.metrics !== undefined || widget.dimensions !== undefined) {
+    return (
+      widget.type === 'ag-grid-table' &&
+      widget.metric === undefined &&
+      widget.dimension === undefined &&
+      validFieldNames(widget.metrics, MAX_TABLE_METRICS) &&
+      widget.metrics.length > 0 &&
+      validFieldNames(widget.dimensions, MAX_TABLE_DIMENSIONS) &&
+      !widget.metrics.some(metric =>
+        widget.dimensions.some(dimension => dimension.trim() === metric.trim()),
+      )
+    );
+  }
+  return (
+    typeof widget.metric === 'string' &&
+    widget.metric.length <= 256 &&
+    (widget.dimension === undefined ||
+      (typeof widget.dimension === 'string' && widget.dimension.length <= 256))
+  );
+}
+
 export function readProposal(value: unknown): DashboardProposal | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const proposal = value as DashboardProposal;
   if (
     typeof proposal.title !== 'string' ||
     proposal.title.length > 256 ||
+    (proposal.summary !== undefined &&
+      (typeof proposal.summary !== 'string' ||
+        !proposal.summary.trim() ||
+        Array.from(proposal.summary).length > 512 ||
+        proposal.dashboardType === 'v1')) ||
     typeof proposal.approvalToken !== 'string' ||
     proposal.approvalToken.length > 2048 ||
     (proposal.dashboardType !== undefined &&
@@ -244,13 +301,10 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
         ['metric-tile', 'ag-grid-table', 'echarts'].includes(item.type) &&
         Number.isSafeInteger(item.datasetId) &&
         item.datasetId > 0 &&
-        typeof item.metric === 'string' &&
-        item.metric.length <= 256 &&
-        [item.dimension, item.title].every(
-          text =>
-            text === undefined ||
-            (typeof text === 'string' && text.length <= 256),
-        ) &&
+        validWidgetFields(item) &&
+        (proposal.dashboardType !== 'v1' || item.metrics === undefined) &&
+        (item.title === undefined ||
+          (typeof item.title === 'string' && item.title.length <= 256)) &&
         validTranslations(item.titleTranslations) &&
         (item.chartStyle === undefined ||
           (item.type === 'echarts' &&
@@ -272,32 +326,36 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
   }
   return {
     title: proposal.title,
+    ...(proposal.summary !== undefined && { summary: proposal.summary }),
     approvalToken: proposal.approvalToken,
     dashboardType: proposal.dashboardType,
     contentLocale: proposal.contentLocale,
     titleTranslations: proposal.titleTranslations && {
       ...proposal.titleTranslations,
     },
-    widgets: proposal.widgets.map(
-      ({
-        type,
+    widgets: proposal.widgets.map(widget => {
+      const { datasetId, title, chartStyle, filter, titleTranslations } =
+        widget;
+      const shared = {
         datasetId,
-        metric,
-        dimension,
-        title,
-        chartStyle,
-        filter,
-        titleTranslations,
-      }) => ({
-        type,
-        datasetId,
-        metric,
-        dimension,
         title,
         titleTranslations: titleTranslations && { ...titleTranslations },
         chartStyle,
         filter: filter && { column: filter.column, value: filter.value },
-      }),
-    ),
+      };
+      return widget.metrics === undefined
+        ? {
+            ...shared,
+            type: widget.type,
+            metric: widget.metric,
+            dimension: widget.dimension,
+          }
+        : {
+            ...shared,
+            type: widget.type,
+            metrics: [...widget.metrics],
+            dimensions: [...widget.dimensions],
+          };
+    }),
   };
 }

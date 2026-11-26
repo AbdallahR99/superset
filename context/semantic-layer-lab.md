@@ -516,3 +516,56 @@ semantic gaps before making any edits.
 The artifacts, input hashes, and individual run outcomes are under
 `nxtbi/out/semantic-lab/generation-parity/`. The published fixture was
 synthetic. Warehouse viewer delegation remains a separate live check.
+
+### Compound Dashboard V2 proposal
+
+Copilot can propose a native V2 table with up to six saved measures and four
+grouping columns in the order requested. The gateway checks every selected
+field on the authorized dataset and rechecks the references on approval.
+Tables sort by their grouping columns and display dates through the native
+UTC formatter while keeping query values and nulls intact. The preview
+carries the same fields, saved labels and fixed KPI precision. Optional
+summaries are persisted as native Markdown. A validated compound proposal
+ends the run after its approval event and tool result. Saving still requires
+explicit approval. Scalar proposals and their existing Classic path remain
+available.
+
+The lab image is built with `nxtbi/semantic_lab/host/Dockerfile`. It includes
+the current Copilot gateway and widget validators alongside the compiled
+host assets. Build the agent target from `nxtbi/copilot/Dockerfile` and
+package the Copilot extension with the existing commands in this lab.
+The live benchmark uses the original CSV and English prompt under
+`nxtbi/out/semantic-lab/generation-parity/` and the four approved measures
+registered on the disposable upload.
+
+The live model generated all four KPIs and both grouped tables from the exact
+benchmark prompt. Chromium reviewed and approved the unchanged proposal,
+published Dashboard V2 revision 1, and reopened it in a fresh session. All
+six native queries returned HTTP 200 and matched the independent CSV
+calculation. The dashboard showed six transactions, four distinct properties,
+an AED 400,000 arithmetic mean, and AED 3,737.70/m² weighted price. Each table
+showed six groups in chronological order, three metrics, and a blank weighted
+price for `Unknown`. The persisted note explained April's zero sales and one
+registration. The browser rerun corrected a locator that assumed the grid
+cell was an immediate child of a row. No dashboard edits were needed.
+
+The loopback preview is `http://127.0.0.1:55502/dashboard/v2/1/`. The
+`copilot/nxtbi-lifecycle-e98231b10b044ed3977e2c7b3fd70692/` benchmark folder
+contains `full-exact-prompt-verified.json`, the published screenshot, and the
+local preview sign-in and cleanup files. The preview ran Superset image
+`sha256:f5fee453dc441a085be6a79d44a0fef3d78af6ccca664e4f35b86d08d2ab1742`
+and agent image
+`sha256:3f057df6527b9fbff9075621cf3b06aca932f00c3a315438f89ff9694417752b`.
+The MCP service passed its port 5008 readiness probe. The fixture inherits
+an image health check for the web port, which Docker reports against the MCP
+container even though that port is unused there.
+
+Regression checks passed for 723 Superset Python tests, 757 frontend Jest
+tests, 32 extension tests, and 78 agent tests. The extension type check,
+scoped mypy, and Ruff checks passed.
+
+The BinxtGen preview and its disposable database were stopped. Dremio
+delegation remains deferred. The available configuration establishes
+one warehouse principal, and the verified server denied reads of its
+version and inbound impersonation settings. Two sanctioned warehouse
+test viewers and their governed test scope are still unavailable.

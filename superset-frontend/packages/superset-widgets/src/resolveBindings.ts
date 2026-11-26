@@ -60,7 +60,7 @@ interface BindMarker {
 
 const BIND_SOURCES = new Set(['metric', 'dimension', 'theme', 'records']);
 
-function formatTemporalLabel(value: DataRow[string]): DataRow[string] {
+export function formatTemporalLabel(value: DataRow[string]): DataRow[string] {
   if (typeof value !== 'string' && typeof value !== 'number') return value;
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value;

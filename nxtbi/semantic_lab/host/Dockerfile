@@ -30,3 +30,5 @@ RUN npm run build > /tmp/semantic-lab-assets.log 2>&1 || { tail -n 100 /tmp/sema
 FROM ${SUPERSET_BASE_IMAGE}
 COPY --from=assets /app/superset/static/assets /app/superset/static/assets
 COPY --from=assets /app/superset/static/service-worker.js /app/superset/static/service-worker.js
+COPY --chown=superset:superset superset/copilot/ /app/superset/copilot/
+COPY --chown=superset:superset superset/widgets/ /app/superset/widgets/

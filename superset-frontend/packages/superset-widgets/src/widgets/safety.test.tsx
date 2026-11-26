@@ -486,6 +486,39 @@ test('authored column definitions keep declarative settings only', () => {
   expect(sanitizeColumnDefs({ field: 'x' })).toEqual([]);
 });
 
+test('the date column format displays temporal values in UTC without changing the field', () => {
+  const [column] = sanitizeColumnDefs([
+    { field: 'event_date', valueFormat: 'date', sortable: true },
+  ]);
+  expect(column).toEqual({
+    field: 'event_date',
+    sortable: true,
+    valueFormatter: expect.any(Function),
+  });
+  const format = column.valueFormatter;
+  if (typeof format !== 'function') throw new Error('Missing date formatter');
+  const formatValue = (value: unknown) =>
+    format({ value } as Parameters<typeof format>[0]);
+
+  expect(formatValue(0)).toBe('1970-01-01');
+  expect(formatValue(Date.UTC(2025, 6, 1))).toBe('2025-07-01');
+  expect(formatValue('2025-06-30T20:00:00-04:00')).toBe('2025-07-01');
+  expect(formatValue('2025-07-01')).toBe('2025-07-01');
+  expect(formatValue('2025-07-01T12:30:00Z')).toBe('2025-07-01T12:30:00.000Z');
+  expect(formatValue(null)).toBe('');
+  expect(formatValue(undefined)).toBe('');
+});
+
+test('authored column definitions drop unsupported formats and callbacks', () => {
+  expect(
+    sanitizeColumnDefs([
+      { field: 'text', valueFormat: 'custom' },
+      { field: 'number', valueFormat: () => 'date' },
+      { field: 'amount', valueFormatter: () => 'authored formatter' },
+    ]),
+  ).toEqual([{ field: 'text' }, { field: 'number' }, { field: 'amount' }]);
+});
+
 test('markdown renders formatting and never raw script, handlers or script links', async () => {
   const content = [
     '# Title',
