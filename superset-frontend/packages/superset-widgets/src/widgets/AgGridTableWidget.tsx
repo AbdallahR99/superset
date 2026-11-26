@@ -278,9 +278,9 @@ function NativeDataTable({
           >
             {t('Previous')}
           </Button>
-          <span role="status">
+          <output>
             {t('Rows %s–%s of %s', start + 1, end, rowCount)}
-          </span>
+          </output>
           <Button
             size="small"
             aria-disabled={currentPage === lastPage}
