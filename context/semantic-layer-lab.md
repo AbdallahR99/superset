@@ -354,3 +354,96 @@ uv run --no-project --with desbordante==2.5.0 python -B nxtbi/semantic_lab/relat
 ~~~
 
 [Probe source](../nxtbi/semantic_lab/relationship_probe.py)
+
+## Business-case acceptance
+
+Use a common, independently calculated fixture to compare authoring quality,
+dashboard correctness, saved publication and the resulting business decision.
+Count each requested visual as delivered with correct data, intentionally
+excluded with a reason, or failed. Compare latency after correctness and
+role-scoped access pass.
+
+| Case | What the fixture distinguishes |
+|---|---|
+| Property market by sale and registration date | Different month populations for the same transactions, repeat property sales, a composite join key, missing area, and four approved measures. April has zero sales and one registration. A transaction with unknown property type remains in the breakdown and contributes no weighted price when its area is missing. |
+| Supplier delivery exceptions | One decision per eligible order line despite duplicate receipt events, partial deliveries, and repeated IDs across suppliers and workspaces. The independent benchmark expects 3 of 7 lines late (42.86%) against an unweighted mean supplier rate of 58.33%. It checks the exact exception, assigned owner, action, and due date, including an inclusive 50% escalation boundary. |
+| Sales and returns across facts | Keep the older prototype's separately aggregated and full-outer-joined facts as a comparison. Compare the aggregate-before-join result to the independent fixture and make unmatched groups and zero denominators visible. |
+
+The supplier test is a standalone SQLite acceptance fixture. The property
+browser test saves a multi-metric document through the native V2 API, then
+uses the builder and the Widget SDK. Multi-metric Copilot generation
+still needs its own acceptance test.
+
+From the repository root with the lab image and Widget SDK example
+dependencies already installed.
+
+~~~bash
+python -X utf8 -u nxtbi/semantic_lab/host/run.py --business-cases --image nxtbi/superset-fork:semantic-lab-v2
+~~~
+
+On November 26, 2026, Chromium passed this run for English and Arabic on
+`nxtbi/superset-fork:semantic-lab-v2`. Each dashboard showed four live KPI
+tiles and both date-role breakdown tables, then published and reopened. A
+signed-in SDK host on a separate origin rendered the saved registration
+widget for each locale. The test checked the date-role scope through the
+live widget API. The provider and Apache semantic SDK suites passed
+**247 tests** with four capability skips, including the supplier cases.
+Browser output and screenshots are in
+`nxtbi/out/semantic-lab/nxtbi-semantic-lab-77906cdc5293/`.
+
+### Reuse order for the warehouse pilot
+
+The standard SQLAlchemy Flight connection is the first qualification
+target. The lab image has PyArrow 26.0.1 and no Dremio dialect. PyPI's
+`sqlalchemy-dremio==3.0.5` requires `pyarrow~=20.0.0`, while the lab's
+base requires `pyarrow>=26.0.1,<27`. The resolver reproduced the
+incompatibility. An isolated Apache Superset 6.1.0 compatibility check
+resolved with Flight connector 3.0.4, SQLAlchemy 1.4.54, and PyArrow
+18.1.0. That check establishes dependency resolution. The live
+warehouse test remains open.
+
+Use an isolated stable lane to qualify the first approved Dremio view.
+If the pinned lab needs live warehouse execution sooner than a compatible
+dialect becomes available, qualify the already installed Apache PyArrow
+Flight client and the existing provider seam against the same exact
+fixture. This still needs a supported authentication and policy path.
+[Dremio Superset connector guide](https://docs.dremio.com/current/client-applications/superset/) ·
+[Published connector packages](https://pypi.org/project/sqlalchemy-dremio/) ·
+[Dremio Arrow Flight client guide](https://docs.dremio.com/current/developer/arrow-flight/)
+
+1. Give data engineers ownership of approved Dremio views and of each
+   metric's grain, eligible population, time role, unit, and version. Use
+   Dremio grants and policies at the warehouse. Use the standard SQLAlchemy
+   Flight connection and a native Superset SQL dataset for the first governed
+   view. Add dbt data tests where an existing dbt project owns the model.
+   Confirm the Dremio-maintained adapter supports the deployed versions
+   before using it. [Superset connection](https://docs.dremio.com/current/client-applications/superset/) ·
+   [Dremio access control](https://docs.dremio.com/current/security/rbac/) ·
+   [dbt data tests](https://docs.getdbt.com/docs/build/data-tests) ·
+   [Dremio adapter support](https://docs.getdbt.com/docs/local/connect-data-platform/dremio-setup)
+2. Keep discovery evidence, owner approval, registry versioning, and golden
+   check patterns from the old semantic-layer lab. Use Schema Sense for
+   relationship candidates. Verify composite key uniqueness, fan-out and
+   orphan rates against the serving warehouse before approving a model.
+   [Dremio constraint behavior](https://docs.dremio.com/25.x/reference/sql/commands/alter-table/)
+3. Use the pinned Superset external semantic provider only when a use case
+   needs typed metric and dimension compatibility beyond the reviewed
+   dataset. Treat the upstream Next provider API and fork V2 support as
+   versioned lab dependencies. Use Apache's SDK conformance checks for
+   adapter behavior and compare results to independent business fixtures.
+   [Superset provider API](https://superset.apache.org/developer-docs/extensions/extension-points/semantic-layers/) ·
+   [Conformance guide](../docs/developer_docs/semantic-layer-provider-testing.md)
+4. For a real cross-fact case that the approved Dremio views cannot serve,
+   evaluate Cube's native multi-fact planner first. Compare it to the old
+   lab's separately aggregated results. Require matching values, warehouse
+   pushdown, and tenant isolation with the actual driver before adopting it.
+   Wren and MetricFlow have no verified Dremio execution path here.
+   [Cube multi-fact views](https://github.com/cube-js/cube/blob/master/docs-mintlify/docs/data-modeling/multi-fact-views.mdx)
+
+For the first Dremio verification, use one approved nonproduction fixture and
+a scoped read-only connection with certificate verification. Check the
+warehouse principal, exact aggregate and raw-source denial. Then exercise
+two intended reader scopes through the actual BI query and cache path
+before publishing tenant-sensitive data. A fixed warehouse credential
+executes on behalf of that principal even when the UI authenticates viewers
+individually. [Dremio principal function](https://docs.dremio.com/current/reference/sql/sql-functions/functions/QUERY_USER/)

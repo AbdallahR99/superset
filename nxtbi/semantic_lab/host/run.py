@@ -177,6 +177,7 @@ def run_checks(
     serve: bool,
     mcp: bool,
     widget_host_url: str | None,
+    business_cases: bool,
 ) -> int:
     """Seed the native view, then run the selected verification path."""
     browser_env = {
@@ -203,7 +204,7 @@ def run_checks(
         )
         save_log("mcp.log", result.stdout + result.stderr)
         print(f"Native MCP smoke passed. See {out}/mcp.log.", flush=True)
-    if widget_host_url:
+    if widget_host_url and not business_cases:
         docker(
             "exec",
             container_id,
@@ -218,12 +219,17 @@ def run_checks(
             base_url, out, browser_env, script="copilot_browser_smoke.py"
         ):
             return return_code
+    if widget_host_url:
         with run_widget_host(base_url, widget_host_url, out):
             return run_browser(
                 base_url,
                 out,
                 browser_env,
-                script="copilot_v2_browser_smoke.py",
+                script=(
+                    "business_case_browser_smoke.py"
+                    if business_cases
+                    else "copilot_v2_browser_smoke.py"
+                ),
                 widget_host_url=widget_host_url,
             )
     return 0
@@ -237,12 +243,16 @@ def snapshot_copilot_bundle(bundle_dir: Path) -> None:
     shutil.copy2(COPILOT_BUNDLE, bundle_dir)
 
 
-def copilot_web_mounts(bundle_dir: Path) -> list[str]:
-    """Mount the packaged extension and current server code read-only."""
-    arguments = [
-        "--mount",
-        f"type=bind,src={bundle_dir},dst=/semantic-lab-bundles,readonly",
-    ]
+def widget_web_mounts(bundle_dir: Path | None) -> list[str]:
+    """Mount the current server code and an optional Copilot archive read-only."""
+    arguments: list[str] = []
+    if bundle_dir is not None:
+        arguments.extend(
+            (
+                "--mount",
+                f"type=bind,src={bundle_dir},dst=/semantic-lab-bundles,readonly",
+            )
+        )
     for package in COPILOT_SERVER_PACKAGES:
         source = REPO / "superset" / package
         arguments.extend(
@@ -259,14 +269,12 @@ def run_lab(
     mcp: bool,
     password: str | None,
     copilot_agent_image: str | None = None,
+    business_cases: bool = False,
 ) -> int:
     """Start one loopback container, run the selected checks, and dispose of it."""
     name = f"nxtbi-semantic-lab-{uuid4().hex[:12]}"
     out = OUT / name
     out.mkdir(parents=True)
-    bundle_dir = out / "extensions"
-    if copilot_agent_image:
-        snapshot_copilot_bundle(bundle_dir)
     print(f"Lab logs and screenshots: {out}", flush=True)
     accounts = {
         "NXTBI_SEMANTIC_LAB_USER": "lab_admin",
@@ -288,16 +296,16 @@ def run_lab(
     agent_name = f"{name}-agent"
     agent_env: dict[str, str] = {}
     widget_host_url: str | None = None
+    web_arguments: list[str] = []
+    bundle_dir = None
     if copilot_agent_image:
-        widget_host_url = f"http://127.0.0.1:{loopback_port()}"
+        bundle_dir = out / "extensions"
+        snapshot_copilot_bundle(bundle_dir)
         shared_secret = secrets.token_hex(32)
-        guest_secret = secrets.token_hex(32)
         container_env.update(
             NXTBI_COPILOT_SEMANTIC_LAB="1",
-            NXTBI_SEMANTIC_LAB_GUEST_SECRET=guest_secret,
             NXTBI_COPILOT_AGENT_URL=f"http://{agent_name}:8100/ag-ui",
             NXTBI_COPILOT_SHARED_SECRET=shared_secret,
-            NXTBI_SEMANTIC_LAB_WIDGET_ORIGIN=widget_host_url,
         )
         agent_env = {
             "NXTBI_COPILOT_SHARED_SECRET": shared_secret,
@@ -305,7 +313,16 @@ def run_lab(
                 f"http://{name}:8088/api/v1/nxtbi_copilot/internal/tools"
             ),
         }
-        redactions.extend((shared_secret, guest_secret))
+        redactions.append(shared_secret)
+    if copilot_agent_image or business_cases:
+        web_arguments = widget_web_mounts(bundle_dir)
+        widget_host_url = f"http://127.0.0.1:{loopback_port()}"
+        guest_secret = secrets.token_hex(32)
+        container_env.update(
+            NXTBI_SEMANTIC_LAB_GUEST_SECRET=guest_secret,
+            NXTBI_SEMANTIC_LAB_WIDGET_ORIGIN=widget_host_url,
+        )
+        redactions.append(guest_secret)
 
     def save_log(filename: str, message: str) -> None:
         """Store lab logs without authentication secrets."""
@@ -340,7 +357,6 @@ def run_lab(
 
     try:
         with ExitStack() as cleanup:
-            web_arguments: list[str] = []
             network = "bridge"
             if copilot_agent_image:
                 network = name
@@ -359,7 +375,6 @@ def run_lab(
                     copilot_agent_image,
                 ).stdout.strip()
                 cleanup.callback(stop, agent_id, "copilot-agent.log")
-                web_arguments = copilot_web_mounts(bundle_dir)
 
             container_id = docker(
                 "run",
@@ -401,6 +416,7 @@ def run_lab(
                 serve=serve,
                 mcp=mcp,
                 widget_host_url=widget_host_url,
+                business_cases=business_cases,
             )
     except KeyboardInterrupt:
         return 0 if serve else 130
@@ -419,6 +435,11 @@ def main() -> int:
         "--copilot",
         action="store_true",
         help="Also verify bilingual Classic and V2 Copilot saves and Widget SDK embeds",
+    )
+    modes.add_argument(
+        "--business-cases",
+        action="store_true",
+        help="Verify the bilingual property decision dashboard and its saved embeds",
     )
     parser.add_argument(
         "--agent-image",
@@ -440,6 +461,7 @@ def main() -> int:
         mcp=args.mcp,
         password=password,
         copilot_agent_image=args.agent_image if args.copilot else None,
+        business_cases=args.business_cases,
     )
 
 
