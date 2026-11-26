@@ -29,6 +29,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from flask import g, has_app_context, has_request_context
 from pytest_mock import MockerFixture
 from sqlalchemy.orm.session import Session
 
@@ -62,6 +63,21 @@ def dashboard_v2_enabled(mocker: MockerFixture, app_context: None) -> None:
 def editor(mocker: MockerFixture, full_api_access: None) -> None:
     """A caller that passes every route, read and editorship check."""
     mocker.patch.object(security_manager, "is_admin", return_value=True)
+
+    original_can_access = security_manager.can_access
+
+    def can_access(permission_name: str, view_name: str) -> bool:
+        # Direct command tests use a mocked editor without a Flask request user.
+        if (
+            (permission_name, view_name) == ("can_write", "Dashboard")
+            and has_app_context()
+            and not has_request_context()
+            and not hasattr(g, "user")
+        ):
+            return True
+        return original_can_access(permission_name, view_name)
+
+    mocker.patch.object(security_manager, "can_access", side_effect=can_access)
     mocker.patch.object(security_manager, "raise_for_access", return_value=None)
     mocker.patch.object(security_manager, "raise_for_editorship", return_value=None)
     mocker.patch.object(security_manager, "is_guest_user", return_value=False)
