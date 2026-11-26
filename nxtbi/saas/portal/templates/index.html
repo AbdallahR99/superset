@@ -1,0 +1,88 @@
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+<!doctype html>
+<html lang="{{ lang }}" dir="{{ direction }}">
+  {% set arabic = lang == 'ar' %}
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ 'مساحات العمل | NxtBI' if arabic else 'Workspaces | NxtBI' }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='portal.css') }}" />
+  </head>
+  <body>
+    <header class="portal-header">
+      <div class="portal-frame portal-header-content">
+        <span class="wordmark" lang="en" dir="ltr">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>Nxt<span class="wordmark-accent">BI</span></span>
+        </span>
+        <nav class="language-picker" aria-label="{{ 'اللغة' if arabic else 'Language' }}">
+          <a
+            href="{{ url_for('index', lang='en') }}"
+            lang="en"
+            hreflang="en"
+            dir="ltr"
+            {% if not arabic %}aria-current="true"{% endif %}
+          >English</a>
+          <a
+            href="{{ url_for('index', lang='ar') }}"
+            lang="ar"
+            hreflang="ar"
+            dir="rtl"
+            {% if arabic %}aria-current="true"{% endif %}
+          >العربية</a>
+        </nav>
+      </div>
+    </header>
+    <main class="portal-frame portal-main">
+      {% if not signed_in %}
+        <div class="portal-intro">
+          <h1>{{ 'مساحات عمل التحليلات' if arabic else 'Analytics workspaces' }}</h1>
+          <p>
+            {{ 'سجّل الدخول بحساب مؤسستك لفتح مساحة عمل.' if arabic
+               else 'Sign in with your organization account to open a workspace.' }}
+          </p>
+          <a class="sign-in" href="{{ login_url }}">{{ 'تسجيل الدخول' if arabic else 'Sign in' }}</a>
+        </div>
+      {% else %}
+        <h1>{{ 'مساحات العمل' if arabic else 'Workspaces' }}</h1>
+        {% if tenants %}
+          <ul class="workspace-list" role="list">
+            {% for tenant in tenants %}
+              <li>
+                <a class="workspace-card" href="{{ url_for('open_tenant', slug=tenant.slug) }}">
+                  <h2><bdi>{{ tenant.name }}</bdi></h2>
+                  <span class="workspace-action">
+                    {{ 'فتح مساحة العمل' if arabic else 'Open workspace' }}
+                    <span aria-hidden="true">{{ '←' if arabic else '→' }}</span>
+                  </span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="empty-state">
+            {{ 'لا توجد مساحات عمل متاحة لهذا الحساب. تواصل مع مسؤول مؤسستك لطلب الوصول.' if arabic
+               else 'No workspaces are available to this account. Contact your organization administrator for access.' }}
+          </p>
+        {% endif %}
+      {% endif %}
+    </main>
+  </body>
+</html>

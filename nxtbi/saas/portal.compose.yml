@@ -1,0 +1,59 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+services:
+  identity:
+    image: quay.io/keycloak/keycloak:26.4
+    command: [start-dev, --import-realm, --hostname, "${NXTBI_SAAS_KEYCLOAK_URL:?}"]
+    ports:
+      - "127.0.0.1:${NXTBI_SAAS_KEYCLOAK_PORT:?}:8080"
+    volumes:
+      - type: bind
+        source: ${NXTBI_SAAS_REALM_FILE:?}
+        target: /opt/keycloak/data/import/nxtbi-saas-pilot-realm.json
+        read_only: true
+    networks: [pilot]
+
+  portal:
+    image: ${NXTBI_SAAS_SUPERSET_IMAGE:?}
+    working_dir: /app/nxtbi-saas/portal
+    entrypoint: [gunicorn]
+    command: [--workers, '1', --threads, '4', --bind, '0.0.0.0:8080', 'app:create_app()']
+    ports:
+      - "127.0.0.1:${NXTBI_SAAS_PORTAL_PORT:?}:8080"
+    environment:
+      NXTBI_SAAS_PORTAL_SECRET: ${NXTBI_SAAS_PORTAL_SECRET:?}
+      NXTBI_SAAS_PUBLIC_URL: ${NXTBI_SAAS_PUBLIC_URL:?}
+      NXTBI_SAAS_OIDC_ISSUER: ${NXTBI_SAAS_OIDC_ISSUER:?}
+      NXTBI_SAAS_OIDC_BACKEND: ${NXTBI_SAAS_OIDC_BACKEND:?}
+      NXTBI_SAAS_OIDC_CLIENT_ID: ${NXTBI_SAAS_OIDC_CLIENT_ID:?}
+      NXTBI_SAAS_OIDC_CLIENT_SECRET: ${NXTBI_SAAS_OIDC_CLIENT_SECRET:?}
+      NXTBI_SAAS_INVENTORY: /app/nxtbi-saas/catalog/inventory.json
+    healthcheck:
+      disable: true
+    volumes:
+      - ./portal:/app/nxtbi-saas/portal:ro
+      - type: bind
+        source: ${NXTBI_SAAS_INVENTORY_DIR:?}
+        target: /app/nxtbi-saas/catalog
+        read_only: true
+    networks: [pilot]
+
+networks:
+  pilot:
+    external: true
+    name: ${NXTBI_SAAS_NETWORK:?}
