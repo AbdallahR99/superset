@@ -1143,6 +1143,7 @@ def test_registered_dataset_draft_rejects_invalid_or_mixed_intent(
     extra: dict[str, object],
     context: list[dict[str, str]],
 ) -> None:
+    forwarded_props: dict[str, object] = {"datasetDraft": action, **extra}
     with TestClient(create_app(Settings(shared_secret=SIGNING_KEY))) as client:
         response = client.post(
             "/ag-ui",
@@ -1150,7 +1151,7 @@ def test_registered_dataset_draft_rejects_invalid_or_mixed_intent(
             json={
                 **REQUEST,
                 "context": context,
-                "forwardedProps": {"datasetDraft": action, **extra},
+                "forwardedProps": forwarded_props,
             },
         )
     assert response.status_code == 422

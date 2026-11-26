@@ -669,7 +669,7 @@ test('browses existing datasets and drafts without upload context or approval', 
     screen.getByRole('searchbox', { name: 'Search datasets' }),
     '  sales  ',
   );
-  await user.click(screen.getByRole('button', { name: 'Search', exact: true }));
+  await user.click(screen.getByRole('button', { name: 'Search' }));
   await user.click(
     await screen.findByRole('radio', { name: 'Regional sales' }),
   );
@@ -740,7 +740,7 @@ test('discards an older dataset request and retries a failed search safely', asy
     screen.getByRole('searchbox', { name: 'Search datasets' }),
     'absent',
   );
-  await user.click(screen.getByRole('button', { name: 'Search', exact: true }));
+  await user.click(screen.getByRole('button', { name: 'Search' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'Could not load datasets.',
   );
