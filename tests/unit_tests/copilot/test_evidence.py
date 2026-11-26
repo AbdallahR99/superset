@@ -19,13 +19,15 @@
 
 from datetime import date
 from decimal import Decimal
+from inspect import unwrap
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from flask import Flask
 from pydantic import ValidationError
 
-from superset.copilot import services
+from superset.copilot import api, services
 from superset.copilot.contracts import (
     AggregateArguments,
     DashboardProposal,
@@ -422,6 +424,149 @@ def test_compound_proposal_uses_only_authorized_saved_fields(
     assert query["metrics"] == ["sale_count", "weighted_price"]
     assert query["columns"] == ["sale_month", "property_type"]
     assert query["orderby"] == [("sale_month", True), ("property_type", True)]
+
+
+@pytest.mark.parametrize("dashboard_type", ["v1", "v2"])
+@pytest.mark.parametrize(
+    ("rules", "impersonates", "reason"),
+    [
+        ([], False, None),
+        ([SimpleNamespace(filter_type="Base")], False, "row-level security"),
+        ([], True, "database impersonation"),
+    ],
+)
+def test_dashboard_approval_checks_all_bound_datasets(
+    dashboard_type: str,
+    rules: list[SimpleNamespace],
+    impersonates: bool,
+    reason: str | None,
+) -> None:
+    """Keep previews private and refuse to persist captions for scoped sources."""
+    app = Flask(__name__)
+    actor = SimpleNamespace(id=17)
+    draft = {
+        "title": "Sales overview",
+        "dashboardType": dashboard_type,
+        "widgets": [
+            {"type": "metric-tile", "datasetId": 23, "metric": "sale_count"},
+            {"type": "metric-tile", "datasetId": 24, "metric": "sale_count"},
+        ],
+    }
+    metric = SimpleNamespace(metric_name="sale_count", verbose_name=None, d3format=None)
+    db = MagicMock()
+    db.session.get.side_effect = lambda _model, dataset_id: MagicMock(
+        deleted_at=None,
+        sql=None,
+        row_level_security_filters=rules if dataset_id == 24 else [],
+        database=SimpleNamespace(impersonate_user=impersonates and dataset_id == 24),
+        metrics=[metric],
+    )
+    with (
+        patch.object(services, "db", db),
+        patch.object(services, "security_manager", MagicMock()),
+        patch.object(services, "user_can_view_data_model_metadata", return_value=True),
+        patch.object(services, "raise_for_document_authoring"),
+        patch.object(api, "_actor", return_value=actor),
+        patch.object(api, "_secret", return_value="test" * 8),
+        patch.object(api, "_require_widgets"),
+        patch.object(
+            api, "create_classic_dashboard", return_value=(29, True)
+        ) as classic,
+        patch.object(api, "CreateDashboardV2Command") as v2,
+    ):
+        v2.return_value.run.return_value = {"id": 29}
+        v2.return_value.created = True
+        with app.test_request_context():
+            preview = api._preview_dashboard(draft, actor.id)
+        assert preview.status_code == 200
+        with app.test_request_context(method="POST", json=preview.get_json()):
+            response = unwrap(api.NxtbiCopilotRestApi.approve)(
+                api.NxtbiCopilotRestApi()
+            )
+
+    if reason:
+        assert response.status_code == 403
+        assert reason in response.get_json()["message"]
+        classic.assert_not_called()
+        v2.assert_not_called()
+    else:
+        assert response.status_code == 201
+        assert response.get_json()["id"] == 29
+
+
+@pytest.mark.parametrize(
+    ("sql", "sources", "reason"),
+    [
+        ("SELECT * FROM sales", [SimpleNamespace(sql=None)], None),
+        (
+            "SELECT * FROM sales",
+            [SimpleNamespace(sql=None, row_level_security_filters=["Base"])],
+            "row-level security",
+        ),
+        ("SELECT * FROM sales", [], "verify the source tables"),
+        (
+            "SELECT * FROM sales",
+            [SimpleNamespace(sql="SELECT * FROM orders")],
+            "verify the source tables",
+        ),
+        ("SELECT * FROM {{ source_table }}", [], "verify the source tables"),
+        (
+            "SELECT adjust_sale_value(sale_count) FROM sales",
+            [SimpleNamespace(sql=None)],
+            "verify the source tables",
+        ),
+    ],
+)
+def test_virtual_dataset_approval_requires_registered_unrestricted_sources(
+    sql: str, sources: list[SimpleNamespace], reason: str | None
+) -> None:
+    """Verify statically resolvable physical sources before approving virtual data."""
+    dataset = MagicMock(id=23, deleted_at=None, row_level_security_filters=[], sql=sql)
+    dataset.catalog = None
+    dataset.schema = "main"
+    dataset.database.impersonate_user = False
+    dataset.database.db_engine_spec.engine = "sqlite"
+    dataset.database.db_engine_spec.supports_dynamic_schema = False
+    dataset.database.resolve_query_default_schema.return_value = "main"
+    dataset.database.get_default_catalog.return_value = None
+    dataset.metrics = [
+        SimpleNamespace(metric_name="sale_count", verbose_name=None, d3format=None)
+    ]
+    db = MagicMock()
+    db.session.get.return_value = dataset
+    physical_sources = [
+        SimpleNamespace(
+            deleted_at=None,
+            sql=source.sql,
+            row_level_security_filters=getattr(
+                source, "row_level_security_filters", []
+            ),
+        )
+        for source in sources
+    ]
+    draft = DashboardProposal.model_validate(
+        {
+            "title": "Sales overview",
+            "widgets": [
+                {"type": "metric-tile", "datasetId": 23, "metric": "sale_count"}
+            ],
+        }
+    )
+    with (
+        patch.object(services, "db", db),
+        patch.object(services, "security_manager", MagicMock()),
+        patch.object(services, "user_can_view_data_model_metadata", return_value=True),
+        patch.object(services, "find_datasets", return_value=physical_sources) as find,
+    ):
+        services.validate_proposal_references(draft)
+        find.assert_not_called()
+        if reason:
+            with pytest.raises(services.CopilotApprovalScopeError, match=reason):
+                services.validate_proposal_references(draft, for_approval=True)
+        else:
+            services.validate_proposal_references(draft, for_approval=True)
+            reference = find.call_args.args[0]
+            assert (reference.schema, reference.table) == ("main", "sales")
 
 
 def test_temporal_profile_reports_observed_bounds_and_nulls() -> None:

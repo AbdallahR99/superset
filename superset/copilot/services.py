@@ -51,12 +51,22 @@ from superset.copilot.contracts import (
     ToolRequest,
 )
 from superset.mcp_service.privacy import user_can_view_data_model_metadata
+from superset.sql.parse import folds_unquoted_object_names, SQLScript, SQLStatement
 from superset.utils import json
-from superset.widgets.data import build_widget_query, resolved_filters_to_adhoc
+from superset.utils.rls import find_datasets, get_rls_schema, qualify_table
+from superset.widgets.data import (
+    build_widget_query,
+    JINJA_MARKERS,
+    resolved_filters_to_adhoc,
+)
 
 
 class CopilotAccessError(ValueError):
     """Requested metadata or dashboard authoring is unavailable to this user."""
+
+
+class CopilotApprovalScopeError(ValueError):
+    """A generated dashboard binds a dataset with viewer-specific data scope."""
 
 
 class CopilotToolError(RuntimeError):
@@ -528,8 +538,82 @@ def _collect_widget_metadata(
                 metadata.temporal_dimensions.add(key)
 
 
+def _registered_virtual_sources(dataset: SqlaTable, sql: str) -> list[SqlaTable]:
+    """Resolve each static SQL table using the native RLS table lookup."""
+    if any(marker in sql for marker in JINJA_MARKERS):
+        raise ValueError("Virtual dataset SQL uses a template.")
+    database = dataset.database
+    engine = database.db_engine_spec.engine
+    script = SQLScript(sql, engine)
+    if script.has_unparseable_statement or len(script.statements) != 1:
+        raise ValueError("Virtual dataset SQL is not statically resolvable.")
+    statement = script.statements[0]
+    if (
+        not isinstance(statement, SQLStatement)
+        or not (statement.is_select() or statement.is_set_operation())
+        or statement.is_mutating()
+        or not statement.tables
+        or statement.has_dynamic_table_source()
+        or statement.get_unmodelled_functions()
+    ):
+        raise ValueError("Virtual dataset SQL has no resolvable table reads.")
+    default_catalog = database.get_default_catalog()
+    schema = get_rls_schema(database, dataset.catalog, dataset.schema, sql)
+    fold = folds_unquoted_object_names(engine)
+    sources: list[SqlaTable] = []
+    for table in sorted(statement.tables, key=str):
+        for candidate, any_schema in qualify_table(
+            database, table, dataset.catalog, schema
+        ):
+            if any_schema or not candidate.schema:
+                raise ValueError("Virtual dataset source schema is unknown.")
+            matches = find_datasets(
+                candidate, database, default_catalog, dataset.id, fold=fold
+            )
+            if not matches or any(
+                match.deleted_at is not None or match.sql for match in matches
+            ):
+                raise ValueError("Virtual dataset source lacks physical registration.")
+            sources.extend(matches)
+    return sources
+
+
+def _raise_for_generated_dashboard_scope(dataset: SqlaTable) -> None:
+    """Prevent shared captions from persisting results from scoped sources."""
+    if dataset.database.impersonate_user:
+        raise CopilotApprovalScopeError(
+            "Copilot cannot save a generated dashboard that uses a dataset with "
+            "database impersonation. Choose another dataset or build the dashboard "
+            "manually."
+        )
+    # The approver can be exempt from a rule that applies to other viewers.
+    if dataset.row_level_security_filters:
+        raise CopilotApprovalScopeError(
+            "Copilot cannot save a generated dashboard that uses a dataset with "
+            "row-level security. Choose another dataset or build the dashboard "
+            "manually."
+        )
+    if not dataset.sql:
+        return
+    try:
+        sources = _registered_virtual_sources(dataset, dataset.sql)
+        has_source_rls = any(source.row_level_security_filters for source in sources)
+    except Exception as ex:  # noqa: BLE001 - parser, engine, and metadata errors
+        raise CopilotApprovalScopeError(
+            "Copilot cannot verify the source tables for this virtual dataset. "
+            "Choose a dataset with registered physical sources or build the "
+            "dashboard manually."
+        ) from ex
+    if has_source_rls:
+        raise CopilotApprovalScopeError(
+            "Copilot cannot save a generated dashboard whose virtual dataset reads "
+            "source tables with row-level security. Choose another dataset or build "
+            "the dashboard manually."
+        )
+
+
 def validate_proposal_references(
-    proposal: DashboardProposal,
+    proposal: DashboardProposal, *, for_approval: bool = False
 ) -> ProposalMetadata:
     """Verify every persisted dataset reference and collect its display metadata."""
     if not security_manager.can_access("can_write", "Dashboard"):
@@ -550,14 +634,18 @@ def validate_proposal_references(
             if dataset is None or dataset.deleted_at is not None:
                 raise CopilotAccessError("The requested dataset is unavailable.")
             dataset.raise_for_access()
+            if for_approval:
+                _raise_for_generated_dashboard_scope(dataset)
             datasets[widget.dataset_id] = dataset
         _collect_widget_metadata(widget, datasets[widget.dataset_id], metadata)
     return metadata
 
 
-def validate_dashboard_proposal(proposal: DashboardProposal) -> dict[str, Any]:
+def validate_dashboard_proposal(
+    proposal: DashboardProposal, *, for_approval: bool = False
+) -> dict[str, Any]:
     """Compile validated references and invoke the normal V2 authoring guard."""
-    metadata = validate_proposal_references(proposal)
+    metadata = validate_proposal_references(proposal, for_approval=for_approval)
     document = normalize_and_validate(make_document(proposal, metadata))
     raise_for_document_authoring(document, None)
     return document

@@ -69,6 +69,7 @@ from superset.copilot.semantic_catalog import (
 from superset.copilot.services import (
     aggregate_dataset,
     CopilotAccessError,
+    CopilotApprovalScopeError,
     CopilotToolError,
     profile_dataset,
     read_metadata,
@@ -488,11 +489,13 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
         try:
             if proposal.dashboard_type == "v1":
                 dashboard_id, created = create_classic_dashboard(
-                    proposal, approval_uuid, validate_proposal_references(proposal)
+                    proposal,
+                    approval_uuid,
+                    validate_proposal_references(proposal, for_approval=True),
                 )
                 url = f"/dashboard/{dashboard_id}/"
             else:
-                document = validate_dashboard_proposal(proposal)
+                document = validate_dashboard_proposal(proposal, for_approval=True)
                 command = CreateDashboardV2Command(
                     {
                         "dashboard_title": proposal.title,
@@ -503,6 +506,8 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
                 dashboard_id = command.run()["id"]
                 created = command.created
                 url = f"/dashboard/v2/{dashboard_id}/"
+        except CopilotApprovalScopeError as err:
+            return self.response(403, message=str(err))
         except (CopilotAccessError, SupersetSecurityException):
             return self.response(403, message="You cannot save this dashboard.")
         except CommandException as err:
