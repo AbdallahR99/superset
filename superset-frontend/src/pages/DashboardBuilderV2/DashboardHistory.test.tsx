@@ -18,7 +18,7 @@
  */
 import userEvent from '@testing-library/user-event';
 import fetchMock from 'fetch-mock';
-import { render, screen } from 'spec/helpers/testing-library';
+import { render, screen, waitFor } from 'spec/helpers/testing-library';
 import DashboardHistory from './DashboardHistory';
 
 const activity = 'glob:*/api/v1/dashboard/uuid-49/activity/*';
@@ -56,5 +56,7 @@ test('loads and displays saved dashboard changes when history opens', async () =
     'Jane Smith',
   ]);
   await userEvent.click(savedVersion);
-  expect(screen.getByText('Changed the dashboard title')).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByText('Changed the dashboard title')).toBeVisible(),
+  );
 });
