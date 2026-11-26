@@ -20,9 +20,11 @@ import { createContext, useContext } from 'react';
 import { SupersetClient } from '@superset-ui/core';
 import { toAdhocFilters } from './activeFilters';
 import { fetchQueryData, toFetchError } from './chartData';
+import { widgetDataPayload } from './embed/httpClient';
 import type {
-  DataBindingSpec,
+  QueryDataResult,
   SavedWidget,
+  WidgetDataBindingSpec,
   WidgetDataClient,
   WidgetRef,
 } from './types';
@@ -50,15 +52,32 @@ export function widgetRef(
 }
 
 /**
- * Queries through Superset's own session (`SupersetClient`): the ad hoc
- * chart-data path the dashboard builder uses, where the author is logged in
- * and may run any query their datasource permissions allow.
+ * Queries as the signed-in user. The builder sends native dataset queries to
+ * chart data and approved semantic view bindings to the widget API.
  */
 export const sessionDataClient: WidgetDataClient = {
-  fetchData: ({ widget, filters, signal }) => {
-    const binding = widget.props.dataBinding as DataBindingSpec | undefined;
+  fetchData: async ({ widget, filters, signal }) => {
+    const binding = widget.props.dataBinding as
+      | WidgetDataBindingSpec
+      | undefined;
     if (!binding) {
-      return Promise.reject(new Error('This widget has no dataBinding.'));
+      throw new Error('This widget has no dataBinding.');
+    }
+    if (typeof binding.semanticViewId === 'string') {
+      let json: { result?: QueryDataResult } | undefined;
+      try {
+        ({ json } = await SupersetClient.post({
+          endpoint: '/api/v1/widget/data',
+          jsonPayload: widgetDataPayload(widget, filters),
+          signal,
+        }));
+      } catch (error) {
+        throw await toFetchError(error);
+      }
+      if (!json?.result) {
+        throw new Error('Widget data request returned no result');
+      }
+      return json.result;
     }
     return fetchQueryData(
       {

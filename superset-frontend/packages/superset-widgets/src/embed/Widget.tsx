@@ -38,7 +38,12 @@ import {
   type WidgetErrorInfo,
 } from '../errors';
 import { WidgetComponentsContext, getWidgetComponent } from '../registry';
-import type { DataBindingSpec, SavedWidget, WidgetDataClient } from '../types';
+import type {
+  DataBindingSpec,
+  SavedWidget,
+  WidgetDataBindingSpec,
+  WidgetDataClient,
+} from '../types';
 import { useExtensionWidget } from './extensionLoader';
 
 export interface CommonWidgetProps {
@@ -338,7 +343,7 @@ export interface ChartProps extends CommonWidgetProps {
 }
 
 export interface MetricTileProps extends CommonWidgetProps {
-  dataBinding: DataBindingSpec;
+  dataBinding: WidgetDataBindingSpec;
   label?: string;
   prefix?: string;
   suffix?: string;
@@ -346,7 +351,7 @@ export interface MetricTileProps extends CommonWidgetProps {
 }
 
 export interface TableProps extends CommonWidgetProps {
-  dataBinding: DataBindingSpec;
+  dataBinding: WidgetDataBindingSpec;
   /**
    * Declarative column settings only (`field`, `headerName`, `width`,
    * `pinned`, `hide`, ...). Anything AG Grid would evaluate or call is

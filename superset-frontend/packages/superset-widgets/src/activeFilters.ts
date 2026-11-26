@@ -76,7 +76,7 @@ export function toAdhocFilters(
  */
 export function getActiveResolvedFilters(
   bus: WidgetBus,
-  datasetId: number,
+  datasetId: number | undefined,
   consumerId: string,
 ): ResolvedFilter[] {
   return bus
@@ -95,7 +95,8 @@ export function getActiveResolvedFilters(
       const applies =
         targets && targets.length > 0
           ? targets.includes(consumerId)
-          : value.resolved.datasource === datasetId;
+          : typeof datasetId === 'number' &&
+            value.resolved.datasource === datasetId;
       return applies ? [value.resolved] : [];
     });
 }

@@ -22,11 +22,12 @@ import argparse
 import os
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable
-from contextlib import ExitStack, suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, ExitStack, suppress
 from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from uuid import uuid4
@@ -37,6 +38,16 @@ OUT = LAB.parent / "out" / "semantic-lab"
 REPO = LAB.parents[1]
 COPILOT_BUNDLE = (
     LAB.parent / "copilot" / "superset-extension" / "nxtbi.ai-copilot-0.1.0.supx"
+)
+
+WIDGET_EXAMPLE = REPO / "superset-frontend/packages/superset-widgets/example"
+VITE = WIDGET_EXAMPLE / "node_modules/vite/bin/vite.js"
+COPILOT_SERVER_PACKAGES = (
+    "copilot",
+    "widgets",
+    "commands/widget",
+    "dashboard_v2",
+    "commands/dashboard_v2",
 )
 
 DEFAULT_IMAGE = "nxtbi/superset-fork:copilot-localization-verified"
@@ -57,8 +68,14 @@ exec gunicorn --workers 1 --threads 4 --bind 0.0.0.0:8088 'superset.app:create_a
 """
 
 
-def wait_for_health(binding: str, timeout: float = 135) -> str:
-    """Validate the loopback binding and wait for the app's health endpoint."""
+def wait_for_health(
+    binding: str,
+    timeout: float = 135,
+    *,
+    path: str = "/health",
+    service: str = "Superset",
+) -> str:
+    """Validate the loopback binding and wait for the fixture HTTP endpoint."""
     address, port_text = binding.rsplit(":", 1)
     if address != "127.0.0.1":
         raise RuntimeError("The semantic lab port must be bound to loopback.")
@@ -67,7 +84,7 @@ def wait_for_health(binding: str, timeout: float = 135) -> str:
     while time.monotonic() < deadline:
         connection = HTTPConnection("127.0.0.1", port, timeout=2)
         try:
-            connection.request("GET", "/health")
+            connection.request("GET", path)
             if connection.getresponse().status == 200:
                 return f"http://{binding}"
         except (OSError, HTTPException):
@@ -75,11 +92,61 @@ def wait_for_health(binding: str, timeout: float = 135) -> str:
         finally:
             connection.close()
         time.sleep(1)
-    raise RuntimeError("Superset health check timed out.")
+    raise RuntimeError(f"{service} readiness check timed out.")
+
+
+def loopback_port() -> int:
+    """Choose a free loopback port for the separate-origin SDK host."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@contextmanager
+def run_widget_host(base_url: str, widget_host_url: str, out: Path) -> Iterator[None]:
+    """Serve the Widget SDK example on its own port using browser session auth."""
+    node = shutil.which("node")
+    if not node or not VITE.is_file():
+        raise RuntimeError(
+            "Put Node on PATH and install the Widget SDK example dependencies."
+        )
+    binding = widget_host_url.removeprefix("http://")
+    with (out / "widget-sdk.log").open("wb") as log:
+        vite = subprocess.Popen(  # noqa: S603 - Checked-in local SDK example.
+            [
+                node,
+                str(VITE),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                binding.rsplit(":", 1)[1],
+                "--strictPort",
+            ],
+            cwd=WIDGET_EXAMPLE,
+            env={**os.environ, "SUPERSET_URL": base_url, "EMBED_AUTH": "session"},
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            wait_for_health(binding, timeout=45, path="/", service="Widget SDK")
+            yield
+        finally:
+            vite.terminate()
+            try:
+                vite.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                vite.kill()
+                vite.wait()
 
 
 def run_browser(
-    base_url: str, out: Path, env: dict[str, str], *, script: str = "browser_smoke.py"
+    base_url: str,
+    out: Path,
+    env: dict[str, str],
+    *,
+    script: str = "browser_smoke.py",
+    widget_host_url: str | None = None,
 ) -> int:
     """Run the checked-in browser flow without passing credentials on the CLI."""
     return subprocess.run(  # noqa: S603 - Local browser smoke test.
@@ -91,6 +158,7 @@ def run_browser(
             base_url,
             "--artifact-dir",
             str(out),
+            *(["--widget-host-url", widget_host_url] if widget_host_url else []),
         ],
         env=env,
         timeout=360,
@@ -108,13 +176,15 @@ def run_checks(
     save_log: Callable[[str, str], None],
     serve: bool,
     mcp: bool,
-    copilot: bool,
+    widget_host_url: str | None,
 ) -> int:
     """Seed the native view, then run the selected verification path."""
     browser_env = {
         **os.environ,
         **accounts,
-        "NXTBI_SEMANTIC_LAB_KEEP_ASSETS": str(int(serve or mcp or copilot)),
+        "NXTBI_SEMANTIC_LAB_KEEP_ASSETS": str(
+            int(serve or mcp or bool(widget_host_url))
+        ),
     }
     if return_code := run_browser(base_url, out, browser_env):
         return return_code
@@ -133,7 +203,7 @@ def run_checks(
         )
         save_log("mcp.log", result.stdout + result.stderr)
         print(f"Native MCP smoke passed. See {out}/mcp.log.", flush=True)
-    if copilot:
+    if widget_host_url:
         docker(
             "exec",
             container_id,
@@ -144,9 +214,18 @@ def run_checks(
             "url = agent.removesuffix('/ag-ui') + '/health'; "
             "requests.get(url, timeout=5).raise_for_status()",
         )
-        return run_browser(
+        if return_code := run_browser(
             base_url, out, browser_env, script="copilot_browser_smoke.py"
-        )
+        ):
+            return return_code
+        with run_widget_host(base_url, widget_host_url, out):
+            return run_browser(
+                base_url,
+                out,
+                browser_env,
+                script="copilot_v2_browser_smoke.py",
+                widget_host_url=widget_host_url,
+            )
     return 0
 
 
@@ -156,6 +235,20 @@ def snapshot_copilot_bundle(bundle_dir: Path) -> None:
         raise RuntimeError("Build and package the Copilot extension before --copilot.")
     bundle_dir.mkdir()
     shutil.copy2(COPILOT_BUNDLE, bundle_dir)
+
+
+def copilot_web_mounts(bundle_dir: Path) -> list[str]:
+    """Mount the packaged extension and current server code read-only."""
+    arguments = [
+        "--mount",
+        f"type=bind,src={bundle_dir},dst=/semantic-lab-bundles,readonly",
+    ]
+    for package in COPILOT_SERVER_PACKAGES:
+        source = REPO / "superset" / package
+        arguments.extend(
+            ("--mount", f"type=bind,src={source},dst=/app/superset/{package},readonly")
+        )
+    return arguments
 
 
 def run_lab(
@@ -194,12 +287,17 @@ def run_lab(
     ]
     agent_name = f"{name}-agent"
     agent_env: dict[str, str] = {}
+    widget_host_url: str | None = None
     if copilot_agent_image:
+        widget_host_url = f"http://127.0.0.1:{loopback_port()}"
         shared_secret = secrets.token_hex(32)
+        guest_secret = secrets.token_hex(32)
         container_env.update(
             NXTBI_COPILOT_SEMANTIC_LAB="1",
+            NXTBI_SEMANTIC_LAB_GUEST_SECRET=guest_secret,
             NXTBI_COPILOT_AGENT_URL=f"http://{agent_name}:8100/ag-ui",
             NXTBI_COPILOT_SHARED_SECRET=shared_secret,
+            NXTBI_SEMANTIC_LAB_WIDGET_ORIGIN=widget_host_url,
         )
         agent_env = {
             "NXTBI_COPILOT_SHARED_SECRET": shared_secret,
@@ -207,7 +305,7 @@ def run_lab(
                 f"http://{name}:8088/api/v1/nxtbi_copilot/internal/tools"
             ),
         }
-        redactions.append(shared_secret)
+        redactions.extend((shared_secret, guest_secret))
 
     def save_log(filename: str, message: str) -> None:
         """Store lab logs without authentication secrets."""
@@ -261,13 +359,7 @@ def run_lab(
                     copilot_agent_image,
                 ).stdout.strip()
                 cleanup.callback(stop, agent_id, "copilot-agent.log")
-                web_arguments = [
-                    "--mount",
-                    f"type=bind,src={bundle_dir},dst=/semantic-lab-bundles,readonly",
-                    "--mount",
-                    f"type=bind,src={REPO / 'superset' / 'copilot'},"
-                    "dst=/app/superset/copilot,readonly",
-                ]
+                web_arguments = copilot_web_mounts(bundle_dir)
 
             container_id = docker(
                 "run",
@@ -308,7 +400,7 @@ def run_lab(
                 save_log=save_log,
                 serve=serve,
                 mcp=mcp,
-                copilot=bool(copilot_agent_image),
+                widget_host_url=widget_host_url,
             )
     except KeyboardInterrupt:
         return 0 if serve else 130
@@ -324,7 +416,9 @@ def main() -> int:
     )
     modes.add_argument("--mcp", action="store_true", help="Also verify native MCP")
     modes.add_argument(
-        "--copilot", action="store_true", help="Also verify bilingual Copilot saves"
+        "--copilot",
+        action="store_true",
+        help="Also verify bilingual Classic and V2 Copilot saves and Widget SDK embeds",
     )
     parser.add_argument(
         "--agent-image",

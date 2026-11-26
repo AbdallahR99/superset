@@ -127,6 +127,22 @@ export interface HostFilter {
   targets?: string[];
 }
 
+/** Query an approved semantic view from a metric tile or table. */
+export interface SemanticDataBindingSpec extends Omit<
+  DataBindingSpec,
+  'datasetId' | 'metrics'
+> {
+  semanticViewId: string;
+  datasetId?: never;
+  /** The names of approved metrics in the selected view. */
+  metrics: string[];
+}
+
+/** The supported data sources of a metric tile or table. */
+export type WidgetDataBindingSpec =
+  | (DataBindingSpec & { semanticViewId?: never })
+  | SemanticDataBindingSpec;
+
 /** A widget defined in place: the type and the props that configure it. */
 export interface InlineWidgetRef {
   type: string;

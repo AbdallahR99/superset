@@ -135,6 +135,34 @@ test('fetches the backend control schema for the widget type and renders it', as
   expect(await screen.findByText('Prefix')).toBeInTheDocument();
 });
 
+test('semantic widgets show their source while keeping presentation controls editable', async () => {
+  mockPost({
+    ...SCHEMA,
+    properties: {
+      ...SCHEMA.properties,
+      dataBinding: {
+        type: 'object',
+        properties: { datasetId: { type: 'integer', title: 'Dataset ID' } },
+      },
+    },
+  });
+  const dataBinding = {
+    semanticViewId: '32f12c00-448e-42de-836f-fb87cc4ed02b',
+    metrics: ['transactions'],
+  };
+  const id = mount('metric-tile', { dataBinding, prefix: '' });
+
+  expect(await screen.findByText('Prefix')).toBeInTheDocument();
+  expect(
+    screen.getByText('This widget uses an approved semantic view.'),
+  ).toBeInTheDocument();
+  expect(screen.queryByText('Dataset ID')).not.toBeInTheDocument();
+  await userEvent.type(screen.getByRole('textbox'), '$');
+  await waitFor(() =>
+    expect(provider.getNode(id)?.props).toEqual({ dataBinding, prefix: '$' }),
+  );
+});
+
 test('posts the current props as control_values so dynamic fields can enrich', async () => {
   mount('metric-tile', { dataBinding: { datasetId: 7, metrics: ['count'] } });
 

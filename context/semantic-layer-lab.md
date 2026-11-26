@@ -189,11 +189,13 @@ The provider is scoped to local synthetic data.
 ## Draft semantic dashboards in Copilot
 
 Open NxtBI Copilot in the semantic lab and choose **Semantic catalog**.
-Select the dashboard language and enter **average property price** or
-**متوسط سعر العقار**. Copilot asks which approved definition you mean.
-Choose average transaction price or weighted price per square meter, review
-the total and the property-type breakdown, then select **Save dashboard**.
-Open the saved Classic dashboard from the receipt.
+Select Classic or Dashboard V2, choose a language, then enter
+**average property price** or **متوسط سعر العقار**. Copilot asks which approved
+definition you mean. Choose average transaction price or weighted price per
+square meter, review the total and property-type breakdown, then select
+**Save dashboard**. For V2, open the draft from the receipt and choose
+**Publish** in Dashboard V2. Use each widget's **Embed widget** menu to save
+it and copy the SDK example for signed-in users.
 
 The lab uses the same approved semantic view for previews and native
 chart queries. Each dashboard saves an editable KPI and table with a stable
@@ -208,19 +210,38 @@ signed for the active actor, view, metric, model version and locale, then
 rechecked before an atomic save. The catalog tool resolves approved aliases
 and runs native queries without a model call.
 
+Dashboard V2 saves a native metric tile and table bound to the semantic
+view UUID and approved member names. The builder can edit presentation
+settings. Use Copilot's catalog to choose the source and measures. Dashboard
+and widget captions follow the viewing language. Table headers retain the
+authoring language, and dimension values come from the view.
+
+Semantic widgets use the viewer's Superset session and native semantic-view
+grants, including when rendered in a separate SDK host. Configure
+credentialed CORS for that host's exact origin. Semantic widget queries and
+semantic dashboard documents require a signed-in session. Saved semantic
+widgets are listed for their owners and admins, and a user with the view
+grant can open a shared widget directly by UUID.
+
 Use the repository's Node version and installed frontend dependencies
-to build and run the browser proof from the repository root.
+to build and run the browser proof from the repository root. The Dockerfile
+uses the lab's cached Linux asset-builder and Superset runtime images.
+Install the Widget SDK example's dependencies once with
+`npm --prefix superset-frontend/packages/superset-widgets/example ci`.
 
 ~~~bash
 npm --prefix nxtbi/copilot/superset-extension/frontend run build
 python nxtbi/copilot/superset-extension/package_bundle.py
-python -X utf8 -u nxtbi/semantic_lab/host/run.py --copilot
+docker build -f nxtbi/semantic_lab/host/Dockerfile -t nxtbi/superset-fork:semantic-lab-v2 .
+python -X utf8 -u nxtbi/semantic_lab/host/run.py --copilot --image nxtbi/superset-fork:semantic-lab-v2
 ~~~
 
-The runner mounts the compiled extension and current gateway source, uses
-the cached `nxtbi/copilot-agent:zero-code-bi` image on a private Docker bridge,
-and starts a fresh lab database. Browser evidence goes under
-`nxtbi/out/semantic-lab/`. The runner removes its containers and network.
+The runner mounts the compiled extension and the branch's Superset server
+packages read-only, uses the cached `nxtbi/copilot-agent:zero-code-bi` image
+on a private Docker bridge, and starts a fresh lab database. It seeds the
+native view and runs Classic and V2 browser checks, including the separate
+Vite SDK host. Evidence goes under `nxtbi/out/semantic-lab/`. The runner
+removes its containers and network and stops the widget host.
 
 ### Copilot browser evidence
 
@@ -244,6 +265,38 @@ TypeScript checking, and the Superset Copilot backend passed 30 tests.
 The lab and semantic SDK suite passed 240 tests with four capability skips.
 Screenshots and logs are in
 `nxtbi/out/semantic-lab/nxtbi-semantic-lab-fd8376fc95a9/`.
+
+### Dashboard V2 and widget SDK evidence
+
+On November 26, 2026, Chromium passed the full bilingual workflow on the
+disposable lab image `nxtbi/superset-fork:semantic-lab-v2`
+(`sha256:6223a6a5eff612a593d069a03629dcd6b988c8b9a3c638f16155b441c4cfc456`)
+with the branch's Python packages mounted read-only and the packaged
+Copilot bundle at SHA-256
+`b3aed1c5ce36b35f49bd92c17af191ebc59ae01af0d2197be463fb8ac6e17c56`.
+
+| Locale | Approved metric | Native KPI | Direction |
+|---|---|---:|---|
+| English | Average transaction price | AED 400,000.00 | LTR |
+| Arabic | Area-weighted price per square meter | AED 3,737.70/m² | RTL |
+
+Both requests clarified the metric, returned exact preview values, and
+saved native V2 drafts through approval. Chromium published each draft
+through the V2 toolbar, saved both widget IDs, and reopened the persisted
+dashboard. The actual SDK example on a separate origin rendered both
+KPI and property-type tables using the signed-in session. The test
+checked the exact displayed values and both individual and combined SDK
+snippets. A Gamma user had ordinary access denied before receiving the
+native view grant. The same user could then open both published dashboards
+read-only and render both sets of embedded widgets. The same run also
+passed the Classic browser regression and its language-switch check.
+
+The combined Copilot, Dashboard V2, Widgets, semantic-layer, and selected
+guest-access pytest suites passed **3,399 tests** with one capability skip.
+The scoped frontend Jest suites passed **752 tests** in 65 suites. The
+Copilot extension passed **29 tests** and TypeScript checking. The browser
+log and screenshots are in
+`nxtbi/out/semantic-lab/nxtbi-semantic-lab-cde786527d52/`.
 
 ## Evidence from this lab
 

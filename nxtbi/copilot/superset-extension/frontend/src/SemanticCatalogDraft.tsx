@@ -19,6 +19,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import type { DashboardType } from '@nxtbi/copilot';
 import type {
   SemanticDraftResult,
   SemanticSavedDashboard,
@@ -38,6 +39,10 @@ const copyByLocale = {
     saving: 'Saving dashboard…',
     saved: 'Dashboard saved.',
     open: 'Open dashboard',
+    draftSaved: 'Dashboard saved as a draft. Open it to publish.',
+    openDraft: 'Open dashboard draft',
+    unavailableFormat:
+      'Semantic drafts cannot be created in this format. Choose another dashboard format.',
     unmatched:
       'No approved metric matches that request. Try the example above.',
     draftError: 'Superset could not read the approved metrics. Try again.',
@@ -60,6 +65,10 @@ const copyByLocale = {
     saving: 'جارٍ حفظ لوحة المعلومات…',
     saved: 'تم حفظ لوحة المعلومات.',
     open: 'فتح لوحة المعلومات',
+    draftSaved: 'تم حفظ لوحة المعلومات كمسودة. افتحها لنشرها.',
+    openDraft: 'فتح مسودة لوحة المعلومات',
+    unavailableFormat:
+      'لا يمكن إنشاء مسودة دلالية بهذا التنسيق. اختر تنسيقًا آخر للوحة المعلومات.',
     unmatched: 'لا يوجد مقياس معتمد يطابق طلبك. جرّب المثال أعلاه.',
     draftError: 'تعذّرت قراءة المقاييس المعتمدة في Superset. حاول مجددًا.',
     saveError:
@@ -74,12 +83,14 @@ const copyByLocale = {
 
 type Props = {
   locale: 'en' | 'ar';
+  dashboardType: DashboardType;
   transport: SemanticTransport;
   dashboardHref: (url: string) => string | undefined;
 };
 
 function SemanticCatalogForm({
   locale,
+  dashboardType,
   transport,
   dashboardHref,
   summaryId,
@@ -144,6 +155,7 @@ function SemanticCatalogForm({
           {
             phrase: requestText,
             locale,
+            dashboardType,
             ...(candidates && { metricId: chosenMetric }),
           },
           signal,
@@ -160,7 +172,8 @@ function SemanticCatalogForm({
     if (!draft || saved) return;
     run(
       'save',
-      signal => transport.approve(draft.approvalToken, signal),
+      signal =>
+        transport.approve(draft.approvalToken, draft.dashboardType, signal),
       setSaved,
     );
   }
@@ -289,8 +302,14 @@ function SemanticCatalogForm({
           )}
           {saved && (
             <div className="nxtbi-copilot__saved">
-              <output>{text.saved}</output>
-              {href && <a href={href}>{text.open}</a>}
+              <output>
+                {saved.dashboardType === 'v2' ? text.draftSaved : text.saved}
+              </output>
+              {href && (
+                <a href={href}>
+                  {saved.dashboardType === 'v2' ? text.openDraft : text.open}
+                </a>
+              )}
             </div>
           )}
         </section>
@@ -300,25 +319,31 @@ function SemanticCatalogForm({
 }
 
 export default function SemanticCatalogDraft(props: Props) {
-  const { locale, transport } = props;
+  const { locale, dashboardType, transport } = props;
   const summaryId = useId();
-  const [available, setAvailable] = useState(false);
+  const [catalog, setCatalog] = useState<{
+    transport: SemanticTransport;
+    formats: DashboardType[];
+  }>();
+  const formats =
+    catalog?.transport === transport ? catalog.formats : undefined;
 
   useEffect(() => {
     const controller = new AbortController();
-    setAvailable(false);
     transport
-      .available(controller.signal)
+      .dashboardTypes(controller.signal)
       .then(supported => {
-        if (!controller.signal.aborted) setAvailable(supported);
+        if (!controller.signal.aborted)
+          setCatalog({ transport, formats: supported });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setAvailable(false);
+        if (!controller.signal.aborted) setCatalog(undefined);
       });
     return () => controller.abort();
   }, [transport]);
 
-  if (!available) return null;
+  if (!formats?.length) return null;
+  const text = copyByLocale[locale];
   return (
     <details
       className="nxtbi-copilot-semantic"
@@ -326,8 +351,18 @@ export default function SemanticCatalogDraft(props: Props) {
       dir={locale === 'ar' ? 'rtl' : 'ltr'}
       lang={locale}
     >
-      <summary id={summaryId}>{copyByLocale[locale].name}</summary>
-      <SemanticCatalogForm key={locale} {...props} summaryId={summaryId} />
+      <summary id={summaryId}>{text.name}</summary>
+      {formats.includes(dashboardType) ? (
+        <SemanticCatalogForm
+          key={`${locale}:${dashboardType}`}
+          {...props}
+          summaryId={summaryId}
+        />
+      ) : (
+        <output className="nxtbi-copilot-semantic__body">
+          {text.unavailableFormat}
+        </output>
+      )}
     </details>
   );
 }

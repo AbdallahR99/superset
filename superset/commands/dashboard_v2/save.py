@@ -29,14 +29,13 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_module
-from typing import Any, cast
+from typing import Any
 
 from flask import current_app
 from marshmallow import ValidationError
 from pydantic import BaseModel, ValidationError as PydanticValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import object_session
-from superset_core.widgets import Widget
 
 from superset import db, security_manager
 from superset.commands.base import BaseCommand
@@ -86,7 +85,7 @@ from superset.utils.core import get_user_id
 from superset.utils.decorators import transaction
 from superset.versioning.changes.state import capture_initial_state
 from superset.versioning.unit_of_work import capture_for_write, INITIAL_STATES_KEY
-from superset.widgets.data import widget_dataset_id
+from superset.widgets.data import widget_dataset_id, widget_semantic_view_id
 from superset.widgets.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -215,10 +214,14 @@ _BINDING_PROPS = ("dataBinding", "datasetId", "column")
 _DATASET_FORBIDDEN = "You don't have access to the dataset this widget reads."
 
 
-def _node_binds_dataset(node: dict[str, Any]) -> bool:
-    """Whether a node's definition reads a dataset, as its widget type sees it."""
+def _node_binds_data(node: dict[str, Any]) -> bool:
+    """Whether the node binds a native dataset or semantic view."""
     widget_cls = registry.get(str(node.get("type")))
-    return widget_dataset_id(widget_cls, node.get("props")) is not None
+    props = node.get("props")
+    return (
+        widget_dataset_id(widget_cls, props) is not None
+        or widget_semantic_view_id(widget_cls, props) is not None
+    )
 
 
 def _binding_signature(node: dict[str, Any]) -> str:
@@ -245,7 +248,7 @@ def _stored_binding_signatures(previous: dict[str, Any] | None) -> set[str]:
     return {
         _binding_signature(node)
         for node in nodes.values()
-        if isinstance(node, dict) and _node_binds_dataset(node)
+        if isinstance(node, dict) and _node_binds_data(node)
     }
 
 
@@ -254,7 +257,7 @@ def raise_for_document_authoring(
 ) -> None:
     """
     Apply the saved-widget authoring rule to the data definitions a writer
-    adds to a document: read access to the dataset a node binds, and the
+    adds to a document: read access to the data the node binds, and the
     right to write SQL when the definition carries any.
 
     Only definitions the stored document does not hold yet are checked: a
@@ -271,17 +274,22 @@ def raise_for_document_authoring(
     known = _stored_binding_signatures(previous)
     errors: dict[str, Any] = {}
     for node_id, node in document["nodes"].items():
-        if not _node_binds_dataset(node) or _binding_signature(node) in known:
+        if not _node_binds_data(node) or _binding_signature(node) in known:
             continue
         props = node.get("props") or {}
         loc = ["dataBinding"] if "dataBinding" in props else ["datasetId"]
         # An extension type without a backend class has no widget class; the
         # rule then reads the dataset from the props, as the read rule does.
-        widget_cls = cast("type[Widget]", registry.get(str(node.get("type"))))
+        widget_cls = registry.get(str(node.get("type")))
         try:
             raise_for_widget_authoring(widget_cls, props)
         except SavedWidgetForbiddenError:
-            errors[node_id] = [{"loc": loc, "message": _DATASET_FORBIDDEN}]
+            message = (
+                "You don't have access to the semantic view this widget reads."
+                if widget_semantic_view_id(widget_cls, props) is not None
+                else _DATASET_FORBIDDEN
+            )
+            errors[node_id] = [{"loc": loc, "message": message}]
         except (WidgetSqlForbiddenError, WidgetInvalidError) as ex:
             errors[node_id] = [{"loc": loc, "message": str(ex.message)}]
     if errors:

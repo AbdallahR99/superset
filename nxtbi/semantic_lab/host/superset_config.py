@@ -35,7 +35,16 @@ FEATURE_FLAGS = {
 LOCAL_EXTENSIONS = ["/semantic-lab-extension"]
 NXTBI_COPILOT_SEMANTIC_LAB = os.getenv("NXTBI_COPILOT_SEMANTIC_LAB") == "1"
 if NXTBI_COPILOT_SEMANTIC_LAB:
-    FEATURE_FLAGS["NXTBI_AI_COPILOT"] = True
+    FEATURE_FLAGS.update(
+        NXTBI_AI_COPILOT=True, DASHBOARD_V2=True, EMBEDDED_SUPERSET=True
+    )
+    GUEST_TOKEN_JWT_SECRET = os.environ["NXTBI_SEMANTIC_LAB_GUEST_SECRET"]
+    ENABLE_CORS = True
+    CORS_OPTIONS = {
+        "origins": [os.environ["NXTBI_SEMANTIC_LAB_WIDGET_ORIGIN"]],
+        "supports_credentials": True,
+        "allow_headers": ["Content-Type", "X-CSRFToken"],
+    }
     EXTENSIONS_PATH = "/semantic-lab-bundles"
     NXTBI_COPILOT_AGENT_URL = os.environ["NXTBI_COPILOT_AGENT_URL"]
     NXTBI_COPILOT_SHARED_SECRET = os.environ["NXTBI_COPILOT_SHARED_SECRET"]

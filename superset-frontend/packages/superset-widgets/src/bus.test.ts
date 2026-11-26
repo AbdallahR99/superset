@@ -61,6 +61,19 @@ test('a source applies to every other consumer on its dataset', () => {
   expect(getActiveResolvedFilters(bus, 2, 'chart')).toEqual([]);
 });
 
+test('a consumer without a numeric dataset receives only explicitly targeted filters', () => {
+  bus.emit('unscoped', EVENT, {
+    selection: 'east',
+    resolved: { column: 'region', operator: 'EQUALS', value: 'east' },
+  });
+  bus.emit('from-dataset', EVENT, equals('south', 1));
+  bus.emit('targeted', EVENT, equals('west', 1, ['semantic-tile']));
+
+  expect(getActiveResolvedFilters(bus, undefined, 'semantic-tile')).toEqual([
+    { column: 'region', operator: 'EQUALS', value: 'west', datasource: 1 },
+  ]);
+});
+
 test('a source never filters itself', () => {
   bus.emit('chart', EVENT, equals('west'));
 

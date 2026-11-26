@@ -55,27 +55,39 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import Any, cast, TYPE_CHECKING
+from uuid import UUID
 
 from flask import current_app
+from pydantic import ValidationError
 from superset_core.widgets import Widget
 
+from superset import security_manager
 from superset.commands.chart.data.get_data_command import ChartDataCommand
 from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
 from superset.common.query_context_factory import QueryContextFactory
 from superset.daos.datasource import DatasourceDAO
 from superset.daos.exceptions import DatasourceNotFound
+from superset.daos.semantic_layer import SemanticViewDAO
+from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import SupersetSecurityException
+from superset.semantic_layers.access import is_semantic_layers_enabled
+from superset.semantic_layers.registry import registry as semantic_layer_registry
 from superset.utils.core import (
     apply_max_row_limit,
     DatasourceType,
+    get_user_id,
     split_adhoc_filters_into_base_filters,
 )
+from superset.widgets.controls import SemanticDataBinding
 
 if TYPE_CHECKING:
+    from superset.common.query_context import QueryContext
     from superset.connectors.sqla.models import BaseDatasource
+    from superset.semantic_layers.models import SemanticView
 
 DEFAULT_ROW_LIMIT = 1000
+_SEMANTIC_WIDGET_TYPES = frozenset({"metric-tile", "ag-grid-table"})
 
 FILTER_OPERATORS = frozenset(
     {"EQUALS", "NOT_EQUALS", "IN", "NOT_IN", "RANGE", "TIME_RANGE"}
@@ -144,13 +156,14 @@ class FilterValidationError(ValueError):
 @dataclass(frozen=True)
 class WidgetContext:
     """
-    What a widget data request is served for: the dataset its props read and,
-    for a saved widget, its uuid. Built only server-side, never from a request
+    What a widget data request serves: its table or semantic source and,
+    for a saved widget, its UUID. Built only server-side, never from a request
     payload, so authorization can trust it.
     """
 
     dataset_id: int | None
     saved_widget_uuid: str | None = None
+    semantic_view_id: UUID | None = None
 
     @property
     def inline(self) -> bool:
@@ -218,6 +231,71 @@ def widget_dataset_id(widget_cls: type[Widget] | None, props: Any) -> int | None
     if not widget_queries_data(widget_cls):
         return None
     return props_dataset_id(props)
+
+
+def widget_semantic_view_id(widget_cls: type[Widget] | None, props: Any) -> UUID | None:
+    """Identify a semantic view only for its supported native widget types."""
+    if (
+        getattr(widget_cls, "widget_type", None) not in _SEMANTIC_WIDGET_TYPES
+        or not isinstance(props, dict)
+        or not isinstance(binding := props.get("dataBinding"), dict)
+        or not isinstance(ref := binding.get("semanticViewId"), str)
+    ):
+        return None
+    try:
+        return UUID(ref)
+    except ValueError:
+        return None
+
+
+def resolve_widget_semantic_view(view_id: UUID) -> SemanticView:
+    """Require the native feature and the actor's view grant before discovery."""
+    if not is_semantic_layers_enabled():
+        raise WidgetDatasetMissingError("Semantic views are unavailable.")
+    if security_manager.is_guest_user() or get_user_id() is None:
+        raise SupersetSecurityException(
+            SupersetError(
+                message="Semantic view widgets require a signed-in user.",
+                error_type=SupersetErrorType.DATASOURCE_SECURITY_ACCESS_ERROR,
+                level=ErrorLevel.ERROR,
+            )
+        )
+    view = SemanticViewDAO.find_by_id(str(view_id), id_column="uuid")
+    if view is None:
+        raise WidgetDatasetMissingError("The widget's semantic view is unavailable.")
+    view.raise_for_access()
+    if view.semantic_layer.type not in semantic_layer_registry:
+        raise WidgetDatasetMissingError("The widget's semantic view is unavailable.")
+    return view
+
+
+def _semantic_binding(props: dict[str, Any]) -> SemanticDataBinding:
+    """Parse a source-specific binding without accepting table or SQL props."""
+    try:
+        return SemanticDataBinding.model_validate(props.get("dataBinding"))
+    except ValidationError as ex:
+        raise WidgetDataError("Invalid semantic view binding.") from ex
+
+
+def validate_widget_semantic_members(view: SemanticView, props: dict[str, Any]) -> None:
+    """Ensure selection belongs to the already-authorized semantic view."""
+    _validate_semantic_members(view, _semantic_binding(props))
+
+
+def _validate_semantic_members(
+    view: SemanticView, binding: SemanticDataBinding
+) -> None:
+    """Check the binding against the authorized view and its saved members."""
+    if binding.semantic_view_id != str(view.uuid):
+        raise WidgetDataError("The widget's semantic view does not match its context.")
+    try:
+        view.implementation.validate_selection_version(binding.selection_version)
+    except ValueError as ex:
+        raise WidgetDataError("Refresh this widget's semantic view selection.") from ex
+    if not set(binding.metrics).issubset(metric.metric_name for metric in view.metrics):
+        raise WidgetDataError("Choose saved metrics from the semantic view.")
+    if not set(binding.dimensions).issubset(view.column_names):
+        raise WidgetDataError("Choose dimensions from the semantic view.")
 
 
 def _is_scalar(value: Any) -> bool:
@@ -498,9 +576,6 @@ def user_may_author_widget_sql(datasource: BaseDatasource | None) -> bool:
     role grants. A definition that binds no dataset has nothing to run SQL
     against and is left to admins.
     """
-    # pylint: disable=import-outside-toplevel
-    from superset import security_manager
-
     if security_manager.is_guest_user():
         return False
     if security_manager.is_admin():
@@ -605,9 +680,6 @@ def raise_for_widget_datasource_access(
     (column values): a guest is authorized by the widget rule, anyone else by
     the datasource's own permissions.
     """
-    # pylint: disable=import-outside-toplevel
-    from superset import security_manager
-
     if security_manager.is_guest_user():
         if not isinstance(
             context, WidgetContext
@@ -636,6 +708,74 @@ def fetch_column_values(dataset_id: int, column: str, context: Any) -> list[Any]
         raise WidgetDataError(f"Column {column} does not exist") from ex
 
 
+def _query_widget_rows(query_context: QueryContext) -> dict[str, Any]:
+    """Use the native chart command and keep the widget response shape."""
+    command = ChartDataCommand(query_context)
+    command.validate()
+    result = command.run()
+    first = result["queries"][0] if result["queries"] else {}
+    return {"columns": first.get("colnames") or [], "rows": first.get("data") or []}
+
+
+def _fetch_semantic_rows(
+    widget_cls: type[Widget],
+    props: dict[str, Any],
+    filters: list[dict[str, Any]],
+    context: Any,
+) -> dict[str, Any]:
+    """Run a saved-member query against an explicitly authorized semantic view."""
+    view_id = widget_semantic_view_id(widget_cls, props)
+    if (
+        view_id is None
+        or not isinstance(context, WidgetContext)
+        or context.dataset_id is not None
+        or context.semantic_view_id != view_id
+    ):
+        raise WidgetDataError("The widget's semantic view does not match its context.")
+    binding = _semantic_binding(props)
+    view = resolve_widget_semantic_view(view_id)
+    _validate_semantic_members(view, binding)
+
+    adhoc_filters = resolved_filters_to_adhoc(filters, set(view.column_names))
+    form_data: dict[str, Any] = {
+        "datasource": f"{view.id}__semantic_view",
+        "metrics": binding.metrics,
+        "groupby": binding.dimensions,
+        "adhoc_filters": adhoc_filters,
+        "row_limit": binding.row_limit,
+        "result_format": "json",
+        "result_type": "full",
+    }
+    extras = (
+        {"semantic_selection_version": binding.selection_version}
+        if binding.selection_version is not None
+        else {}
+    )
+    query: dict[str, Any] = {
+        "metrics": binding.metrics,
+        "columns": binding.dimensions,
+        "filters": [
+            {"col": item["subject"], "op": item["operator"], "val": item["comparator"]}
+            for item in adhoc_filters
+        ],
+        "extras": extras,
+        "row_limit": binding.row_limit,
+    }
+    if binding.order_by_dimension and binding.dimensions:
+        query["orderby"] = [(dimension, True) for dimension in binding.dimensions]
+    query_context = QueryContextFactory(authorize_semantic_before_metadata=True).create(
+        datasource={
+            "id": cast(int, view.id),
+            "type": DatasourceType.SEMANTIC_VIEW.value,
+        },
+        queries=[query],
+        form_data=form_data,
+        result_type=ChartDataResultType.FULL,
+        result_format=ChartDataResultFormat.JSON,
+    )
+    return _query_widget_rows(query_context)
+
+
 class DataBindingWidget(Widget):
     """``fetch_data`` for any widget whose props carry a ``dataBinding``."""
 
@@ -656,6 +796,10 @@ class DataBindingWidget(Widget):
         filters: list[dict[str, Any]],
         context: Any,
     ) -> dict[str, Any]:
+        binding = props.get("dataBinding")
+        if isinstance(binding, dict) and "semanticViewId" in binding:
+            return _fetch_semantic_rows(cls, props, filters, context)
+
         dataset_id = cls.bound_dataset_id(props)
         if dataset_id is None:
             raise WidgetDataError("This widget has no data binding.")
@@ -675,8 +819,4 @@ class DataBindingWidget(Widget):
             result_format=ChartDataResultFormat.JSON,
         )
         query_context.widget_context = context
-        command = ChartDataCommand(query_context)
-        command.validate()
-        result = command.run()
-        first = result["queries"][0] if result["queries"] else {}
-        return {"columns": first.get("colnames") or [], "rows": first.get("data") or []}
+        return _query_widget_rows(query_context)

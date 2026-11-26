@@ -150,13 +150,15 @@ function Panel() {
         const destination = resolveDashboardLink(base, url);
         if (destination) window.location.assign(destination);
       },
-      renderAuthoringTools: contentLocale => (
-        <SemanticCatalogDraft
-          locale={contentLocale}
-          transport={semanticTransport}
-          dashboardHref={url => resolveDashboardLink(base, url)}
-        />
-      ),
+      renderAuthoringTools: (contentLocale, dashboardType) =>
+        dashboardType && (
+          <SemanticCatalogDraft
+            locale={contentLocale}
+            dashboardType={dashboardType}
+            transport={semanticTransport}
+            dashboardHref={url => resolveDashboardLink(base, url)}
+          />
+        ),
       renderProposal: (proposal, onChange, previewLocale) => (
         <Suspense
           fallback={

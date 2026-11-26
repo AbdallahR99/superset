@@ -60,7 +60,7 @@ from superset.copilot.contracts import (
 )
 from superset.copilot.semantic_catalog import (
     approve_semantic_dashboard,
-    semantic_catalog_available,
+    semantic_catalog_dashboard_types,
     SemanticCatalogApprovalError,
     SemanticCatalogPreviewError,
     SemanticCatalogUnavailableError,
@@ -253,7 +253,10 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
     def semantic_catalog(self) -> Response:
         """Report availability for the authenticated dashboard author."""
         _actor()
-        response = jsonify(available=semantic_catalog_available())
+        dashboard_types = semantic_catalog_dashboard_types()
+        response = jsonify(
+            available=bool(dashboard_types), dashboardTypes=dashboard_types
+        )
         response.cache_control.no_store = True
         return response
 
@@ -280,7 +283,7 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
         """Save a confirmed semantic draft through native dashboard commands."""
         actor = _actor()
         try:
-            dashboard_id, created = approve_semantic_dashboard(
+            dashboard_id, created, dashboard_type = approve_semantic_dashboard(
                 _body(4096), actor.id, _secret()
             )
         except SemanticCatalogUnavailableError:
@@ -291,8 +294,12 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
             return self.response(error.status, message=str(error.message))
         except ValueError:
             return self.response(422, message="Check the semantic dashboard draft.")
+        path = "/dashboard/v2/" if dashboard_type == "v2" else "/dashboard/"
         response = self.response(
-            201 if created else 200, id=dashboard_id, url=f"/dashboard/{dashboard_id}/"
+            201 if created else 200,
+            id=dashboard_id,
+            url=f"{path}{dashboard_id}/",
+            dashboardType=dashboard_type,
         )
         response.cache_control.no_store = True
         return response

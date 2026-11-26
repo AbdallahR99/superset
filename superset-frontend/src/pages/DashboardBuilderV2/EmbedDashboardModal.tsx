@@ -34,6 +34,7 @@ export interface EmbeddableWidget {
   label: string;
   /** The saved widget's uuid, once the widget has been saved for embedding. */
   savedId: string | undefined;
+  requiresSession: boolean;
 }
 
 /**
@@ -58,10 +59,14 @@ export function listEmbeddableWidgets(): EmbeddableWidget[] {
         return [];
       }
       const savedId = node.props?.[EMBED_WIDGET_ID_PROP];
+      const binding = node.props?.dataBinding as
+        | { semanticViewId?: unknown }
+        | undefined;
       return [
         {
           nodeId,
           label: widgetLabel(node.type, node.props) || node.type,
+          requiresSession: typeof binding?.semanticViewId === 'string',
           savedId:
             typeof savedId === 'string' && savedId !== '' ? savedId : undefined,
         },
@@ -70,27 +75,33 @@ export function listEmbeddableWidgets(): EmbeddableWidget[] {
 }
 
 /**
- * What a host application pastes to render the saved widgets, and the guest
- * token payload that lets it: each widget is named as a `widget` resource,
- * and a token that does not name a widget cannot read it.
+ * Render saved widgets using the viewer's Superset session or a guest token
+ * that names each `widget` resource.
  */
 export function buildEmbedSnippet(
   supersetDomain: string,
   widgetIds: readonly string[],
+  requiresSession = false,
 ): string {
   const widgets = widgetIds.map(id => `  <Widget id="${id}" />`).join('\n');
-  const resources = widgetIds
-    .map(id => `    { type: "widget", id: "${id}" },`)
-    .join('\n');
-  return [
+  const example = [
     `import { SupersetProvider, Widget } from '@apache-superset/widgets';`,
     '',
     '<SupersetProvider',
     `  supersetDomain="${supersetDomain}"`,
-    '  fetchGuestToken={fetchGuestToken}',
+    ...(requiresSession ? [] : ['  fetchGuestToken={fetchGuestToken}']),
     '>',
     widgets,
     '</SupersetProvider>',
+  ];
+  if (requiresSession) {
+    return example.join('\n');
+  }
+  const resources = widgetIds
+    .map(id => `    { type: "widget", id: "${id}" },`)
+    .join('\n');
+  return [
+    ...example,
     '',
     '// guest token payload, requested by your backend',
     '{',
@@ -129,9 +140,12 @@ export default function EmbedDashboardModal({
   const savedIds = widgets.flatMap(widget =>
     widget.savedId === undefined ? [] : [widget.savedId],
   );
+  const requiresSession = widgets.some(
+    widget => widget.savedId !== undefined && widget.requiresSession,
+  );
   const snippet =
     savedIds.length > 0
-      ? buildEmbedSnippet(window.location.origin, savedIds)
+      ? buildEmbedSnippet(window.location.origin, savedIds, requiresSession)
       : '';
 
   return (
@@ -197,6 +211,14 @@ export default function EmbedDashboardModal({
                   'A saved widget is a copy taken when it was saved. After editing a widget here, update its saved copy from the widget menu, and save the dashboard so it remembers the ids.',
                 )}
               </Typography.Text>
+              {requiresSession && (
+                <Typography.Text
+                  type="secondary"
+                  data-test="embed-dashboard-session"
+                >
+                  {t('Viewers sign in to Superset to see these widgets.')}
+                </Typography.Text>
+              )}
               <Typography.Paragraph copyable={{ text: snippet }}>
                 <pre data-test="embed-dashboard-snippet">{snippet}</pre>
               </Typography.Paragraph>

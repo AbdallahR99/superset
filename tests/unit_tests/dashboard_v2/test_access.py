@@ -100,12 +100,17 @@ def test_bound_dataset_ids_cover_every_binding_shape() -> None:
 
 @pytest.mark.parametrize(
     "caller",
-    [{"admin": True}, {"editor": True}, {"guest": True}],
+    ["admin", "editor", "guest"],
 )
 def test_admins_editors_and_guests_named_by_their_token_read_the_document(
-    mocker: MockerFixture, caller: dict[str, bool]
+    mocker: MockerFixture, caller: str
 ) -> None:
-    _caller(mocker, **caller)
+    _caller(
+        mocker,
+        admin=caller == "admin",
+        editor=caller == "editor",
+        guest=caller == "guest",
+    )
     query = mocker.patch.object(access.db.session, "query")
 
     assert access.can_read_document(_dashboard(), _bound_document(7)) is True
@@ -234,3 +239,51 @@ def test_document_without_data_widgets_is_403_for_a_plain_user(
     _caller(mocker)
 
     assert client.get(f"{BASE}{pk}").status_code == 403
+
+
+@pytest.mark.parametrize("permitted", [True, False])
+def test_datasource_fallback_checks_semantic_view_in_mixed_document(
+    mocker: MockerFixture, permitted: bool
+) -> None:
+    """Native SQL access alone cannot make a semantic binding readable."""
+    from uuid import UUID
+
+    from superset.exceptions import SupersetSecurityException
+
+    view_id = UUID("bcf495c4-a0c7-4c9b-93fb-057843afb295")
+    _caller(mocker, datasets={7})
+    _existing_datasets(mocker, 7)
+    document = _bound_document(7)
+    document["nodes"]["semantic"] = {
+        "type": "metric-tile",
+        "props": {
+            "dataBinding": {"semanticViewId": str(view_id), "metrics": ["sales"]}
+        },
+    }
+    document["nodes"]["root"]["children"].append("semantic")
+    resolver = mocker.patch.object(access, "resolve_widget_semantic_view")
+    if not permitted:
+        resolver.side_effect = SupersetSecurityException(MagicMock())
+
+    assert access.can_read_document(_dashboard(), document) is permitted
+    resolver.assert_called_once_with(view_id)
+
+
+def test_embedded_guest_cannot_read_a_document_with_semantic_widgets(
+    mocker: MockerFixture,
+) -> None:
+    """Dashboard embed tokens cannot grant the session-only semantic source."""
+    _caller(mocker, guest=True)
+    document = _bound_document(7)
+    document["nodes"]["semantic"] = {
+        "type": "metric-tile",
+        "props": {
+            "dataBinding": {
+                "semanticViewId": "bcf495c4-a0c7-4c9b-93fb-057843afb295",
+                "metrics": ["sales"],
+            }
+        },
+    }
+    document["nodes"]["root"]["children"].append("semantic")
+
+    assert not access.can_read_document(_dashboard(), document)

@@ -1368,7 +1368,7 @@ export function CopilotPanel({
               </div>
             )}
           </div>
-          {host.renderAuthoringTools?.(contentLocale)}
+          {host.renderAuthoringTools?.(contentLocale, dashboardType)}
           {host.listDatasets && host.approve && (
             <ExistingDatasetPicker
               locale={shellLocale}

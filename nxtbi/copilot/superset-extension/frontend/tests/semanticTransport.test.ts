@@ -41,6 +41,7 @@ const options = [
 ];
 const draft = {
   status: 'draft',
+  dashboardType: 'v2',
   metric,
   title: 'أسعار سوق العقارات',
   value: 3737.7049,
@@ -63,10 +64,10 @@ test('checks semantic catalog availability with the authenticated app prefix', a
   mock,
 }) => {
   const fetchMock = mock.method(globalThis, 'fetch', async () =>
-    json({ available: true }),
+    json({ available: true, dashboardTypes: ['v1', 'v2'] }),
   );
   const { signal } = new AbortController();
-  assert.equal(await transport().available(signal), true);
+  assert.deepEqual(await transport().dashboardTypes(signal), ['v1', 'v2']);
 
   const [url, request] = fetchMock.mock.calls[0].arguments as [
     string,
@@ -82,13 +83,17 @@ test('checks semantic catalog availability with the authenticated app prefix', a
 
 test('an unavailable lab capability is optional', async ({ mock }) => {
   mock.method(globalThis, 'fetch', async () => json({}, 404));
-  assert.equal(await transport().available(), false);
+  assert.deepEqual(await transport().dashboardTypes(), []);
 });
 
 test('sends a CSRF-authenticated Arabic request and locks the chosen metric', async ({
   mock,
 }) => {
-  const input = { phrase: 'متوسط سعر العقار', locale: 'ar' as const };
+  const input = {
+    phrase: 'متوسط سعر العقار',
+    locale: 'ar' as const,
+    dashboardType: 'v2' as const,
+  };
   const selected = { ...input, metricId: metric.metricId };
   const fetchMock = mock.method(
     globalThis,
@@ -139,7 +144,7 @@ test('rejects a semantic preview containing non-numeric results', async ({
       : json({ ...draft, rows: [{ label: 'Villa', value: '2714.2857' }] }),
   );
   await assert.rejects(
-    transport().draft({ phrase: 'Price', locale: 'en' }),
+    transport().draft({ phrase: 'Price', locale: 'en', dashboardType: 'v2' }),
     /invalid semantic dashboard draft/i,
   );
 });
@@ -147,11 +152,11 @@ test('rejects a semantic preview containing non-numeric results', async ({
 test('approves a semantic dashboard and returns the matching Classic path', async ({
   mock,
 }) => {
-  const saved = { id: 8, url: '/dashboard/8/' };
+  const saved = { id: 8, url: '/dashboard/8/', dashboardType: 'v1' };
   const fetchMock = mock.method(globalThis, 'fetch', async (url: string) =>
     url === csrfEndpoint ? json({ result: 'fixture-csrf' }) : json(saved, 201),
   );
-  assert.deepEqual(await transport().approve(draft.approvalToken), saved);
+  assert.deepEqual(await transport().approve(draft.approvalToken, 'v1'), saved);
   const [url, options] = fetchMock.mock.calls[1].arguments as [
     string,
     RequestInit,
@@ -174,11 +179,48 @@ test('accepts only the approved Classic dashboard path after save', async ({
   mock.method(globalThis, 'fetch', async (url: string) =>
     url === csrfEndpoint
       ? json({ result: 'fixture-csrf' })
-      : json({ id: 8, url: paths.next().value }, 200),
+      : json({ id: 8, url: paths.next().value, dashboardType: 'v1' }, 200),
   );
   for (const _ of invalidPaths) {
     await assert.rejects(
-      transport().approve(draft.approvalToken),
+      transport().approve(draft.approvalToken, 'v1'),
+      /invalid semantic dashboard response/i,
+    );
+  }
+});
+
+test('checks the returned native draft format before presenting its approval', async ({
+  mock,
+}) => {
+  mock.method(globalThis, 'fetch', async (url: string) =>
+    url === csrfEndpoint ? json({ result: 'fixture-csrf' }) : json(draft),
+  );
+  await assert.rejects(
+    transport().draft({ phrase: 'Price', locale: 'en', dashboardType: 'v1' }),
+    /invalid semantic dashboard draft/i,
+  );
+});
+
+test('returns a V2 receipt only when both the format and native path match', async ({
+  mock,
+}) => {
+  const saved = { id: 8, url: '/dashboard/v2/8/', dashboardType: 'v2' };
+  const responses = [
+    saved,
+    { ...saved, url: '/dashboard/8/' },
+    { ...saved, url: '/dashboard/v2/9/' },
+    { ...saved, dashboardType: 'v1' },
+  ].values();
+  mock.method(globalThis, 'fetch', async (url: string) =>
+    url === csrfEndpoint
+      ? json({ result: 'fixture-csrf' })
+      : json(responses.next().value, 201),
+  );
+  const session = transport();
+  assert.deepEqual(await session.approve(draft.approvalToken, 'v2'), saved);
+  for (let index = 0; index < 3; index += 1) {
+    await assert.rejects(
+      session.approve(draft.approvalToken, 'v2'),
       /invalid semantic dashboard response/i,
     );
   }
@@ -192,7 +234,7 @@ test('reports approval errors using a fixed error message', async ({
       ? json({ result: 'fixture-csrf' })
       : new Response('<p>Internal lab details</p>', { status: 403 }),
   );
-  await assert.rejects(transport().approve(draft.approvalToken), {
+  await assert.rejects(transport().approve(draft.approvalToken, 'v1'), {
     message: 'Superset rejected the semantic dashboard approval.',
   });
 });

@@ -41,9 +41,11 @@ from superset.widgets.data import (
     FilterValidationError,
     get_table,
     raise_for_widget_sql,
+    resolve_widget_semantic_view,
     validate_guest_inline_props,
     widget_dataset_id,
     widget_queries_data,
+    widget_semantic_view_id,
     WidgetContext,
     WidgetDataError,
     WidgetDatasetMissingError,
@@ -52,6 +54,20 @@ from superset.widgets.data import (
 from superset.widgets.registry import registry
 
 T = TypeVar("T")
+
+
+def _resolve_widget_context(
+    widget_cls: type[Widget], props: dict[str, Any], saved_uuid: str | None = None
+) -> WidgetContext:
+    """Bind the context to the widget's data after any semantic access check."""
+    view_id = widget_semantic_view_id(widget_cls, props)
+    if view_id is not None:
+        if security_manager.is_guest_user():
+            raise SavedWidgetForbiddenError()
+        resolve_widget_semantic_view(view_id)
+    return WidgetContext(
+        widget_dataset_id(widget_cls, props), saved_uuid, semantic_view_id=view_id
+    )
 
 
 def resolve_widget(
@@ -64,7 +80,7 @@ def resolve_widget(
         if widget_cls is None:
             raise WidgetInvalidError(f"Unknown widget type {saved.widget_type!r}.")
         props = saved.props_dict
-        context = WidgetContext(widget_dataset_id(widget_cls, props), str(saved.uuid))
+        context = _resolve_widget_context(widget_cls, props, str(saved.uuid))
         # Reading a named definition and running its query are distinct grants.
         # Check the binding before dispatch, including for extension widgets.
         if (
@@ -81,7 +97,9 @@ def resolve_widget(
     inline_props = spec.get("props")
     widget_cls = validate_widget_props(spec.get("type"), inline_props)
     assert isinstance(inline_props, dict)
-    context = WidgetContext(widget_dataset_id(widget_cls, inline_props))
+    context = _resolve_widget_context(widget_cls, inline_props)
+    if context.semantic_view_id is not None:
+        return widget_cls, inline_props, context
     if security_manager.is_guest_user():
         # Default deny: a guest may only send an inline definition for a
         # dataset its token grants through an explicit ``dataset`` resource,

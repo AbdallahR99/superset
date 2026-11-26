@@ -495,3 +495,121 @@ def test_update_requires_owner_or_admin(mocker: MockerFixture) -> None:
     user_id.return_value = 1
     sm.is_admin.return_value = True
     UpdateSavedWidgetCommand("x", {"title": "t"}).validate()
+
+
+def test_semantic_widget_checks_view_access_before_authoring(
+    mocker: MockerFixture,
+) -> None:
+    """A saved semantic binding is validated against an authorized view."""
+    from superset.commands.widget.utils import raise_for_widget_authoring
+
+    view_id = uuid.uuid4()
+    props = {"dataBinding": {"semanticViewId": str(view_id), "metrics": ["sales"]}}
+    widget_cls = registry.get("metric-tile")
+    assert widget_cls is not None
+    resolver = mocker.patch(
+        "superset.commands.widget.utils.resolve_widget_semantic_view"
+    )
+    validate = mocker.patch(
+        "superset.commands.widget.utils.validate_widget_semantic_members"
+    )
+
+    raise_for_widget_authoring(widget_cls, props)
+    resolver.assert_called_once_with(view_id)
+    validate.assert_called_once_with(resolver.return_value, props)
+
+    resolver.side_effect = SupersetSecurityException(MagicMock())
+    validate.reset_mock()
+    with pytest.raises(SavedWidgetForbiddenError):
+        raise_for_widget_authoring(widget_cls, props)
+    validate.assert_not_called()
+
+
+def test_saved_semantic_widget_requires_view_access_even_for_creator(
+    mocker: MockerFixture,
+) -> None:
+    """Losing access to a semantic view denies reading its saved definition."""
+    from superset.commands.widget.utils import raise_for_widget_read
+
+    view_id = uuid.uuid4()
+    saved = _saved_widget(
+        {"dataBinding": {"semanticViewId": str(view_id), "metrics": ["sales"]}}
+    )
+    saved.widget_type = "metric-tile"
+    sm = _security(mocker, "superset.commands.widget.utils", guest=False)
+    sm.is_admin.return_value = False
+    mocker.patch("superset.commands.widget.utils.get_user_id", return_value=2)
+    resolver = mocker.patch(
+        "superset.commands.widget.utils.resolve_widget_semantic_view",
+        side_effect=SupersetSecurityException(MagicMock()),
+    )
+
+    with pytest.raises(SavedWidgetForbiddenError):
+        raise_for_widget_read(saved)
+    resolver.assert_called_once_with(view_id)
+
+
+def test_inline_semantic_widget_checks_view_before_dispatch(
+    mocker: MockerFixture,
+) -> None:
+    """Dispatch has a server-resolved semantic binding for signed-in users."""
+    view_id = uuid.uuid4()
+    props = {"dataBinding": {"semanticViewId": str(view_id), "metrics": ["sales"]}}
+    sm = _security(mocker, "superset.commands.widget.data", guest=False)
+    resolver = mocker.patch(
+        "superset.commands.widget.data.resolve_widget_semantic_view"
+    )
+    selector = {"widget": {"type": "metric-tile", "props": props}}
+
+    assert resolve_widget(selector)[2].semantic_view_id == view_id
+    resolver.assert_called_once_with(view_id)
+    resolver.reset_mock()
+
+    sm.is_guest_user.return_value = True
+    with pytest.raises(SavedWidgetForbiddenError):
+        resolve_widget(selector)
+    resolver.assert_not_called()
+
+
+def test_semantic_widget_list_withholds_binding_when_view_access_is_revoked(
+    mocker: MockerFixture,
+) -> None:
+    """A listed owner record can survive revocation without defining a query."""
+    from superset.commands.widget.utils import serialize_saved_widget
+
+    view_id = uuid.uuid4()
+    props = {"dataBinding": {"semanticViewId": str(view_id), "metrics": ["sales"]}}
+    saved = _saved_widget(props)
+    saved.widget_type = "metric-tile"
+    _security(mocker, "superset.commands.widget.utils", guest=False)
+    resolver = mocker.patch(
+        "superset.commands.widget.utils.resolve_widget_semantic_view",
+        side_effect=SupersetSecurityException(MagicMock()),
+    )
+
+    listed = serialize_saved_widget(saved)
+
+    assert listed["uuid"] == str(saved.uuid)
+    assert listed["props"] == {}
+    assert saved.props_dict == props
+    resolver.assert_called_once_with(view_id)
+
+
+def test_named_guest_cannot_dispatch_saved_semantic_widget(
+    mocker: MockerFixture,
+) -> None:
+    """A saved widget token cannot authorize its current semantic source."""
+    saved = _saved_widget(
+        {"dataBinding": {"semanticViewId": str(uuid.uuid4()), "metrics": ["sales"]}}
+    )
+    saved.widget_type = "metric-tile"
+    mocker.patch("superset.commands.widget.data.load_saved_widget", return_value=saved)
+    sm = _security(mocker, "superset.commands.widget.data", guest=True)
+    sm.guest_widget_grants_dataset.return_value = True
+    resolver = mocker.patch(
+        "superset.commands.widget.data.resolve_widget_semantic_view"
+    )
+
+    with pytest.raises(SavedWidgetForbiddenError):
+        resolve_widget({"id": str(saved.uuid)})
+    resolver.assert_not_called()

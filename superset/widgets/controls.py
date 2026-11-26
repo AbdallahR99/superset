@@ -30,6 +30,7 @@ mandatory leaves, leaving optional/styling fields behind a drill-in.
 from __future__ import annotations
 
 from typing import Annotated, Any, ClassVar, Literal
+from uuid import UUID
 
 from pydantic import (
     AfterValidator,
@@ -38,6 +39,8 @@ from pydantic import (
     Field,
     field_validator,
     model_validator,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
 )
 from pydantic.json_schema import SkipJsonSchema
 from superset_core.widgets import MetricControl
@@ -63,7 +66,11 @@ class WidgetControls(BaseModel):
     definition carrying one of them is refused.
     """
 
-    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("dataBinding", "datasetId")
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = (
+        "dataBinding",
+        "datasetId",
+        "semanticViewId",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -84,6 +91,16 @@ class DataBinding(MetricControl):
     are optional."""
 
     model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_table_source(cls, values: Any) -> Any:
+        """Refuse a semantic reference on a table binding."""
+        if isinstance(values, dict) and (
+            "semanticViewId" in values or "semantic_view_id" in values
+        ):
+            raise ValueError("A widget must name a single datasource.")
+        return values
 
     # Pydantic places an inherited field (``metrics``, from ``MetricControl``)
     # ahead of this class's own fields in ``model_fields`` regardless of
@@ -128,13 +145,65 @@ class DataBinding(MetricControl):
     )
 
 
+SemanticMemberName = Annotated[str, Field(min_length=1, max_length=256)]
+
+
+class SemanticDataBinding(BaseModel):
+    """An approved semantic view and saved members, with no SQL fields."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    semantic_view_id: str = Field(alias="semanticViewId")
+    metrics: list[SemanticMemberName] = Field(min_length=1, max_length=16)
+    dimensions: list[SemanticMemberName] = Field(default_factory=list, max_length=16)
+    filters: list[object] = Field(default_factory=list, max_length=0)
+    row_limit: int = Field(default=1000, ge=1, le=10000, alias="rowLimit")
+    order_by_dimension: bool = Field(default=False, alias="orderByDimension")
+    selection_version: SemanticMemberName | None = Field(
+        default=None, alias="semanticSelectionVersion"
+    )
+
+    @field_validator("semantic_view_id")
+    @classmethod
+    def _canonical_view_id(cls, value: str) -> str:
+        """Accept a UUID and serialize it as a canonical identifier."""
+        return str(UUID(value))
+
+    @field_validator("metrics", "dimensions")
+    @classmethod
+    def _unique_member_names(cls, values: list[str]) -> list[str]:
+        """A semantic projection selects a stable member only once."""
+        if len(set(values)) != len(values):
+            raise ValueError("Select each member only once.")
+        return values
+
+
+def _validate_data_binding(
+    value: object, _handler: ValidatorFunctionWrapHandler
+) -> DataBinding | SemanticDataBinding:
+    """Select the source explicitly so draft errors retain their field paths."""
+    if isinstance(value, SemanticDataBinding) or (
+        isinstance(value, dict) and "semanticViewId" in value
+    ):
+        return SemanticDataBinding.model_validate(value)
+    return DataBinding.model_validate(value)
+
+
+# Semantic bindings come from the catalog. The inspector's dataset picker
+# continues to use the table binding schema.
+WidgetDataBinding = Annotated[
+    DataBinding | SkipJsonSchema[SemanticDataBinding],
+    WrapValidator(_validate_data_binding),
+]
+
+
 class MetricTileControls(WidgetControls):
     """Controls for the ``metric-tile`` widget (a single "big number")."""
 
     model_config = ConfigDict(populate_by_name=True)
-    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId",)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId", "semanticViewId")
 
-    data_binding: DataBinding = Field(
+    data_binding: WidgetDataBinding = Field(
         alias="dataBinding",
         title="Data",
         description=(
@@ -142,6 +211,17 @@ class MetricTileControls(WidgetControls):
             "row's value is shown."
         ),
     )
+
+    @model_validator(mode="after")
+    def _require_one_semantic_metric(self) -> MetricTileControls:
+        """A semantic KPI reads a single ungrouped value."""
+        binding = self.data_binding
+        if isinstance(binding, SemanticDataBinding) and (
+            len(binding.metrics) != 1 or binding.dimensions
+        ):
+            raise ValueError("Choose one ungrouped metric for a semantic tile.")
+        return self
+
     decimals: int = Field(
         default=0,
         ge=0,
@@ -171,10 +251,10 @@ class AgGridTableControls(WidgetControls):
     """Controls for the ``ag-grid-table`` widget (query results as a table)."""
 
     model_config = ConfigDict(populate_by_name=True)
-    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId",)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId", "semanticViewId")
     label: SkipJsonSchema[str] = ""
 
-    data_binding: DataBinding = Field(
+    data_binding: WidgetDataBinding = Field(
         alias="dataBinding",
         title="Data",
         description="The query whose rows fill the table.",
@@ -406,7 +486,7 @@ class EchartsControls(WidgetControls):
     """
 
     model_config = ConfigDict(populate_by_name=True)
-    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId",)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("datasetId", "semanticViewId")
 
     data_binding: DataBinding = Field(
         alias="dataBinding",
@@ -522,7 +602,7 @@ class FilterSelectControls(WidgetControls):
     """
 
     model_config = ConfigDict(populate_by_name=True)
-    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("dataBinding",)
+    foreign_dataset_keys: ClassVar[tuple[str, ...]] = ("dataBinding", "semanticViewId")
 
     dataset_id: int = Field(
         alias="datasetId",

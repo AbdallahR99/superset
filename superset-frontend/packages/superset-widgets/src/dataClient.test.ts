@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { SupersetClient } from '@superset-ui/core';
 import { sessionDataClient, widgetRef } from './dataClient';
 
 const mockFetchQueryData = jest.fn();
@@ -64,6 +65,48 @@ test('the session client queries ad hoc, active filters after the authored ones'
     // The caller's cancellation reaches the request.
     { signal: controller.signal },
   );
+});
+
+test('the session client sends semantic widget definitions to the widget API', async () => {
+  const semanticViewId = '32f12c00-448e-42de-836f-fb87cc4ed02b';
+  const props = {
+    dataBinding: { semanticViewId, metrics: ['transactions'] },
+  };
+  const { signal } = new AbortController();
+  const result = { columns: ['transactions'], rows: [{ transactions: 6 }] };
+  const post = jest.spyOn(SupersetClient, 'post').mockResolvedValue({
+    response: new Response(),
+    json: { result },
+  });
+
+  try {
+    await expect(
+      sessionDataClient.fetchData({
+        instanceId: 'semantic',
+        widget: widgetRef('metric-tile', props),
+        filters: [
+          {
+            column: 'district',
+            operator: 'IN',
+            value: ['Marina'],
+            datasource: 7,
+          },
+        ],
+        signal,
+      }),
+    ).resolves.toEqual(result);
+    expect(post).toHaveBeenCalledWith({
+      endpoint: '/api/v1/widget/data',
+      jsonPayload: {
+        widget: { type: 'metric-tile', props },
+        filters: [{ column: 'district', operator: 'IN', value: ['Marina'] }],
+      },
+      signal,
+    });
+    expect(mockFetchQueryData).not.toHaveBeenCalled();
+  } finally {
+    post.mockRestore();
+  }
 });
 
 test('a widget without a data binding is rejected before querying', async () => {

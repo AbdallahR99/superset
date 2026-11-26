@@ -86,10 +86,10 @@ function formActivity(
   };
 }
 
-test('supplies the selected dashboard language to host authoring tools', async () => {
+test('supplies the selected dashboard language and format to host authoring tools', async () => {
   const user = userEvent.setup();
   const host: CopilotHost = {
-    dashboardTypes: ['v1'],
+    dashboardTypes: ['v1', 'v2'],
     context: () => ({}),
     run: jest.fn<
       ReturnType<CopilotHost['run']>,
@@ -99,12 +99,19 @@ test('supplies the selected dashboard language to host authoring tools', async (
       ReturnType<NonNullable<CopilotHost['approve']>>,
       Parameters<NonNullable<CopilotHost['approve']>>
     >(),
-    renderAuthoringTools: locale => <p>Authoring language {locale}</p>,
+    renderAuthoringTools: (locale, format) => (
+      <p>
+        Authoring settings {locale} {format}
+      </p>
+    ),
   };
   render(<CopilotPanel host={host} />);
-  expect(screen.getByText('Authoring language en')).toBeVisible();
+  expect(screen.getByText('Authoring settings en v1')).toBeVisible();
   await user.selectOptions(screen.getByLabelText('Dashboard language'), 'ar');
-  expect(screen.getByText('Authoring language ar')).toBeVisible();
+  await user.selectOptions(screen.getByLabelText('Dashboard format'), 'v2');
+  expect(screen.getByText('Authoring settings ar v2')).toBeVisible();
+  expect(host.run).not.toHaveBeenCalled();
+  expect(host.approve).not.toHaveBeenCalled();
 });
 
 test('keeps interactive results in turn order and resolves actions against their own edits', async () => {

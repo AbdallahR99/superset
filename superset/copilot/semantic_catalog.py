@@ -20,9 +20,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from flask import current_app
@@ -31,7 +32,7 @@ from pydantic import Field
 from superset_core.semantic_layers.types import Metric
 from superset_core.semantic_layers.view import SemanticView as ProviderView
 
-from superset import db, security_manager
+from superset import db, is_feature_enabled, security_manager
 from superset.charts.schemas import ChartDataQueryContextSchema
 from superset.commands.chart.data.get_data_command import ChartDataCommand
 from superset.commands.exceptions import CommandException
@@ -49,6 +50,7 @@ from superset.copilot.semantic_classic import (
     create_semantic_classic_dashboard,
     SemanticClassicCaptions,
 )
+from superset.copilot.semantic_v2 import create_semantic_v2_dashboard
 from superset.daos.semantic_layer import SemanticViewDAO
 from superset.exceptions import QueryObjectValidationError, SupersetSecurityException
 from superset.mcp_service.privacy import user_can_view_data_model_metadata
@@ -61,6 +63,8 @@ from superset.semantic_layers.exceptions import (
 )
 from superset.semantic_layers.models import SemanticLayer, SemanticView
 from superset.semantic_layers.registry import registry
+
+SemanticDashboardType = Literal["v1", "v2"]
 
 _PROVIDER = "extensions.nxtbi.property-market-lab.market"
 _VIEW_NAME = "property_transactions"
@@ -89,6 +93,7 @@ class _DraftRequest(Contract):
     phrase: ShortText
     locale: ContentLocale
     metric_id: ShortText | None = Field(default=None, alias="metricId")
+    dashboard_type: SemanticDashboardType = Field(default="v1", alias="dashboardType")
 
 
 class _ApprovalRequest(Contract):
@@ -154,7 +159,6 @@ def _view_for_actor() -> SemanticView:
         and user_can_view_data_model_metadata()
         and security_manager.can_access("can_read", "Chart")
         and security_manager.can_access("can_read", "Dashboard")
-        and security_manager.can_access("can_write", "Chart")
         and security_manager.can_access("can_write", "Dashboard")
     ):
         raise SemanticCatalogUnavailableError
@@ -174,13 +178,25 @@ def _view_for_actor() -> SemanticView:
     return view
 
 
-def semantic_catalog_available() -> bool:
-    """Indicate whether this actor can read and draft from the lab view."""
+def _can_create_dashboard(dashboard_type: SemanticDashboardType) -> bool:
+    """Apply the authoring permission specific to the selected format."""
+    if dashboard_type == "v2":
+        return is_feature_enabled("DASHBOARD_V2")
+    return security_manager.can_access("can_write", "Chart")
+
+
+def semantic_catalog_dashboard_types() -> list[SemanticDashboardType]:
+    """List the formats this actor can draft from the approved lab view."""
     try:
         _view_for_actor()
     except SemanticCatalogUnavailableError:
-        return False
-    return True
+        return []
+    formats: tuple[SemanticDashboardType, ...] = ("v1", "v2")
+    return [
+        dashboard_type
+        for dashboard_type in formats
+        if _can_create_dashboard(dashboard_type)
+    ]
 
 
 def _catalog_text(value: object) -> str:
@@ -329,11 +345,13 @@ def _preview(
 
 
 def stage_semantic_dashboard(
-    body: dict[str, object], actor_id: int, secret: str
+    body: Mapping[str, object], actor_id: int, secret: str
 ) -> dict[str, object]:
     """Clarify an ambiguous request or prepare a read-only native draft."""
     view = _view_for_actor()
     draft = _DraftRequest.model_validate(body)
+    if not _can_create_dashboard(draft.dashboard_type):
+        raise SemanticCatalogUnavailableError
     provider, metrics = _provider_catalog(view)
     matched = _matching_metrics(provider, metrics, draft)
     if len(matched) != 1:
@@ -354,12 +372,14 @@ def stage_semantic_dashboard(
             "view": str(view.uuid),
             "metric": metric.name,
             "locale": draft.locale,
+            "dashboard_type": draft.dashboard_type,
             "version": metric.version,
             "selection": selection_version,
         },
     )
     return {
         "status": "draft",
+        "dashboardType": draft.dashboard_type,
         "metric": metric.candidate(draft.locale),
         "title": metric.captions(draft.locale).dashboard[draft.locale],
         "value": value,
@@ -369,8 +389,8 @@ def stage_semantic_dashboard(
 
 
 def approve_semantic_dashboard(
-    body: dict[str, object], actor_id: int, secret: str
-) -> tuple[int, bool]:
+    body: Mapping[str, object], actor_id: int, secret: str
+) -> tuple[int, bool, SemanticDashboardType]:
     """Reauthorize the view and persist the exact confirmed semantic selection."""
     view = _view_for_actor()
     approval = _ApprovalRequest.model_validate(body)
@@ -383,10 +403,18 @@ def approve_semantic_dashboard(
         approval_uuid = UUID(claims["uuid"])
         locale = claims.get("locale")
         name = claims.get("metric")
-        if locale not in ("en", "ar") or not isinstance(name, str):
+        # Approvals issued before V2 support always saved a Classic dashboard.
+        dashboard_type = claims.get("dashboard_type", "v1")
+        if (
+            locale not in ("en", "ar")
+            or dashboard_type not in ("v1", "v2")
+            or not isinstance(name, str)
+        ):
             raise ValueError
     except (KeyError, TypeError, ValueError) as ex:
         raise SemanticCatalogApprovalError from ex
+    if not _can_create_dashboard(dashboard_type):
+        raise SemanticCatalogUnavailableError
     provider, metrics = _provider_catalog(view)
     metric = metrics.get(name)
     if (
@@ -395,6 +423,18 @@ def approve_semantic_dashboard(
         or provider.selection_identity_version != claims.get("selection")
     ):
         raise SemanticCatalogApprovalError
-    return create_semantic_classic_dashboard(
-        view, metric.name, metric.captions(locale), approval_uuid
-    )
+    captions = metric.captions(locale)
+    if dashboard_type == "v2":
+        dashboard_id, created = create_semantic_v2_dashboard(
+            view,
+            metric.name,
+            captions,
+            approval_uuid,
+            unit=metric.unit,
+            selection_version=provider.selection_identity_version,
+        )
+    else:
+        dashboard_id, created = create_semantic_classic_dashboard(
+            view, metric.name, captions, approval_uuid
+        )
+    return dashboard_id, created, dashboard_type

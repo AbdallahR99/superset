@@ -74,6 +74,21 @@ const selectorOf = (widget: WidgetRef) =>
     ? { id: widget.id }
     : { widget: { type: widget.type, props: widget.props } };
 
+/** The shared request body for session and embedded widget data. */
+export function widgetDataPayload(
+  widget: WidgetRef,
+  filters: ResolvedFilter[],
+) {
+  return {
+    ...selectorOf(widget),
+    filters: filters.map(({ column, operator, value }) => ({
+      column,
+      operator,
+      value,
+    })),
+  };
+}
+
 /**
  * What a non-2xx answer means for whoever is looking at the widget. With a
  * guest token the host's backend decides what the page may read, so the
@@ -245,16 +260,7 @@ export function createHttpWidgetClient(
         {
           method: 'POST',
           signal,
-          body: JSON.stringify({
-            ...selectorOf(widget),
-            filters: filters.map(
-              ({ column, operator, value }: ResolvedFilter) => ({
-                column,
-                operator,
-                value,
-              }),
-            ),
-          }),
+          body: JSON.stringify(widgetDataPayload(widget, filters)),
         },
       );
       return { columns: result.columns ?? [], rows: result.rows ?? [] };

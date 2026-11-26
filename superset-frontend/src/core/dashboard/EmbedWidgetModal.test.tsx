@@ -109,6 +109,33 @@ test('an invalid dataset reference does not generate a guest token request', () 
   ).not.toHaveTextContent(/guest token/i);
 });
 
+test('a saved semantic widget embeds through the signed-in session', () => {
+  const semanticViewId = '32f12c00-448e-42de-836f-fb87cc4ed02b';
+  provider.loadDocument({
+    ...STORED,
+    node_1: {
+      ...STORED.node_1,
+      props: {
+        dataBinding: { semanticViewId, metrics: ['transactions'] },
+        [EMBED_WIDGET_ID_PROP]: 'semantic-widget',
+      },
+    },
+  });
+  mount();
+
+  const saved = screen.getByTestId('embed-widget-saved-snippet');
+  const inline = screen.getByTestId('embed-widget-inline-snippet');
+  expect(saved).toHaveTextContent('<Widget id="semantic-widget" />');
+  expect(inline).toHaveTextContent(semanticViewId);
+  expect(saved).not.toHaveTextContent(/guest token/i);
+  expect(inline).not.toHaveTextContent(/guest token/i);
+  expect(
+    screen.getByText(
+      'Viewers sign in to Superset to see this semantic widget.',
+    ),
+  ).toBeInTheDocument();
+});
+
 test('saving writes the saved widget’s id onto the node it was saved from', async () => {
   const answer = pendingSave();
   mount();

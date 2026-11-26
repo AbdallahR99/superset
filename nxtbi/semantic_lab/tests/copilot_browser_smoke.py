@@ -24,7 +24,7 @@ import os
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlsplit
 
 from browser_smoke import CHART_API, DASHBOARD_API, datasource_rows, login, TIMEOUT
@@ -172,10 +172,19 @@ def open_catalog(page: Page, base: str, case: Scenario) -> Locator:
 
 
 def save_from_copilot(
-    page: Page, base: str, case: Scenario, artifacts: Path | None
+    page: Page,
+    base: str,
+    case: Scenario,
+    artifacts: Path | None,
+    *,
+    dashboard_type: Literal["v1", "v2"] = "v1",
 ) -> int:
     """Clarify a real bilingual request, preview results, and approve it in the UI."""
     tool = open_catalog(page, base, case)
+    format_label = "Dashboard format" if case.locale == "en" else "تنسيق لوحة المعلومات"
+    format_picker = page.locator("#nxtbi-copilot-panel").get_by_label(format_label)
+    if dashboard_type == "v2" or format_picker.count():
+        format_picker.select_option(dashboard_type)
     tool.get_by_role("textbox", name=case.input_label).fill(case.phrase)
     generate = tool.get_by_role("button", name=case.generate, exact=True)
     save = tool.get_by_role("button", name=case.save, exact=True)
@@ -204,7 +213,11 @@ def save_from_copilot(
     ) as staged:
         generate.click()
     draft = response_object(staged.value)
+    assert (
+        staged.value.request.post_data_json.get("dashboardType", "v1") == dashboard_type
+    )
     assert draft["status"] == "draft"
+    assert draft.get("dashboardType", "v1") == dashboard_type
     assert draft["metric"] == candidates[case.metric]
     assert draft["title"] == case.dashboard_title(case.locale)
     assert_amount(draft["value"], case.value)
@@ -224,7 +237,14 @@ def save_from_copilot(
         ).to_be_visible()
     if artifacts:
         page.screenshot(
-            path=str(artifacts / f"copilot-semantic-draft-{case.locale}.png")
+            path=str(
+                artifacts
+                / (
+                    f"copilot-semantic-{dashboard_type}-draft-{case.locale}.png"
+                    if dashboard_type == "v2"
+                    else f"copilot-semantic-draft-{case.locale}.png"
+                )
+            )
         )
 
     with page.expect_response(
@@ -236,10 +256,22 @@ def save_from_copilot(
     dashboard_id = saved["id"]
     assert isinstance(dashboard_id, int)
     assert dashboard_id > 0
-    path = f"/dashboard/{dashboard_id}/"
+    assert saved.get("dashboardType", "v1") == dashboard_type
+    path_prefix = "/dashboard/v2" if dashboard_type == "v2" else "/dashboard"
+    path = f"{path_prefix}/{dashboard_id}/"
     assert saved["url"] == path
-    expect(tool.get_by_text(case.saved, exact=True)).to_be_visible()
-    link = tool.get_by_role("link", name=case.reopen, exact=True)
+    receipt, link_label = case.saved, case.reopen
+    if dashboard_type == "v2":
+        receipt, link_label = (
+            ("Dashboard saved as a draft. Open it to publish.", "Open dashboard draft")
+            if case.locale == "en"
+            else (
+                "تم حفظ لوحة المعلومات كمسودة. افتحها لنشرها.",
+                "فتح مسودة لوحة المعلومات",
+            )
+        )
+    expect(tool.get_by_text(receipt, exact=True)).to_be_visible()
+    link = tool.get_by_role("link", name=link_label, exact=True)
     expect(link).to_have_attribute("href", f"{base}{path}")
     link.click()
     expect(page).to_have_url(f"{base}{path}")
@@ -323,7 +355,7 @@ def verify_reopened_dashboard(
     artifacts: Path | None,
     *,
     locale: str | None = None,
-    url: str | None = None,
+    url: str,
 ) -> None:
     """Open the saved dashboard and verify its rendered native queries."""
     viewer_locale = locale or case.locale
@@ -338,10 +370,10 @@ def verify_reopened_dashboard(
             lambda response: is_chart_response(response, table_id)
         ) as table,
     ):
-        if url:
-            page.goto(url)
-        else:
-            page.reload()
+        page.goto(url)
+
+    kpi_rows = response_object(kpi.value)["result"][0]["data"]
+    table_rows = response_object(table.value)["result"][0]["data"]
 
     expect(page.locator("html")).to_have_attribute("dir", direction)
     expect(
@@ -357,10 +389,8 @@ def verify_reopened_dashboard(
             )
         ).to_be_visible()
 
-    kpi_rows = response_object(kpi.value)["result"][0]["data"]
     assert len(kpi_rows) == 1
     assert_amount(kpi_rows[0][case.metric], case.value)
-    table_rows = response_object(table.value)["result"][0]["data"]
     by_type = {row["property_type"]: row[case.metric] for row in table_rows}
     table_view = page.locator(f'[data-test-chart-id="{table_id}"]')
     dimension_label = "Property type" if case.locale == "en" else "نوع العقار"
@@ -374,7 +404,11 @@ def verify_reopened_dashboard(
         assert_amount(by_type[label], value)
         expect(table_view.get_by_text(label, exact=True)).to_be_visible()
     if artifacts:
-        suffix = case.locale if locale is None else f"{case.locale}-in-{locale}"
+        suffix = (
+            case.locale
+            if case.locale == viewer_locale
+            else f"{case.locale}-in-{viewer_locale}"
+        )
         page.screenshot(
             path=str(artifacts / f"copilot-semantic-dashboard-{suffix}.png")
         )
@@ -507,10 +541,13 @@ def main() -> None:
     expect.set_options(timeout=TIMEOUT)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
-        page = browser.new_page(viewport={"width": 1440, "height": 1000})
-        extension_status = watch_extension_startup(page)
+        context = browser.new_context(viewport={"width": 1440, "height": 1000})
+        context.set_default_timeout(TIMEOUT)
+        page = context.new_page()
+        active_page = page
+        author_status = watch_extension_startup(page)
+        active_status = author_status
         try:
-            page.set_default_timeout(TIMEOUT)
             login(page, base, username, password)
             views = datasource_rows(page, base)
             assert len(views) == 1, "Provision one property-market semantic view first."
@@ -523,19 +560,28 @@ def main() -> None:
                 charts = verify_stored_dashboard(
                     page, base, case, dashboard_id, view_id
                 )
-                verify_reopened_dashboard(page, case, charts, args.artifact_dir)
-                if case.locale == "ar":
-                    page.goto(f"{base}/lang/en")
+                viewer_locales = ("ar", "en") if case.locale == "ar" else ("en",)
+                for viewer_locale in viewer_locales:
+                    if viewer_locale != case.locale:
+                        page.goto(f"{base}/lang/{viewer_locale}")
+                    # A fresh tab cannot capture requests from the authoring page.
+                    active_page = context.new_page()
+                    active_status = watch_extension_startup(active_page)
                     verify_reopened_dashboard(
-                        page,
+                        active_page,
                         case,
                         charts,
                         args.artifact_dir,
-                        locale="en",
+                        locale=viewer_locale,
                         url=f"{base}/dashboard/{dashboard_id}/",
                     )
+                    active_page.close()
+                    active_page = page
+                    active_status = author_status
         except (AssertionError, Error, KeyError):
-            report_extension_failure(page, base, extension_status, args.artifact_dir)
+            report_extension_failure(
+                active_page, base, active_status, args.artifact_dir
+            )
             raise
         finally:
             browser.close()

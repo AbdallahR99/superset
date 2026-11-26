@@ -22,8 +22,8 @@ import { useWidgetBus, useWidgetBusRevision } from './bus';
 import { useWidgetDataClient, widgetRef } from './dataClient';
 import { toError, useWidgetErrorReporter } from './errors';
 import type {
-  DataBindingSpec,
   QueryDataResult,
+  WidgetDataBindingSpec,
   WidgetDataClient,
   WidgetProps,
 } from './types';
@@ -68,7 +68,7 @@ export function useWidgetData(
   const reportError = useWidgetErrorReporter();
   const [settled, setSettled] = useState<Settled>();
 
-  const dataBinding = props.dataBinding as DataBindingSpec | undefined;
+  const dataBinding = props.dataBinding as WidgetDataBindingSpec | undefined;
   // A query-bound widget does not subscribe to individual filter sources: it
   // recomputes which ones apply to it (see `activeFilters.ts`) on each render.
   const activeFilters = dataBinding
@@ -80,8 +80,8 @@ export function useWidgetData(
   const key = JSON.stringify({ dataBinding, activeFilters, savedId });
   // What the request is built from is read when it starts, from the render
   // that produced the key it runs for.
-  const latest = useRef({ props, activeFilters });
-  latest.current = { props, activeFilters };
+  const latest = useRef({ props, dataBinding, activeFilters });
+  latest.current = { props, dataBinding, activeFilters };
 
   const [retry, setRetry] = useState(0);
 
@@ -93,8 +93,11 @@ export function useWidgetData(
     // filters on a shared bus). Asking with what the render saw would send a
     // request whose answer nobody wants, so this waits for the render that
     // sees the bus as it is; `retry` makes sure that render runs this again.
-    const datasetId = (request.props.dataBinding as DataBindingSpec).datasetId;
-    const filtersNow = getActiveResolvedFilters(bus, datasetId, instanceId);
+    const filtersNow = getActiveResolvedFilters(
+      bus,
+      request.dataBinding?.datasetId,
+      instanceId,
+    );
     if (JSON.stringify(filtersNow) !== JSON.stringify(request.activeFilters)) {
       setRetry(count => count + 1);
       return undefined;

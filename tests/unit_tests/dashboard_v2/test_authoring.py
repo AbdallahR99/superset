@@ -263,3 +263,25 @@ def test_the_api_answers_a_refused_definition_with_422_and_per_node_errors(
         "chart": [{"loc": ["dataBinding"], "message": FORBIDDEN}]
     }
     assert stored_document(v2_session, pk)["revision"] == 1
+
+
+def test_create_semantic_binding_checks_authoring(
+    rule: MagicMock, editor: None, v2_session: Session
+) -> None:
+    """Placing a semantic metric invokes the same data authoring boundary."""
+    props = {
+        "dataBinding": {
+            "semanticViewId": "bcf495c4-a0c7-4c9b-93fb-057843afb295",
+            "metrics": ["sales"],
+        }
+    }
+    tile = {"type": "metric-tile", "props": props}
+    rule.side_effect = SavedWidgetForbiddenError()
+
+    with pytest.raises(DashboardV2InvalidError) as refused:
+        _create(make_document("text", "tile", tile=tile))
+
+    message = "You don't have access to the semantic view this widget reads."
+    assert refused.value.errors == {
+        "tile": [{"loc": ["dataBinding"], "message": message}]
+    }

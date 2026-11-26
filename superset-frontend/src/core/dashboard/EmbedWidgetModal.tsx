@@ -66,7 +66,9 @@ export default function EmbedWidgetModal({
 
   const { [EMBED_WIDGET_ID_PROP]: storedId, ...props } = node.props ?? {};
   const widgetId = typeof storedId === 'string' ? storedId : undefined;
-  const datasetId = datasetIdOf(props);
+  const binding = props.dataBinding as { semanticViewId?: unknown } | undefined;
+  const usesSemanticView = typeof binding?.semanticViewId === 'string';
+  const datasetId = usesSemanticView ? undefined : datasetIdOf(props);
 
   const save = async () => {
     // A ref rather than the `saving` state: two clicks in one tick both see
@@ -113,9 +115,11 @@ export default function EmbedWidgetModal({
     }
   };
 
+  const savedGuestSnippet = usesSemanticView
+    ? ''
+    : `\n\n// guest token\n{ resources: [{ type: "widget", id: "${widgetId}" }], rls: [] }`;
   const savedSnippet = widgetId
-    ? `<Widget id="${widgetId}" />\n\n` +
-      `// guest token\n{ resources: [{ type: "widget", id: "${widgetId}" }], rls: [] }`
+    ? `<Widget id="${widgetId}" />${savedGuestSnippet}`
     : '';
   const guestTokenRequest =
     datasetId === undefined
@@ -168,6 +172,11 @@ export default function EmbedWidgetModal({
             'Render this widget in any React app with @apache-superset/widgets, inside a SupersetProvider.',
           )}
         </Typography.Text>
+        {usesSemanticView && (
+          <Typography.Text type="secondary">
+            {t('Viewers sign in to Superset to see this semantic widget.')}
+          </Typography.Text>
+        )}
         {isExtensionWidgetType(node.type) && (
           <Typography.Text type="secondary">
             {t(

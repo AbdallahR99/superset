@@ -191,7 +191,10 @@ export interface CopilotHost {
   allowedActions?: readonly string[];
   onAction?: (action: A2uiAction) => boolean;
   /** Additional authoring tools supplied and gated by the host. */
-  renderAuthoringTools?: (locale: DashboardContentLocale) => ReactNode;
+  renderAuthoringTools?: (
+    locale: DashboardContentLocale,
+    dashboardType?: DashboardType,
+  ) => ReactNode;
   renderProposal?: (
     proposal: DashboardProposal,
     onChange: (proposal: DashboardProposal) => void,

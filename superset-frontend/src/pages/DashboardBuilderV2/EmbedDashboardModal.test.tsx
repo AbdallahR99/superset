@@ -108,6 +108,30 @@ test('the snippet renders each saved widget by id and names each one in the gues
   expect(snippet).not.toContain('/embedded/');
 });
 
+test('the combined embed uses the Superset session when a saved widget has a semantic view', () => {
+  addSaved('Dataset content', 'dataset-widget');
+  provider.addWidget(provider.getRoot().id, 1, {
+    type: 'metric-tile',
+    props: {
+      label: 'Market',
+      dataBinding: {
+        semanticViewId: '32f12c00-448e-42de-836f-fb87cc4ed02b',
+        metrics: ['transactions'],
+      },
+      [EMBED_WIDGET_ID_PROP]: 'semantic-widget',
+    },
+  });
+  render(<EmbedDashboardModal show onHide={jest.fn()} />, { useRedux: true });
+
+  const snippet = screen.getByTestId('embed-dashboard-snippet');
+  expect(snippet).toHaveTextContent('<Widget id="dataset-widget" />');
+  expect(snippet).toHaveTextContent('<Widget id="semantic-widget" />');
+  expect(snippet).not.toHaveTextContent(/fetchGuestToken|guest token payload/i);
+  expect(
+    screen.getByText('Viewers sign in to Superset to see these widgets.'),
+  ).toBeInTheDocument();
+});
+
 test('the header embed action opens the widget embed, not the classic dashboard dialog', async () => {
   addSaved('saved one', 'uuid-1');
   renderHeader();

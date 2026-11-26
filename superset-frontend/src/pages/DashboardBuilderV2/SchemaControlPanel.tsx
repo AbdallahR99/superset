@@ -49,6 +49,8 @@ import { JsonForms } from '@jsonforms/react';
 import type { JsonSchema } from '@jsonforms/core';
 import { cellRegistryEntries } from '@great-expectations/jsonforms-antd-renderers';
 import type { dashboard as dashboardApi } from '@apache-superset/core';
+import { t } from '@apache-superset/core/translation';
+import type { WidgetDataBindingSpec } from '@apache-superset/core/widgets';
 import {
   areDependenciesSatisfied,
   buildUiSchema,
@@ -105,7 +107,7 @@ async function fetchControlSchema(
 
 /** True once a binding has enough to run a grouped query. */
 function canQuery(
-  binding: DataBindingSpec | undefined,
+  binding: WidgetDataBindingSpec | undefined,
 ): binding is DataBindingSpec {
   return Boolean(
     binding?.datasetId && binding.metrics?.length && binding.dimensions?.length,
@@ -113,7 +115,8 @@ function canQuery(
 }
 
 /**
- * Drops any top-level property tagged `x-hidden-in-form` (e.g. echarts'
+ * Hides the binding controls for semantic views and drops any top-level
+ * property tagged `x-hidden-in-form` (e.g. echarts'
  * `echartsOptions` — already fully editable via the Inspector's JSON tab, so
  * a second raw-JSON box here would just duplicate it) before the schema
  * reaches JsonForms, so no control is generated for it. The property stays
@@ -121,12 +124,16 @@ function canQuery(
  * what's stored, so the JSON tab (which reads the whole record) still shows
  * and edits it.
  */
-function hideFlaggedFields(schema: JsonSchema): JsonSchema {
+function hideFlaggedFields(
+  schema: JsonSchema,
+  usesSemanticView: boolean,
+): JsonSchema {
   const { properties } = schema as { properties?: Record<string, unknown> };
   if (!properties) return schema;
   const visible = Object.fromEntries(
     Object.entries(properties).filter(
-      ([, propSchema]) =>
+      ([name, propSchema]) =>
+        !(usesSemanticView && name === 'dataBinding') &&
         !(propSchema as Record<string, unknown>)['x-hidden-in-form'],
     ),
   );
@@ -144,7 +151,8 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
     () => (node?.props as WidgetProps) ?? {},
     [node?.props],
   );
-  const binding = props.dataBinding as DataBindingSpec | undefined;
+  const binding = props.dataBinding as WidgetDataBindingSpec | undefined;
+  const usesSemanticView = typeof binding?.semanticViewId === 'string';
   const bindingKey = JSON.stringify(binding ?? null);
   // The dimension whose distinct values become the customizable series: the
   // explicit `colorDimension` when it's one of the grouping dimensions, else the
@@ -344,8 +352,8 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
   }, [propsKey]);
 
   const formSchema = useMemo(
-    () => (schema ? hideFlaggedFields(schema) : undefined),
-    [schema],
+    () => (schema ? hideFlaggedFields(schema, usesSemanticView) : undefined),
+    [schema, usesSemanticView],
   );
   const uiSchema = useMemo(
     () => (formSchema ? buildUiSchema(formSchema) : undefined),
@@ -368,6 +376,11 @@ export default function SchemaControlPanel({ nodeId }: { nodeId: string }) {
           className="ant-form ant-form-vertical"
           data-test="schema-control-panel"
         >
+          {usesSemanticView && (
+            <Typography.Paragraph type="secondary">
+              {t('This widget uses an approved semantic view.')}
+            </Typography.Paragraph>
+          )}
           <JsonForms
             key={formKey}
             schema={formSchema}

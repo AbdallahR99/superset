@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import type { DashboardType } from '@nxtbi/copilot';
 import type { createSessionWriter } from './transport';
 
 export interface SemanticMetric {
@@ -28,6 +29,7 @@ export interface SemanticMetric {
 export interface SemanticDraftInput {
   phrase: string;
   locale: 'en' | 'ar';
+  dashboardType: DashboardType;
   metricId?: string;
 }
 
@@ -38,6 +40,7 @@ interface SemanticBreakdownRow {
 
 export interface SemanticDraft {
   status: 'draft';
+  dashboardType: DashboardType;
   metric: SemanticMetric;
   title: string;
   value: number | null;
@@ -51,6 +54,7 @@ export type SemanticDraftResult =
 
 export interface SemanticSavedDashboard {
   id: number;
+  dashboardType: DashboardType;
   url: string;
 }
 
@@ -87,11 +91,15 @@ function isBreakdownRow(value: unknown): value is SemanticBreakdownRow {
   );
 }
 
-function readDraft(value: unknown): SemanticDraftResult {
+function readDraft(
+  value: unknown,
+  dashboardType: DashboardType,
+): SemanticDraftResult {
   if (isRecord(value)) {
     const { status, candidates, metric, title, rows, approvalToken } = value;
     if (
       status === 'draft' &&
+      value.dashboardType === dashboardType &&
       isMetric(metric) &&
       isText(title, 256) &&
       isFiniteValue(value.value) &&
@@ -100,7 +108,15 @@ function readDraft(value: unknown): SemanticDraftResult {
       rows.every(isBreakdownRow) &&
       isText(approvalToken, 2048)
     ) {
-      return { status, metric, title, value: value.value, rows, approvalToken };
+      return {
+        status,
+        dashboardType,
+        metric,
+        title,
+        value: value.value,
+        rows,
+        approvalToken,
+      };
     }
     if (
       (status === 'ambiguous' || status === 'unmatched') &&
@@ -133,7 +149,7 @@ export function createSemanticTransport(
   write: ReturnType<typeof createSessionWriter>,
 ) {
   return {
-    async available(signal?: AbortSignal): Promise<boolean> {
+    async dashboardTypes(signal?: AbortSignal): Promise<DashboardType[]> {
       const response = await fetch(
         `${base}/api/v1/nxtbi_copilot/semantic_catalog`,
         {
@@ -145,30 +161,42 @@ export function createSemanticTransport(
           signal,
         },
       );
-      if ([401, 403, 404].includes(response.status)) return false;
+      if ([401, 403, 404].includes(response.status)) return [];
       if (!response.ok)
         throw new Error('Could not check the semantic catalog.');
       const value = await readJson(response, signal);
-      return isRecord(value) && value.available === true;
+      if (!isRecord(value) || value.available !== true) return [];
+      const { dashboardTypes } = value;
+      return Array.isArray(dashboardTypes)
+        ? [
+            ...new Set(
+              dashboardTypes.filter(
+                (format): format is DashboardType =>
+                  format === 'v1' || format === 'v2',
+              ),
+            ),
+          ]
+        : [];
     },
     async draft(
       input: SemanticDraftInput,
       signal?: AbortSignal,
     ): Promise<SemanticDraftResult> {
-      const { phrase, locale, metricId } = input;
+      const { phrase, locale, metricId, dashboardType } = input;
       const response = await write(
         'semantic_catalog/draft',
-        { phrase, locale, metricId },
+        { phrase, locale, metricId, dashboardType },
         'application/json',
         signal,
       );
       if (!response.ok) {
         throw new Error('Superset could not draft a semantic dashboard.');
       }
-      return readDraft(await readJson(response, signal));
+      return readDraft(await readJson(response, signal), dashboardType);
     },
     async approve(
       approvalToken: string,
+      dashboardType: DashboardType,
       signal?: AbortSignal,
     ): Promise<SemanticSavedDashboard> {
       const response = await write(
@@ -181,19 +209,21 @@ export function createSemanticTransport(
         throw new Error('Superset rejected the semantic dashboard approval.');
       }
       const value = await readJson(response, signal);
+      const path = dashboardType === 'v2' ? '/dashboard/v2' : '/dashboard';
       if (
         !isRecord(value) ||
+        value.dashboardType !== dashboardType ||
         typeof value.id !== 'number' ||
         !Number.isSafeInteger(value.id) ||
         value.id < 1 ||
         value.id > 2_147_483_647 ||
-        value.url !== `/dashboard/${value.id}/`
+        value.url !== `${path}/${value.id}/`
       ) {
         throw new Error(
           'Superset returned an invalid semantic dashboard response.',
         );
       }
-      return { id: value.id, url: value.url };
+      return { id: value.id, dashboardType, url: value.url };
     },
   };
 }

@@ -161,12 +161,12 @@ class GetSavedWidgetCommand(BaseCommand):
 
 class ListSavedWidgetsCommand(BaseCommand):
     """
-    One page of the saved widgets the caller may read.
+    One page of the saved widget records the caller may list.
 
-    Admins read every saved widget; anyone else their own plus those binding
-    a dataset they can read, which is the rule ``GetSavedWidgetCommand``
-    applies to a single widget. Guests get no list. After ``run()`` the total
-    number of readable widgets is in ``count``.
+    Signed-in admins see all records. Other users see records they own or
+    that bind a native dataset they may read. Semantic bindings of listed
+    records are exposed only when the caller has current view access.
+    Guests get no list. The total number of listed widgets is in ``count``.
     """
 
     def __init__(self, page: int = 0, page_size: int = MAX_LIST_PAGE_SIZE) -> None:
