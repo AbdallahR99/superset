@@ -45,7 +45,7 @@ ShortText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
 ]
 SummaryText = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=768)
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
 ]
 ResourceId = Annotated[int, Field(gt=0, le=2**31 - 1)]
 ContentLocale = Literal["en", "ar"]

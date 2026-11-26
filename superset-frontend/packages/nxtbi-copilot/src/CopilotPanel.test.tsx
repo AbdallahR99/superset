@@ -523,9 +523,21 @@ test('rejects mixed bindings, partial arrays, and V2-only fields in Classic prop
   expect(
     readProposal({ ...proposal, dashboardType: 'v1', widgets: [table] }),
   ).toBeUndefined();
-  expect(
-    readProposal({ ...proposal, summary: 'a'.repeat(769), widgets: [table] }),
-  ).toBeUndefined();
+});
+
+test('accepts up to 1024 Unicode code points in a V2 summary only', () => {
+  const summary = '𞸀'.repeat(1024);
+  const proposal = {
+    title: 'Review',
+    approvalToken: 'test-token',
+    dashboardType: 'v2',
+    widgets: [{ type: 'metric-tile', datasetId: 1, metric: 'count' }],
+    summary,
+  };
+  expect(readProposal(proposal)?.summary).toBe(summary);
+  expect(readProposal({ ...proposal, summary: `${summary}a` })).toBeUndefined();
+  expect(readProposal({ ...proposal, dashboardType: 'v1' })).toBeUndefined();
+  expect(readProposal({ ...proposal, summary: '   ' })).toBeUndefined();
 });
 
 test('preserves approved V2 rate cutoffs and rejects invalid cutoff bindings', () => {

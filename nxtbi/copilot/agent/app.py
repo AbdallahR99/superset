@@ -152,7 +152,7 @@ the requested tables and field order. Keep each table's fields in one widget.
 For a specified layout, preserve widget count, types, fields, filters, and order.
 Resolve an unknown dataset ID with list_datasets, then call get_dataset once. Query
 only the facts needed for a requested summary. Grouped tables and summaries need
-Dashboard V2. The optional summary is plain text, up to 768 characters.
+Dashboard V2. The optional summary is plain text, up to 1,024 characters.
 For an open analytical dashboard, including uploads, follow this compact sequence:
 1. Read get_dataset once. Use its saved measures and dimensions. If more scope
    information is needed, call profile_dataset once with all relevant columns.
@@ -165,8 +165,11 @@ For an open analytical dashboard, including uploads, follow this compact sequenc
    baseline. Use the weighted baseline, never an average of grouped percentages.
 3. If a trend matters, use at most one aggregate_dataset call with
    order=dimension_asc and limit=48 for the period dimension. Omit the line if
-   coverage is incomplete. Verify latest dates and period boundaries before
-   describing a partial period. Report observed percentage ranges and missing
+   coverage is incomplete. If known, report exact verified first and last event
+   dates and flag a verified partial final period. Distinguish period buckets
+   from exact event dates. Use the saved chart caption translations to show the
+   verified date span and partial-period caveat in both languages. Report
+   observed percentage ranges and missing
    groups, filters, or differing eligibility. Descriptive data do not establish
    statistical stability, process control, or significant change.
 4. Call propose_dashboard once the decision evidence is ready. Skip further
@@ -186,18 +189,22 @@ screen uses 120 eligible cases per group; change minimum_sample_size only on
 explicit request. State the floor. Describe any higher raw rate below the floor as
 preliminary and identify the highest supported rate separately. A screening floor
 does not establish statistical significance. Chart cutoff metadata is server-set.
-Suggest one concrete follow-up: name a supported-rate or affected-count leader and
-say which records, case reasons, requirements, queue, or workflow steps to inspect,
-compare, sample, or audit. Disclose material limitations.
+Give two separate, measurable follow-ups with exact source labels when both
+evidence scopes exist. For the supported-rate leader, specify a reason, criterion,
+or case evidence to audit. For the affected-count leader, specify a different
+workload check, such as rework steps, queue volume, capacity, or processing time.
+Use a separate sentence or line for each, even when both leaders are the same.
+When one scope is unsupported, state the gap and omit its action. Disclose
+material limitations.
 Use fewer charts if only one valid comparison exists. Add a KPI only for a distinct
 headline, and do not invent a rate or a denominator when the source lacks them.
 Use chartStyle ranked-bar for a ranked horizontal V2 comparison of up to 12 groups.
 Use chartStyle bar for an ordinary, unranked category chart or in Classic dashboards.
 Never treat rank-limited aggregate results as a complete time series.
-Write the V2 summary as one or two sentences with specific group or period names,
-numbers, comparison scope, and a concrete decision or follow-up justified by those
-values. Include one applicable limitation, such as missing groups, checked-period
-coverage, an eligibility rule, or a synthetic sample. Never imply causality or
+Keep the V2 summary concise with exact group or period names, numbers,
+comparison scope, and follow-ups justified by observed values. Include an
+applicable limitation such as missing groups, checked-period coverage, an
+eligibility rule, or a synthetic sample. Never imply causality or
 generalize beyond the measured scope. If a comparison is unavailable, state the gap.
 For questions about which datasets are ready for a demo dashboard, answer the
 discovery question before creating a draft. Start with list_datasets without a
@@ -896,29 +903,31 @@ _REVIEW_ACTION = re.compile(
 _REVIEW_MATERIAL = re.compile(
     r"\b(?:cases?|files?|records?|applications?|notes?|reasons?|inputs?|steps?|"
     r"documents?|criteria|requirements?|queues?|staffing|capacity|decisions?|"
-    r"handoffs?|logs?|forms?|rejections?|corrections?)\b"
+    r"handoffs?|logs?|forms?|rejections?|corrections?|rework|volumes?|backlogs?|"
+    r"checklists?|processing times?|delays?)\b"
     r"|(?:حالات|سجلات|ملفات|طلبات|أسباب|اسباب|وثائق|مستندات|"
-    r"معايير|متطلبات|خطوات|طوابير|قرارات|نماذج)"
+    r"معايير|متطلبات|خطوات|طوابير|قرارات|نماذج|الأعباء|السعة|القدرة|حجم|تراكم|"
+    r"المعالجة|الإعادة|التأخير|الموظفين|قائمة التحقق)"
 )
 _ARABIC_DIACRITICS = re.compile(r"[\u064b-\u065f\u0670]")
 
 
-def _has_scoped_follow_up(summary: str, labels: set[str]) -> bool:
-    """Require a review action, an evidence object, and a named eligible scope."""
-    if not labels:
-        return True
-    for clause in re.split(r"[\n!?؛؟;]|\.(?=\s|$)", summary):
+def _scoped_follow_ups(
+    clauses: list[str], labels: set[str]
+) -> dict[int, frozenset[str]]:
+    """Find scoped actions and the named review material in each clause."""
+    actions: dict[int, frozenset[str]] = {}
+    for index, clause in enumerate(clauses):
         text = _normalized_label(clause)
         for label in labels:
             remainder, occurrences = _source_label_pattern(label).subn(" ", text)
+            if not occurrences:
+                continue
             wording = _ARABIC_DIACRITICS.sub("", remainder)
-            if (
-                occurrences
-                and _REVIEW_ACTION.search(wording)
-                and _REVIEW_MATERIAL.search(wording)
-            ):
-                return True
-    return False
+            materials = frozenset(_REVIEW_MATERIAL.findall(wording))
+            if materials and _REVIEW_ACTION.search(wording):
+                actions[index] = actions.get(index, frozenset()) | materials
+    return actions
 
 
 def _observed_ranges_for_lines(
@@ -973,16 +982,38 @@ def _rate_summary_error(
             "measured numeric range and period scope.",
             "observed_rate_ranges": _observed_ranges_for_lines(widgets, deps, selected),
         }
-    labels = {
-        label
-        for scope in selected.values()
-        for label in (*scope.affected_leaders, *scope.supported_rate_leaders)
+    clauses = re.split(r"[\n!?؛؟;]|\.(?=\s|$)", summary)
+    workload_labels = {
+        label for scope in selected.values() for label in scope.affected_leaders
     }
-    if not _has_scoped_follow_up(summary, labels):
+    rate_labels = {
+        label for scope in selected.values() for label in scope.supported_rate_leaders
+    }
+    workload_actions = _scoped_follow_ups(clauses, workload_labels)
+    rate_actions = _scoped_follow_ups(clauses, rate_labels)
+    if (workload_labels and not workload_actions) or (rate_labels and not rate_actions):
         return {
-            "error": "Add a concrete scoped follow-up. Name a verified affected-count "
-            "or supported-rate leader and specify which records, case reasons, "
-            "requirements or workflow steps to review, sample or compare."
+            "error": "Add a concrete scoped follow-up for each available scope. "
+            "Name an exact supported-rate leader and identify what case reasons or "
+            "requirements to audit. Name an exact affected-count leader and specify "
+            "what workload records, rework steps, capacity or queue to check.",
+            "supported_rate_leaders": sorted(rate_labels)[:8],
+            "affected_count_leaders": sorted(workload_labels)[:8],
+        }
+    if (
+        workload_actions
+        and rate_actions
+        and not any(
+            workload_index != rate_index and workload_material != rate_material
+            for workload_index, workload_material in workload_actions.items()
+            for rate_index, rate_material in rate_actions.items()
+        )
+    ):
+        return {
+            "error": "Separate the rate and workload follow-ups into two sentences or "
+            "lines. Give each a distinct review target beyond the group name.",
+            "supported_rate_leaders": sorted(rate_labels)[:8],
+            "affected_count_leaders": sorted(workload_labels)[:8],
         }
     return None
 

@@ -316,7 +316,7 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
     (proposal.summary !== undefined &&
       (typeof proposal.summary !== 'string' ||
         !proposal.summary.trim() ||
-        Array.from(proposal.summary).length > 768 ||
+        Array.from(proposal.summary).length > 1024 ||
         proposal.dashboardType === 'v1')) ||
     typeof proposal.approvalToken !== 'string' ||
     proposal.approvalToken.length > 2048 ||

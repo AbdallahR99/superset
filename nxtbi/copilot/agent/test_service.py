@@ -1122,27 +1122,72 @@ def test_open_rate_dashboard_requires_live_support_for_both_groupings(
 
 
 @pytest.mark.parametrize(
-    ("clause", "expected_error"),
+    ("clause", "supported_leaders", "expected_error"),
     [
         (
             "Monthly rates were broadly stable. Sample records at South District.",
+            ("South District",),
             "descriptive",
         ),
-        ("ظلت المعدلات مستقرة. افحص سجلات الحالات في South District.", "descriptive"),
-        ("Review South District.", "concrete scoped follow-up"),
-        ("Audit decision records at Other District.", "concrete scoped follow-up"),
+        (
+            "ظلت المعدلات مستقرة. افحص سجلات الحالات في South District.",
+            ("South District",),
+            "descriptive",
+        ),
+        ("Review South District.", ("South District",), "concrete scoped follow-up"),
+        (
+            "Audit decision records at Other District. "
+            "Inspect queue at North District.",
+            ("South District",),
+            "concrete scoped follow-up",
+        ),
         (
             "Rates ranged from 10% to 12.5%. Sample records at South District.",
+            ("South District",),
+            "concrete scoped follow-up",
+        ),
+        (
+            "Sample records at South District. Sample records at North District.",
+            ("South District",),
+            "Separate the rate and workload follow-ups",
+        ),
+        (
+            "Audit rejection reasons at South District and examine staffing "
+            "capacity at North District.",
+            ("South District",),
+            "Separate the rate and workload follow-ups",
+        ),
+        (
+            "Rates ranged from 10% to 12.5%. Audit decision records at South District. "
+            "Check rework steps at North District.",
+            ("South District",),
             None,
         ),
-        ("افحص سجلات الحالات في South District وقارن شروط المراجعة.", None),
+        (
+            "افحص أسباب الرفض في South District. "
+            "راجع حجم طوابير المعالجة في North District.",
+            ("South District",),
+            None,
+        ),
+        (
+            "Audit decision records at North District. "
+            "Check capacity at North District.",
+            ("North District",),
+            None,
+        ),
+        (
+            "No group met the screening floor. Check queue volume at North District.",
+            (),
+            None,
+        ),
     ],
 )
 def test_rate_brief_requires_scoped_follow_up_and_descriptive_trends(
     clause: str,
+    supported_leaders: tuple[str, ...],
     expected_error: str | None,
 ) -> None:
-    """Allow scoped analytical follow-up in both supported languages."""
+    """Require distinct evidence-backed actions in both supported languages."""
     auth = _authorization("superset")["Authorization"]
     claims = verify_gateway_token(auth, SIGNING_KEY)
     _, hints = parse_run(json.dumps(REQUEST).encode(), claims)
@@ -1164,7 +1209,7 @@ def test_rate_brief_requires_scoped_follow_up_and_descriptive_trends(
                     ),
                     ("North District",),
                     1,
-                    ("South District",),
+                    supported_leaders,
                 )
             )
             deps.remember_chronology(
@@ -1527,7 +1572,7 @@ def test_dashboard_summary_is_bounded() -> None:
         "title": "Demo dashboard",
         "widgets": [{"type": "metric-tile", "datasetId": 5, "metric": "population"}],
     }
-    summary = "a" * 768
+    summary = "ا" * 1_024
     assert (
         DashboardDraft.model_validate({**draft, "summary": summary}).summary == summary
     )

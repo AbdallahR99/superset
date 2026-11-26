@@ -48,7 +48,7 @@ DatasetFieldId = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
 ]
 DashboardSummary = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=768)
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1_024)
 ]
 
 

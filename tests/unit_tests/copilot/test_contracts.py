@@ -22,6 +22,7 @@ import jwt
 import pytest
 from pydantic import ValidationError
 
+from superset.commands.dashboard_v2.save import normalize_and_validate
 from superset.copilot.contracts import (
     CopilotConversation,
     DashboardProposal,
@@ -132,6 +133,7 @@ def test_proposal_rejects_undeclared_fields() -> None:
         "April had **2 sales** across the three observed months.",
         "Both comparisons include the eligible denominator and baseline. " * 9
         + "Review the individual groups before acting.",
+        "🧭" * 1024,
     ],
 )
 def test_compound_proposal_preserves_native_bindings_and_summary(summary: str) -> None:
@@ -153,7 +155,7 @@ def test_compound_proposal_preserves_native_bindings_and_summary(summary: str) -
     assert widget.dimension_names == ["sale_month", "property_type"]
     assert proposal.model_dump(by_alias=True, exclude_unset=True) == payload
 
-    nodes = make_document(proposal)["nodes"]
+    nodes = normalize_and_validate(make_document(proposal))["nodes"]
     assert nodes["root"]["children"] == ["widget_1", "summary"]
     assert nodes["widget_1"]["props"]["dataBinding"] == {
         "datasetId": 23,
@@ -268,7 +270,7 @@ def test_summary_and_compound_table_are_v2_only() -> None:
                 {"type": "metric-tile", "datasetId": 23, "metric": "count_sales"}
             ],
         },
-        {"summary": "x" * 769},
+        {"summary": "🧭" * 1025},
         {"summary": "  "},
         {
             "widgets": [
