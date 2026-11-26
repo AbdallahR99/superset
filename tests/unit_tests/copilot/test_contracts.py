@@ -537,6 +537,102 @@ def test_vertical_bar_formats_saved_rates(locale: str, percent_sign: str) -> Non
     assert options["series"][0]["data"]["$bind"]["format"] == "percent"
 
 
+@pytest.mark.parametrize("locale", ["en", "ar"])
+def test_rate_chart_queries_denominator_without_plotting_it(locale: str) -> None:
+    cutoff = {"denominatorMetric": "eligible_reviews", "minimumSampleSize": 50}
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "Permit reviews",
+            "contentLocale": locale,
+            "widgets": [
+                {
+                    "type": "echarts",
+                    "datasetId": 23,
+                    "metric": "late_rate",
+                    "dimension": "site",
+                    "chartStyle": "ranked-bar",
+                    "filter": {"column": "status", "value": "Closed"},
+                    "rateCutoff": cutoff,
+                }
+            ],
+        }
+    )
+    metadata = ProposalMetadata(metric_formats={(23, "late_rate"): ".1%"})
+
+    document, _ = normalize_document(make_document(proposal, metadata))
+    props = document["nodes"]["widget_1"]["props"]
+    assert props["rateCutoff"] == {
+        **cutoff,
+        "scope": {"datasetId": 23, "rateMetric": "late_rate", "dimension": "site"},
+    }
+    assert proposal.model_dump(by_alias=True)["widgets"][0]["rateCutoff"] == cutoff
+    binding = props["dataBinding"]
+    assert binding["metrics"] == ["late_rate", "eligible_reviews"]
+    assert binding["dimensions"] == ["site"]
+    assert binding["filters"][0]["comparator"] == "Closed"
+    assert binding["orderByMetric"] is True
+    assert [series["data"] for series in props["echartsOptions"]["series"]] == [
+        {"$bind": {"source": "metric", "alias": "late_rate", "format": "percent"}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("widget_fields", "dashboard_type", "error"),
+    [
+        ({"type": "metric-tile"}, "v2", "only available on charts"),
+        ({"dimension": "eligible_reviews"}, "v2", "distinct denominator"),
+        ({"metric": "eligible_reviews"}, "v2", "distinct denominator"),
+        ({"metric": "site"}, "v2", "distinct rate metric"),
+        ({}, "v1", "Rate cutoffs require Dashboard V2"),
+    ],
+)
+def test_rate_cutoff_requires_distinct_v2_chart_bindings(
+    widget_fields: dict[str, Any], dashboard_type: str, error: str
+) -> None:
+    with pytest.raises(ValidationError, match=error):
+        DashboardProposal.model_validate(
+            {
+                "title": "Permit reviews",
+                "dashboardType": dashboard_type,
+                "widgets": [
+                    {
+                        "type": "echarts",
+                        "datasetId": 23,
+                        "metric": "late_rate",
+                        "dimension": "site",
+                        "rateCutoff": {
+                            "denominatorMetric": "eligible_reviews",
+                            "minimumSampleSize": 50,
+                        },
+                        **widget_fields,
+                    }
+                ],
+            }
+        )
+
+
+@pytest.mark.parametrize("minimum", [True, 0, -1, 1.5, "50", 2**31])
+def test_cutoff_requires_a_bounded_positive_integer(minimum: object) -> None:
+    with pytest.raises(ValidationError, match="minimumSampleSize"):
+        DashboardProposal.model_validate(
+            {
+                "title": "Permit reviews",
+                "widgets": [
+                    {
+                        "type": "echarts",
+                        "datasetId": 23,
+                        "metric": "late_rate",
+                        "dimension": "site",
+                        "rateCutoff": {
+                            "denominatorMetric": "eligible_reviews",
+                            "minimumSampleSize": minimum,
+                        },
+                    }
+                ],
+            }
+        )
+
+
 def test_mcp_delegation_is_read_only_and_user_scoped() -> None:
     secret = secrets.token_hex(32)
     token = delegated_mcp_token(

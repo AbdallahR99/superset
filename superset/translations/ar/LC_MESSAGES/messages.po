@@ -23105,3 +23105,21 @@ msgid ""
 msgstr ""
 "تعذّر تغيير حالة نشر لوحة المعلومات. حدّث الصفحة للتحقق من حالتها، ثم "
 "حاول مرة أخرى."
+
+msgid "Minimum sample size: %s"
+msgstr "الحد الأدنى لحجم العينة: %s"
+
+msgid "Below minimum sample size"
+msgstr "أقل من الحد الأدنى لحجم العينة"
+
+msgid "Sample size"
+msgstr "حجم العينة"
+
+msgid "Sample size unavailable"
+msgstr "حجم العينة غير متاح"
+
+msgid "Interactive grid"
+msgstr "الجدول التفاعلي"
+
+msgid "Rows %s–%s of %s"
+msgstr "الصفوف %s–%s من %s"

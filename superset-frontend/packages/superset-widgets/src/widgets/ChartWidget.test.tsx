@@ -18,6 +18,7 @@
  */
 import { dashboard as dashboardApi } from '@apache-superset/core';
 import {
+  act,
   fireEvent,
   render,
   userEvent,
@@ -245,6 +246,145 @@ test('keyboard users can inspect named, formatted chart values without another q
   expect(queryByRole('table')).not.toBeInTheDocument();
   expect(toggle).toHaveFocus();
   expect(fetchData).toHaveBeenCalledTimes(1);
+});
+
+const rateChartProps = {
+  dataBinding: {
+    datasetId: 1,
+    dimensions: ['region'],
+    metrics: ['rate', 'eligible'],
+  },
+  rateCutoff: {
+    denominatorMetric: 'eligible',
+    minimumSampleSize: 10,
+    scope: { datasetId: 1, rateMetric: 'rate', dimension: 'region' },
+  },
+  echartsOptions: {
+    xAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
+    yAxis: {
+      type: 'category',
+      data: { $bind: { source: 'dimension', alias: 'region' } },
+    },
+    series: [
+      {
+        name: 'Return rate',
+        type: 'bar',
+        realtimeSort: true,
+        data: {
+          $bind: { source: 'metric', alias: 'rate', format: 'percent' },
+        },
+      },
+    ],
+  },
+};
+
+test('marks only plotted rates below the cutoff from their live sample sizes', async () => {
+  const user = userEvent.setup();
+  fetchData.mockResolvedValue({
+    columns: ['region', 'rate', 'eligible'],
+    rows: [
+      { region: 'North', rate: 0.4, eligible: 3 },
+      { region: 'South', rate: 0.28, eligible: 10 },
+      { region: 'West', rate: 0, eligible: 2 },
+      { region: 'East', rate: 0.12, eligible: null },
+      { region: 'Central', rate: null, eligible: 0 },
+    ],
+  });
+  const { findByRole, getByRole, getByText, queryByText } =
+    renderChart(rateChartProps);
+
+  const toggle = await findByRole('button', { name: 'View as table' });
+  expect(toggle).toHaveAccessibleDescription(/Minimum sample size: 10/);
+  expect(getByText('Below minimum sample size')).toBeVisible();
+  const [option] = mockSetOption.mock.calls[0];
+  expect(option.series).toHaveLength(1);
+  const [series] = option.series;
+  expect(series.data).toEqual([40, expect.closeTo(28), 0, 12, null]);
+  expect(series.markPoint.data).toEqual([
+    { coord: [40, 0] },
+    { coord: [0, 2] },
+  ]);
+
+  await user.click(toggle);
+  const table = getByRole('table');
+  expect(
+    within(table).getByRole('columnheader', { name: 'Sample size' }),
+  ).toBeVisible();
+  expect(within(table).getByRole('cell', { name: '40%' })).toBeVisible();
+  expect(within(table).getByRole('cell', { name: '0%' })).toBeVisible();
+  expect(
+    within(table).getByRole('cell', { name: '3 Below minimum sample size' }),
+  ).toBeVisible();
+  expect(within(table).getByRole('cell', { name: '10' })).toBeVisible();
+  expect(
+    within(table).getByRole('cell', { name: 'Sample size unavailable' }),
+  ).toBeVisible();
+  expect(within(table).getByRole('cell', { name: '0' })).toBeVisible();
+  expect(fetchData).toHaveBeenCalledTimes(1);
+
+  fetchData.mockResolvedValue({
+    columns: ['region', 'rate', 'eligible'],
+    rows: [{ region: 'North', rate: 0.25, eligible: 20 }],
+  });
+  act(() => {
+    bus.emit('host:region', dashboardApi.VALUE_CHANGED_EVENT, {
+      selection: 'North',
+      resolved: {
+        column: 'region',
+        operator: 'EQUALS',
+        value: 'North',
+        datasource: 1,
+      },
+    });
+  });
+  const filteredTable = await findByRole('table');
+  expect(
+    within(filteredTable).getByRole('cell', { name: '25%' }),
+  ).toBeVisible();
+  expect(within(filteredTable).getByRole('cell', { name: '20' })).toBeVisible();
+  expect(
+    within(filteredTable).queryByRole('rowheader', { name: 'South' }),
+  ).not.toBeInTheDocument();
+  await user.click(getByRole('button', { name: 'View as table' }));
+  expect(queryByText('Below minimum sample size')).not.toBeInTheDocument();
+  const [filteredOption] = mockSetOption.mock.lastCall!;
+  expect(filteredOption.series[0]).not.toHaveProperty('markPoint');
+});
+
+test.each([
+  ['dataset', { datasetId: 2 }],
+  ['first metric', { metrics: ['otherRate', 'rate', 'eligible'] }],
+  ['dimension', { dimensions: ['department'] }],
+  ['grouping grain', { dimensions: ['region', 'department'] }],
+])('hides the cutoff when the chart changes its %s', async (_, edit) => {
+  fetchData.mockResolvedValue({
+    columns: ['region', 'department', 'rate', 'otherRate', 'eligible'],
+    rows: [
+      {
+        region: 'North',
+        department: 'Ops',
+        rate: 0.4,
+        otherRate: 0.6,
+        eligible: 3,
+      },
+    ],
+  });
+  const { findByRole, getByRole, queryByText } = renderChart({
+    ...rateChartProps,
+    dataBinding: { ...rateChartProps.dataBinding, ...edit },
+  });
+
+  const toggle = await findByRole('button', { name: 'View as table' });
+  expect(queryByText(/Minimum sample size/)).not.toBeInTheDocument();
+  const [option] = mockSetOption.mock.lastCall!;
+  expect(option.series[0].data).toEqual([40]);
+  expect(option.series[0]).not.toHaveProperty('markPoint');
+  await userEvent.click(toggle);
+  expect(
+    within(getByRole('table')).queryByRole('columnheader', {
+      name: 'Sample size',
+    }),
+  ).not.toBeInTheDocument();
 });
 
 test('the table shows inline pie data without a query binding', async () => {

@@ -30,6 +30,7 @@ import {
   changeWidgetDataset,
   changeWidgetType,
   expandTableFields,
+  preserveRateCutoff,
   rankedChartTitle,
   widgetPreview,
 } from "./widgetPreview";
@@ -304,7 +305,9 @@ export default function ProposalEditor({
   const updateWidget = (index: number, next: ProposedWidget) => {
     onChange({
       ...proposal,
-      widgets: proposal.widgets.map((widget, offset) => (offset === index ? next : widget)),
+      widgets: proposal.widgets.map((widget, offset) =>
+        offset === index ? preserveRateCutoff(widget, next) : widget,
+      ),
     });
   };
 

@@ -44,6 +44,7 @@ import {
   LegendComponent,
   MarkAreaComponent,
   MarkLineComponent,
+  MarkPointComponent,
   TitleComponent,
   ToolboxComponent,
   TooltipComponent,
@@ -75,6 +76,7 @@ import {
 const TYPE = 'echarts';
 
 type DataBindingSpec = dashboardApi.DataBindingSpec;
+type ChartTheme = ReturnType<typeof useTheme>;
 interface ChartWidgetProps extends WidgetProps {
   /** The host's displayed title after any dashboard content translation. */
   accessibleTitle?: string;
@@ -100,6 +102,40 @@ const DataToggle = styled.button`
     outline: 2px solid ${({ theme }) => theme.colorPrimary};
     outline-offset: -2px;
   }
+`;
+
+const ChartControls = styled.div`
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+
+  button {
+    margin-inline-start: auto;
+  }
+`;
+
+const CutoffNote = styled.span`
+  color: ${({ theme }) => theme.colorTextSecondary};
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: ${({ theme }) => theme.sizeXS}px;
+  font-size: ${({ theme }) => theme.fontSizeSM}px;
+  padding-inline: ${({ theme }) => theme.sizeSM}px;
+`;
+
+const CutoffDiamond = styled.span`
+  background: ${({ theme }) => theme.colorText};
+  border: 1px solid ${({ theme }) => theme.colorBgContainer};
+  display: inline-block;
+  height: 7px;
+  margin-inline-end: 4px;
+  transform: rotate(45deg);
+  width: 7px;
+`;
+
+const SampleStatus = styled.div`
+  color: ${({ theme }) => theme.colorTextSecondary};
 `;
 
 const TableScroll = styled.section`
@@ -162,6 +198,16 @@ interface ChartTableData {
   rowHeader?: 'category' | 'name';
 }
 
+interface RateCutoff {
+  denominatorMetric: string;
+  minimumSampleSize: number;
+}
+
+interface RateSample {
+  size?: number;
+  belowCutoff: boolean;
+}
+
 function optionRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -188,6 +234,128 @@ function chartCell(value: unknown): ChartCell {
 function pointValue(point: unknown) {
   const entry = optionRecord(point);
   return entry && 'value' in entry ? entry.value : point;
+}
+
+/** Use the compiled cutoff only for its original dataset, rate, and grouping. */
+function readRateCutoff(
+  value: unknown,
+  binding: DataBindingSpec | undefined,
+): RateCutoff | undefined {
+  const cutoff = optionRecord(value);
+  const scope = optionRecord(cutoff?.scope);
+  const denominatorMetric = cutoff?.denominatorMetric;
+  const minimumSampleSize = cutoff?.minimumSampleSize;
+  if (
+    binding &&
+    scope &&
+    binding.datasetId === scope.datasetId &&
+    typeof scope.rateMetric === 'string' &&
+    binding.metrics?.[0] === scope.rateMetric &&
+    binding.dimensions?.length === 1 &&
+    binding.dimensions[0] === scope.dimension &&
+    typeof denominatorMetric === 'string' &&
+    denominatorMetric &&
+    binding.metrics.includes(denominatorMetric) &&
+    typeof minimumSampleSize === 'number' &&
+    Number.isSafeInteger(minimumSampleSize) &&
+    minimumSampleSize > 0
+  ) {
+    return { denominatorMetric, minimumSampleSize };
+  }
+  return undefined;
+}
+
+/** Pair a generated chart's single plotted rate series with its result rows. */
+function annotateRateChart(
+  option: Record<string, unknown> | undefined,
+  table: ChartTableData | undefined,
+  rows: dashboardApi.DataRow[] | undefined,
+  cutoff: RateCutoff | undefined,
+  theme: ChartTheme,
+) {
+  if (
+    !cutoff ||
+    !option ||
+    !rows ||
+    table?.rowHeader !== 'category' ||
+    table.headers.length !== 2 ||
+    table.rows.length !== rows.length
+  ) {
+    return undefined;
+  }
+  const series = firstOption(option.series);
+  if (series?.type !== 'bar' && series?.type !== 'line') return undefined;
+
+  const categoryOnY = firstOption(option.yAxis)?.type === 'category';
+  const markers: { coord: [number, number] }[] = [];
+  const samples = rows.map<RateSample>((row, index) => {
+    const rawSize = row[cutoff.denominatorMetric];
+    const size =
+      typeof rawSize === 'number' &&
+      Number.isSafeInteger(rawSize) &&
+      rawSize >= 0
+        ? rawSize
+        : undefined;
+    const rate = table.rows[index][1];
+    if (
+      typeof rate === 'number' &&
+      size !== undefined &&
+      size < cutoff.minimumSampleSize
+    ) {
+      markers.push({ coord: categoryOnY ? [rate, index] : [index, rate] });
+      return { size, belowCutoff: true };
+    }
+    return { size, belowCutoff: false };
+  });
+  return {
+    samples,
+    minimumSampleSize: cutoff.minimumSampleSize,
+    hasMarkers: markers.length > 0,
+    option: markers.length
+      ? {
+          ...option,
+          series: [
+            {
+              ...series,
+              markPoint: {
+                symbol: 'diamond',
+                symbolSize: 12,
+                silent: true,
+                label: { show: false },
+                tooltip: { show: false },
+                itemStyle: {
+                  color: theme.colorText,
+                  borderColor: theme.colorBgContainer,
+                  borderWidth: 2,
+                },
+                data: markers,
+              },
+            },
+          ],
+        }
+      : option,
+  };
+}
+
+function SampleSizeCell({
+  sample,
+  format,
+  belowCutoffLabel,
+}: {
+  sample: RateSample;
+  format: Intl.NumberFormat;
+  belowCutoffLabel: string;
+}) {
+  return (
+    <td>
+      {sample.size === undefined ? (
+        t('Sample size unavailable')
+      ) : (
+        <bdi className="chart-number">{format.format(sample.size)}</bdi>
+      )}
+      {sample.belowCutoff && <SampleStatus>{belowCutoffLabel}</SampleStatus>}
+    </td>
+  );
 }
 
 function chartValueFormatter(
@@ -357,6 +525,7 @@ echarts.use([
   GridComponent,
   MarkAreaComponent,
   MarkLineComponent,
+  MarkPointComponent,
   LegendComponent,
   ToolboxComponent,
   TooltipComponent,
@@ -521,6 +690,7 @@ export default function ChartWidget(widgetProps: ChartWidgetProps) {
   const [containerRef, size] = useElementSize();
   const contentId = useId();
   const captionId = useId();
+  const cutoffId = useId();
   const [showTable, setShowTable] = useState(false);
   const dataBinding = props.dataBinding as DataBindingSpec | undefined;
   // Fetches for the binding and the filters that apply to this widget, and
@@ -649,6 +819,22 @@ export default function ChartWidget(widgetProps: ChartWidgetProps) {
       formatValue: chartValueFormatter(undefined, locale),
     };
   }, [chartType, data.result, dataBinding, locale, option]);
+  const rateChart = useMemo(
+    () =>
+      annotateRateChart(
+        option,
+        table,
+        rows,
+        readRateCutoff(props.rateCutoff, dataBinding),
+        theme,
+      ),
+    [option, table, rows, props.rateCutoff, dataBinding, theme],
+  );
+  const sampleFormatter = useMemo(
+    () => new Intl.NumberFormat(locale),
+    [locale],
+  );
+  const belowCutoffLabel = t('Below minimum sample size');
   const error = dataBinding || !table?.rows.length ? data.error : undefined;
   const canInspect = !error && table !== undefined;
   const filterValues =
@@ -709,19 +895,39 @@ export default function ChartWidget(widgetProps: ChartWidgetProps) {
       }}
     >
       {canInspect && (
-        <DataToggle
-          type="button"
-          aria-expanded={showTable}
-          aria-controls={contentId}
-          aria-describedby={captionId}
-          data-widget-interactive
-          onClick={event => {
-            event.stopPropagation();
-            setShowTable(open => !open);
-          }}
-        >
-          {t('View as table')}
-        </DataToggle>
+        <ChartControls>
+          {rateChart && (
+            <CutoffNote id={cutoffId}>
+              <span>
+                {t(
+                  'Minimum sample size: %s',
+                  sampleFormatter.format(rateChart.minimumSampleSize),
+                )}
+              </span>
+              {!showTable && rateChart.hasMarkers && (
+                <span>
+                  <CutoffDiamond aria-hidden="true" />
+                  {belowCutoffLabel}
+                </span>
+              )}
+            </CutoffNote>
+          )}
+          <DataToggle
+            type="button"
+            aria-expanded={showTable}
+            aria-controls={contentId}
+            aria-describedby={
+              rateChart ? `${captionId} ${cutoffId}` : captionId
+            }
+            data-widget-interactive
+            onClick={event => {
+              event.stopPropagation();
+              setShowTable(open => !open);
+            }}
+          >
+            {t('View as table')}
+          </DataToggle>
+        </ChartControls>
       )}
       <span id={captionId} style={visuallyHidden}>
         {title}
@@ -748,7 +954,7 @@ export default function ChartWidget(widgetProps: ChartWidgetProps) {
               <EchartsCanvas
                 width={size.width}
                 height={size.height}
-                option={option}
+                option={rateChart?.option ?? option}
                 onPointClick={handlePointClick}
               />
             </LtrIsolate>
@@ -763,7 +969,7 @@ export default function ChartWidget(widgetProps: ChartWidgetProps) {
             {table.rows.length === 0 ? (
               <output>{t('No data')}</output>
             ) : (
-              <table>
+              <table aria-describedby={rateChart ? cutoffId : undefined}>
                 <caption style={visuallyHidden}>{title}</caption>
                 <thead>
                   <tr>
@@ -772,6 +978,7 @@ export default function ChartWidget(widgetProps: ChartWidgetProps) {
                         <bdi>{header}</bdi>
                       </th>
                     ))}
+                    {rateChart && <th scope="col">{t('Sample size')}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -827,6 +1034,13 @@ export default function ChartWidget(widgetProps: ChartWidgetProps) {
                           </td>
                         );
                       })}
+                      {rateChart && (
+                        <SampleSizeCell
+                          sample={rateChart.samples[rowIndex]}
+                          format={sampleFormatter}
+                          belowCutoffLabel={belowCutoffLabel}
+                        />
+                      )}
                     </tr>
                   ))}
                 </tbody>

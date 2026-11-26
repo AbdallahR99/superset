@@ -20,6 +20,28 @@ import type { DashboardContentLocale, DashboardProposal } from '@nxtbi/copilot';
 
 export type ProposedWidget = DashboardProposal['widgets'][number];
 
+/** Keep approved cutoff metadata only while the rate binding still matches. */
+export function preserveRateCutoff(
+  previous: ProposedWidget,
+  next: ProposedWidget,
+): ProposedWidget {
+  if (
+    !next.rateCutoff ||
+    (next.type === 'echarts' &&
+      next.type === previous.type &&
+      next.datasetId === previous.datasetId &&
+      next.chartStyle === previous.chartStyle &&
+      next.metric === previous.metric &&
+      next.dimension === previous.dimension &&
+      next.filter?.column === previous.filter?.column &&
+      next.filter?.value === previous.filter?.value)
+  ) {
+    return next;
+  }
+  const { rateCutoff: _rateCutoff, ...widget } = next;
+  return widget;
+}
+
 export function changeWidgetDataset(
   widget: ProposedWidget,
   datasetId: number,
@@ -81,7 +103,10 @@ interface PreviewFields {
 
 const RANKED_CATEGORY_LIMIT = 12;
 
-export function rankedChartTitle(title: string, locale: DashboardContentLocale) {
+export function rankedChartTitle(
+  title: string,
+  locale: DashboardContentLocale,
+) {
   return `${title} · ${locale === 'ar' ? 'أعلى ١٢' : `Top ${RANKED_CATEGORY_LIMIT}`}`;
 }
 
@@ -247,6 +272,7 @@ export function widgetPreview(
   const { type, datasetId, title, chartStyle, filter } = widget;
   const isTrend = chartStyle === 'line';
   const isRanked = type === 'echarts' && chartStyle === 'ranked-bar';
+  const rateCutoff = type === 'echarts' ? widget.rateCutoff : undefined;
   const metric = widget.metric?.trim();
   const dimension = widget.dimension?.trim();
   const metrics = widget.metrics ?? (metric ? [metric] : []);
@@ -340,11 +366,19 @@ export function widgetPreview(
     case 'echarts': {
       if (!metric || !dimension) return undefined;
       const metricLabel = fields?.metrics.get(metric) || metric;
+      const cutoff = rateCutoff && {
+        ...rateCutoff,
+        denominatorMetric: rateCutoff.denominatorMetric.trim(),
+        scope: { datasetId, rateMetric: metric, dimension },
+      };
       return {
         type,
         props: {
-          dataBinding,
+          dataBinding: cutoff
+            ? { ...dataBinding, metrics: [metric, cutoff.denominatorMetric] }
+            : dataBinding,
           crossFilter: !isTrend,
+          ...(cutoff && { rateCutoff: cutoff }),
           echartsOptions: chartOptions(
             metric,
             dimension,

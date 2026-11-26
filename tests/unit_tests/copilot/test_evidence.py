@@ -334,6 +334,76 @@ def test_proposal_columns_require_temporal_and_filterable_metadata() -> None:
 
 
 @pytest.mark.parametrize(
+    ("denominator", "rate_format", "error"),
+    [
+        ("eligible", ".1%", None),
+        ("unregistered", ".1%", "existing dataset metric"),
+        ("eligible", ".1f", None),
+        ("eligible", None, None),
+    ],
+)
+def test_rate_cutoff_uses_authorized_dataset_metrics(
+    denominator: str, rate_format: str | None, error: str | None
+) -> None:
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "Permit reviews",
+            "widgets": [
+                {
+                    "type": "echarts",
+                    "datasetId": 23,
+                    "metric": "late_rate",
+                    "dimension": "site",
+                    "chartStyle": "ranked-bar",
+                    "filter": {"column": "status", "value": "Closed"},
+                    "rateCutoff": {
+                        "denominatorMetric": denominator,
+                        "minimumSampleSize": 30,
+                    },
+                }
+            ],
+        }
+    )
+    dataset = MagicMock(deleted_at=None)
+    dataset.metrics = [
+        SimpleNamespace(
+            metric_name="late_rate", verbose_name=None, d3format=rate_format
+        ),
+        SimpleNamespace(metric_name="eligible", verbose_name=None, d3format=None),
+    ]
+    dataset.columns = [
+        SimpleNamespace(column_name="site", groupby=True, filterable=False),
+        SimpleNamespace(column_name="status", groupby=False, filterable=True),
+    ]
+    with (
+        patch.object(services, "db") as database,
+        patch.object(services, "security_manager", MagicMock()),
+        patch.object(services, "user_can_view_data_model_metadata", return_value=True),
+        patch.object(services, "raise_for_document_authoring") as authorize,
+    ):
+        database.session.get.return_value = dataset
+        if error:
+            with pytest.raises(ValueError, match=error):
+                services.validate_dashboard_proposal(proposal)
+            authorize.assert_not_called()
+            dataset.raise_for_access.assert_called_once_with()
+            return
+        document = services.validate_dashboard_proposal(proposal)
+
+    authorize.assert_called_once_with(document, None)
+    dataset.raise_for_access.assert_called_once_with()
+    props = document["nodes"]["widget_1"]["props"]
+    metric_binding = props["echartsOptions"]["series"][0]["data"]["$bind"]
+    assert metric_binding.get("format") == ("percent" if rate_format == ".1%" else None)
+    dataset_id, query, _ = services.build_widget_query(props, [])
+    assert dataset_id == 23
+    assert query["metrics"] == ["late_rate", "eligible"]
+    assert query["columns"] == ["site"]
+    assert query["orderby"] == [("late_rate", False), ("site", True)]
+    assert query["filters"] == [{"col": "status", "op": "==", "val": "Closed"}]
+
+
+@pytest.mark.parametrize(
     ("second_metric", "second_dimension", "error"),
     [
         ("weighted_price", "property_type", None),

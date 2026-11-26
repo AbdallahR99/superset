@@ -139,6 +139,7 @@ interface DashboardWidgetBase extends DashboardTitles {
   datasetId: number;
   chartStyle?: 'bar' | 'ranked-bar' | 'line';
   filter?: { column: string; value: string | number | boolean };
+  rateCutoff?: { denominatorMetric: string; minimumSampleSize: number };
 }
 
 export type DashboardWidget = DashboardWidgetBase &
@@ -272,6 +273,40 @@ function validWidgetFields(widget: DashboardWidget): boolean {
   );
 }
 
+function validRateCutoff(
+  widget: DashboardWidget,
+  dashboardType?: DashboardType,
+): boolean {
+  const { rateCutoff, metric, dimension } = widget;
+  if (rateCutoff === undefined) return true;
+  const rate = metric?.trim();
+  const group = dimension?.trim();
+  if (
+    dashboardType === 'v1' ||
+    widget.type !== 'echarts' ||
+    !rate ||
+    !group ||
+    rate === group ||
+    !rateCutoff ||
+    typeof rateCutoff !== 'object' ||
+    Array.isArray(rateCutoff)
+  ) {
+    return false;
+  }
+  const { denominatorMetric, minimumSampleSize } = rateCutoff;
+  const denominator =
+    typeof denominatorMetric === 'string' ? denominatorMetric.trim() : '';
+  return (
+    !!denominator &&
+    denominatorMetric.length <= 256 &&
+    denominator !== rate &&
+    denominator !== group &&
+    Number.isInteger(minimumSampleSize) &&
+    minimumSampleSize > 0 &&
+    minimumSampleSize <= 2 ** 31 - 1
+  );
+}
+
 export function readProposal(value: unknown): DashboardProposal | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const proposal = value as DashboardProposal;
@@ -302,6 +337,7 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
         Number.isSafeInteger(item.datasetId) &&
         item.datasetId > 0 &&
         validWidgetFields(item) &&
+        validRateCutoff(item, proposal.dashboardType) &&
         (proposal.dashboardType !== 'v1' || item.metrics === undefined) &&
         (item.title === undefined ||
           (typeof item.title === 'string' && item.title.length <= 256)) &&
@@ -336,8 +372,14 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
       ...proposal.titleTranslations,
     },
     widgets: proposal.widgets.map(widget => {
-      const { datasetId, title, chartStyle, filter, titleTranslations } =
-        widget;
+      const {
+        datasetId,
+        title,
+        chartStyle,
+        filter,
+        titleTranslations,
+        rateCutoff,
+      } = widget;
       const shared = {
         datasetId,
         title,
@@ -351,6 +393,12 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
             type: widget.type,
             metric: widget.metric,
             dimension: widget.dimension,
+            ...(rateCutoff && {
+              rateCutoff: {
+                denominatorMetric: rateCutoff.denominatorMetric,
+                minimumSampleSize: rateCutoff.minimumSampleSize,
+              },
+            }),
           }
         : {
             ...shared,

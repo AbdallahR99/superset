@@ -36,10 +36,15 @@ COPY superset-frontend/src/pages/DashboardBuilderV2/EmbedDashboardModal.tsx src/
 COPY superset-frontend/src/pages/DashboardBuilderV2/index.tsx src/pages/DashboardBuilderV2/index.tsx
 COPY superset-frontend/src/views/routes.tsx src/views/routes.tsx
 RUN npm run build > /tmp/semantic-lab-assets.log 2>&1 || { tail -n 100 /tmp/semantic-lab-assets.log; exit 1; }
+COPY superset/translations/ar/LC_MESSAGES/messages.po ../superset/translations/ar/LC_MESSAGES/messages.po
+RUN node scripts/po2json-cli.js --domain superset \
+    ../superset/translations/ar/LC_MESSAGES/messages.po \
+    ../superset/translations/ar/LC_MESSAGES/messages.json
 
 FROM ${SUPERSET_BASE_IMAGE}
 COPY --from=assets /app/superset/static/assets /app/superset/static/assets
 COPY --from=assets /app/superset/static/service-worker.js /app/superset/static/service-worker.js
+COPY --from=assets /app/superset/translations/ar/LC_MESSAGES/messages.json /app/superset/translations/ar/LC_MESSAGES/messages.json
 COPY --chown=superset:superset superset/commands/dashboard_v2/ /app/superset/commands/dashboard_v2/
 COPY --chown=superset:superset superset/commands/widget/ /app/superset/commands/widget/
 COPY --chown=superset:superset superset/copilot/ /app/superset/copilot/

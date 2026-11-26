@@ -430,7 +430,7 @@ test('keeps proposal format, canonical titles, and bindings when previewing and 
   );
 });
 
-test('reviews a plain-text summary and saves all compound fields after title edits', async () => {
+test('reviews a plain-text summary and saves compound fields and rate cutoffs after title edits', async () => {
   const user = userEvent.setup();
   const proposal: DashboardProposal = {
     title: 'Transaction activity',
@@ -444,7 +444,16 @@ test('reviews a plain-text summary and saves all compound fields after title edi
         metrics: ['avg_value', 'transaction_count'],
         dimensions: ['month', 'category'],
       },
-      { type: 'metric-tile', datasetId: 1, metric: 'transaction_count' },
+      {
+        type: 'echarts',
+        datasetId: 1,
+        metric: 'approval_rate',
+        dimension: 'category',
+        rateCutoff: {
+          denominatorMetric: 'transaction_count',
+          minimumSampleSize: 25,
+        },
+      },
     ],
   };
   jest.mocked(readAgUiEvents).mockImplementationOnce(async function* () {
@@ -515,8 +524,48 @@ test('rejects mixed bindings, partial arrays, and V2-only fields in Classic prop
     readProposal({ ...proposal, dashboardType: 'v1', widgets: [table] }),
   ).toBeUndefined();
   expect(
-    readProposal({ ...proposal, summary: 'a'.repeat(513), widgets: [table] }),
+    readProposal({ ...proposal, summary: 'a'.repeat(769), widgets: [table] }),
   ).toBeUndefined();
+});
+
+test('preserves approved V2 rate cutoffs and rejects invalid cutoff bindings', () => {
+  const cutoff = { denominatorMetric: 'applications', minimumSampleSize: 25 };
+  const chart = {
+    type: 'echarts',
+    datasetId: 1,
+    metric: 'approval_rate',
+    dimension: 'district',
+    rateCutoff: { ...cutoff, unexpected: true },
+  };
+  const proposal = {
+    title: 'Review',
+    approvalToken: 'test-token',
+    dashboardType: 'v2',
+    widgets: [chart],
+  };
+  expect(readProposal(proposal)?.widgets[0]?.rateCutoff).toEqual(cutoff);
+  expect(readProposal({ ...proposal, dashboardType: 'v1' })).toBeUndefined();
+  expect(
+    readProposal({ ...proposal, dashboardType: undefined })?.widgets[0]
+      ?.rateCutoff,
+  ).toEqual(cutoff);
+  for (const widget of [
+    { ...chart, type: 'metric-tile' },
+    { ...chart, dimension: undefined },
+    { ...chart, dimension: 'applications' },
+    { ...chart, dimension: 'approval_rate' },
+    { ...chart, rateCutoff: null },
+    {
+      ...chart,
+      rateCutoff: { ...cutoff, denominatorMetric: ' approval_rate ' },
+    },
+    { ...chart, rateCutoff: { ...cutoff, denominatorMetric: ' ' } },
+    { ...chart, rateCutoff: { ...cutoff, minimumSampleSize: 0 } },
+    { ...chart, rateCutoff: { ...cutoff, minimumSampleSize: 3.5 } },
+    { ...chart, rateCutoff: { ...cutoff, minimumSampleSize: 2 ** 31 } },
+  ]) {
+    expect(readProposal({ ...proposal, widgets: [widget] })).toBeUndefined();
+  }
 });
 
 test('reviews caption-only suggestions before applying them to an existing draft', async () => {

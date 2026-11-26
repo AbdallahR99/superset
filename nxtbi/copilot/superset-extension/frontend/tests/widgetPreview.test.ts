@@ -22,6 +22,7 @@ import {
   changeWidgetDataset,
   changeWidgetType,
   expandTableFields,
+  preserveRateCutoff,
   widgetPreview,
 } from '../src/widgetPreview.ts';
 import type { ProposedWidget } from '../src/widgetPreview.ts';
@@ -172,7 +173,9 @@ test('shows saved percentage units for a default vertical bar without changing i
     series: [
       {
         type: 'bar',
-        data: { $bind: { source: 'metric', alias: 'return_rate', format: 'percent' } },
+        data: {
+          $bind: { source: 'metric', alias: 'return_rate', format: 'percent' },
+        },
       },
     ],
   });
@@ -225,6 +228,69 @@ test('shows real points and gaps on a chronologically ordered trend', () => {
       lineStyle: { width: 2.5 },
     },
   ]);
+});
+
+const rateWidget: ProposedWidget = {
+  type: 'echarts',
+  chartStyle: 'ranked-bar',
+  datasetId: 10,
+  metric: 'approval_rate',
+  dimension: 'district',
+  filter: { column: 'year', value: 2026 },
+  rateCutoff: { denominatorMetric: 'applications', minimumSampleSize: 25 },
+};
+
+test('previews the rate and eligible sample size in one grouped binding', () => {
+  const chart = widgetPreview(rateWidget, '.1%');
+  assert.ok(chart);
+  assert.deepEqual(chart.props.dataBinding, {
+    datasetId: 10,
+    metrics: ['approval_rate', 'applications'],
+    dimensions: ['district'],
+    rowLimit: 12,
+    orderByMetric: true,
+    filters: [
+      {
+        expressionType: 'SIMPLE',
+        clause: 'WHERE',
+        subject: 'year',
+        operator: '==',
+        comparator: 2026,
+      },
+    ],
+  });
+  assert.deepEqual(chart.props.rateCutoff, {
+    ...rateWidget.rateCutoff,
+    scope: {
+      datasetId: 10,
+      rateMetric: 'approval_rate',
+      dimension: 'district',
+    },
+  });
+  const options = chart.props.echartsOptions as { series: { data: unknown }[] };
+  assert.equal(options.series.length, 1);
+  assert.deepEqual(options.series[0]?.data, {
+    $bind: { source: 'metric', alias: 'approval_rate', format: 'percent' },
+  });
+});
+
+test('keeps an approved cutoff for caption edits and clears it on scope changes', () => {
+  assert.deepEqual(
+    preserveRateCutoff(rateWidget, { ...rateWidget, title: 'New caption' })
+      .rateCutoff,
+    rateWidget.rateCutoff,
+  );
+  for (const next of [
+    changeWidgetDataset(rateWidget, 20),
+    changeWidgetType(rateWidget, 'ag-grid-table'),
+    { ...rateWidget, metric: 'reject_rate' },
+    { ...rateWidget, dimension: 'other_district' },
+    { ...rateWidget, chartStyle: 'line' as const },
+    { ...rateWidget, filter: undefined },
+    { ...rateWidget, filter: { column: 'year', value: 2025 } },
+  ]) {
+    assert.equal(preserveRateCutoff(rateWidget, next).rateCutoff, undefined);
+  }
 });
 
 test('leaves an incomplete widget preview idle until its binding can run', () => {

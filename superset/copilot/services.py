@@ -518,7 +518,7 @@ def _collect_widget_metadata(
 ) -> None:
     """Validate a widget's dataset bindings and record trusted display metadata."""
     saved_metrics = {metric.metric_name: metric for metric in dataset.metrics}
-    for name in widget.metric_names:
+    for name in widget.query_metric_names:
         if (metric := saved_metrics.get(name)) is None:
             raise ValueError("Choose an existing dataset metric.")
         key = (widget.dataset_id, name)

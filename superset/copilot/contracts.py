@@ -66,6 +66,15 @@ class AggregateFilter(Contract):
     value: ShortText | bool | int | Annotated[float, Field(allow_inf_nan=False)]
 
 
+class RateCutoff(Contract):
+    """Flag rate observations whose saved denominator is below this minimum."""
+
+    denominator_metric: ShortText = Field(alias="denominatorMetric")
+    minimum_sample_size: Annotated[int, Field(gt=0, le=2**31 - 1)] = Field(
+        alias="minimumSampleSize"
+    )
+
+
 class ProposalWidget(Contract):
     """A widget bound solely to named dataset metrics and columns."""
 
@@ -82,6 +91,7 @@ class ProposalWidget(Contract):
     chart_style: Literal["bar", "line", "ranked-bar"] | None = Field(
         default=None, alias="chartStyle"
     )
+    rate_cutoff: RateCutoff | None = Field(default=None, alias="rateCutoff")
     filter: AggregateFilter | None = None
 
     @model_validator(mode="after")
@@ -105,6 +115,19 @@ class ProposalWidget(Contract):
             raise ValueError("Chart style is only available on charts.")
         return self
 
+    @model_validator(mode="after")
+    def validate_rate_cutoff(self) -> ProposalWidget:
+        """Require independent result labels for the rate and sample base."""
+        if self.rate_cutoff is None:
+            return self
+        if self.type != "echarts":
+            raise ValueError("Rate cutoffs are only available on charts.")
+        if self.metric == self.dimension:
+            raise ValueError("Choose a distinct rate metric and grouping column.")
+        if self.rate_cutoff.denominator_metric in {self.metric, self.dimension}:
+            raise ValueError("Choose a distinct denominator metric.")
+        return self
+
     @property
     def metric_names(self) -> list[str]:
         """Return selected saved metric names in proposal order."""
@@ -118,6 +141,14 @@ class ProposalWidget(Contract):
         if self.dimensions is not None:
             return self.dimensions
         return [self.dimension] if self.dimension else []
+
+    @property
+    def query_metric_names(self) -> list[str]:
+        """Include the cutoff denominator in the same query as the plotted rate."""
+        names = self.metric_names
+        if self.rate_cutoff:
+            return [*names, self.rate_cutoff.denominator_metric]
+        return names
 
 
 class DashboardProposal(Contract):
@@ -135,6 +166,10 @@ class DashboardProposal(Contract):
     @model_validator(mode="after")
     def validate_dashboard_type(self) -> DashboardProposal:
         """Restrict the extended proposal fields to Dashboard V2."""
+        if self.dashboard_type == "v1" and any(
+            widget.rate_cutoff for widget in self.widgets
+        ):
+            raise ValueError("Rate cutoffs require Dashboard V2.")
         if self.dashboard_type == "v1" and (
             self.summary is not None
             or any(
@@ -469,6 +504,20 @@ def _chart_display(
     d3format = metadata.metric_formats.get(key)
     precision = percent_precision(d3format)
     percent_sign = "٪" if locale == "ar" else "%"
+    cutoff_props = (
+        {
+            "rateCutoff": {
+                **widget.rate_cutoff.model_dump(by_alias=True),
+                "scope": {
+                    "datasetId": widget.dataset_id,
+                    "rateMetric": metric,
+                    "dimension": widget.dimension,
+                },
+            }
+        }
+        if widget.rate_cutoff
+        else {}
+    )
     percent_tooltip = {}
     if precision is not None:
         metric_binding["$bind"]["format"] = "percent"
@@ -481,6 +530,7 @@ def _chart_display(
                 minInterval=10**-precision,
             )
         return {
+            **cutoff_props,
             "crossFilter": True,
             "echartsOptions": {
                 "animation": False,
@@ -559,7 +609,7 @@ def _chart_display(
         options["title"] = {
             "text": _widget_title(widget.title or label, widget, locale)
         }
-    return {"crossFilter": not is_trend, "echartsOptions": options}
+    return {**cutoff_props, "crossFilter": not is_trend, "echartsOptions": options}
 
 
 def _dashboard_layout(proposal: DashboardProposal) -> tuple[list[str], dict[str, int]]:
@@ -605,7 +655,7 @@ def make_document(
         props: dict[str, Any] = {
             "dataBinding": {
                 "datasetId": widget.dataset_id,
-                "metrics": metric_names,
+                "metrics": widget.query_metric_names,
                 "dimensions": dimensions,
                 "rowLimit": RANKED_CATEGORY_LIMIT if is_ranked else 100,
                 **({"orderByMetric": True} if is_ranked else {}),
