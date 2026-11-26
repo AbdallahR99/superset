@@ -31,10 +31,10 @@ from flask_appbuilder.const import AUTH_OAUTH
 from flask_appbuilder.security.sqla.models import User
 from flask_login import logout_user
 from redis import Redis
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError
 
+from superset.commands.database.exceptions import DatabaseInvalidError
 from superset.config import CeleryConfig as SupersetCeleryConfig
+from superset.databases.utils import make_url_safe
 from superset.security import SupersetSecurityManager
 from superset.security.session_invalidation import (
     invalidate_sessions_for_user,
@@ -54,8 +54,8 @@ def postgres_uri(name: str, database: str, users: set[str]) -> str:
     """Keep each connection on its configured database and purpose-built role."""
     value = required(name)
     try:
-        url = make_url(value)
-    except (ArgumentError, ValueError):
+        url = make_url_safe(value)
+    except DatabaseInvalidError:
         raise RuntimeError(f"{name} must be a valid PostgreSQL URI") from None
     if (
         url.get_backend_name() != "postgresql"
