@@ -35,6 +35,7 @@ from flask import current_app
 from marshmallow import ValidationError
 from pydantic import BaseModel, ValidationError as PydanticValidationError
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import object_session
 from superset_core.widgets import Widget
 
 from superset import db, security_manager
@@ -83,6 +84,8 @@ from superset.models.helpers import skip_visibility_filter
 from superset.utils import json
 from superset.utils.core import get_user_id
 from superset.utils.decorators import transaction
+from superset.versioning.changes.state import capture_initial_state
+from superset.versioning.unit_of_work import capture_for_write, INITIAL_STATES_KEY
 from superset.widgets.data import widget_dataset_id
 from superset.widgets.registry import registry
 
@@ -498,6 +501,25 @@ class CreateDashboardV2Command(BaseCommand):
             )
 
 
+def _retain_pre_swap_history(
+    dashboard: Dashboard, previous_metadata: str | None
+) -> None:
+    """Supply the pre-flush listener with the exact metadata replaced by the CAS."""
+    session = object_session(dashboard)
+    if session is None or not capture_for_write(session):
+        return
+    initial_states = session.info.setdefault(INITIAL_STATES_KEY, {})
+    key = ("dashboard", dashboard.id)
+    if key in initial_states:
+        return
+    if (state := capture_initial_state(session, dashboard)) is not None:
+        # The Core write changed only json_metadata; all other columns still
+        # have their pre-flush values. Use the old value from the successful
+        # CAS, since the ORM's loaded value may predate a concurrent writer.
+        state["json_metadata"] = previous_metadata
+        initial_states[key] = (dashboard, state)
+
+
 class UpdateDashboardV2Command(BaseCommand):
     """
     Replace a v2 dashboard's document, provided it is still at the revision
@@ -536,7 +558,7 @@ class UpdateDashboardV2Command(BaseCommand):
         self.validate()
         assert self._model is not None
         revised = with_revision(self._stored, self._base_revision + 1)
-        json_metadata = self._swap_document(revised)
+        json_metadata, previous_metadata = self._swap_document(revised)
         attributes: dict[str, Any] = {"json_metadata": json_metadata}
         if title := self._properties.get("dashboard_title"):
             attributes["dashboard_title"] = title
@@ -544,10 +566,11 @@ class UpdateDashboardV2Command(BaseCommand):
         # transaction); the model is updated as well so the session's copy,
         # the audit columns and the change history agree with it.
         dashboard = DashboardDAO.update(self._model, attributes=attributes)
+        _retain_pre_swap_history(dashboard, previous_metadata)
         db.session.flush()
         return serialize_dashboard(dashboard, revised)
 
-    def _swap_document(self, revised: dict[str, Any]) -> str:
+    def _swap_document(self, revised: dict[str, Any]) -> tuple[str, str | None]:
         """
         Compare-and-swap ``json_metadata`` to hold ``revised``.
 
@@ -568,7 +591,7 @@ class UpdateDashboardV2Command(BaseCommand):
                 raise DashboardV2ConflictError(revision)
             new_json = write_stored_document(current_json, revised)
             if compare_and_swap_json_metadata(self._pk, current_json, new_json):
-                return new_json
+                return new_json, current_json
         raise DashboardV2ConflictError(None)
 
     def validate(self) -> None:

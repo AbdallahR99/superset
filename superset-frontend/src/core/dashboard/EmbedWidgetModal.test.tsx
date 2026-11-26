@@ -72,6 +72,43 @@ afterEach(() => {
   fetchMock.clearHistory().removeRoutes();
 });
 
+test.each([
+  { type: 'bound widget', props: { dataBinding: { datasetId: 7 } } },
+  { type: 'flat dataset reference', props: { datasetId: 7 } },
+])(
+  'the inline snippet for a $type includes a scoped guest grant',
+  ({ props }) => {
+    provider.loadDocument({
+      ...STORED,
+      node_1: { ...STORED.node_1, props },
+    });
+    mount();
+
+    const snippet =
+      screen.getByTestId('embed-widget-inline-snippet').textContent ?? '';
+    expect(snippet).toContain(
+      'Replace 1 = 0 with the row filter for the authenticated viewer.',
+    );
+    expect(JSON.parse(snippet.slice(snippet.indexOf('\n{') + 1))).toEqual({
+      resources: [{ type: 'dataset', id: '7' }],
+      datasets: [7],
+      rls: [{ dataset: 7, clause: '1 = 0' }],
+    });
+  },
+);
+
+test('an invalid dataset reference does not generate a guest token request', () => {
+  provider.loadDocument({
+    ...STORED,
+    node_1: { ...STORED.node_1, props: { datasetId: 0 } },
+  });
+  mount();
+
+  expect(
+    screen.getByTestId('embed-widget-inline-snippet'),
+  ).not.toHaveTextContent(/guest token/i);
+});
+
 test('saving writes the saved widget’s id onto the node it was saved from', async () => {
   const answer = pendingSave();
   mount();
@@ -86,6 +123,9 @@ test('saving writes the saved widget’s id onto the node it was saved from', as
       'uuid-1',
     ),
   );
+  const savedSnippet = screen.getByTestId('embed-widget-saved-snippet');
+  expect(savedSnippet).toHaveTextContent('<Widget id="uuid-1" />');
+  expect(savedSnippet).toHaveTextContent('type: "widget", id: "uuid-1"');
 });
 
 test('two clicks before the first save answers create one saved widget, not two', async () => {

@@ -21,11 +21,12 @@ checks passed, database-level aborts and the idempotent create."""
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 from pytest_mock import MockerFixture
+from sqlalchemy import event
 from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm.exc import StaleDataError
@@ -47,6 +48,9 @@ from superset.dashboard_v2 import storage
 from superset.dashboard_v2.document import with_revision, write_stored_document
 from superset.utils import json
 from superset.utils.core import override_user
+from superset.versioning.changes.state import compute_records_from_state
+from superset.versioning.diff import ChangeRecord
+from superset.versioning.unit_of_work import INITIAL_STATES_KEY
 from tests.unit_tests.dashboard_v2.conftest import make_document, stored_document
 
 SAVE = "superset.commands.dashboard_v2.save"
@@ -65,7 +69,7 @@ def _raw_json_metadata(session: Session, pk: int) -> str:
     session.expire_all()
     dashboard = session.get(Dashboard, pk)
     assert dashboard is not None
-    return dashboard.json_metadata
+    return cast(str, dashboard.json_metadata)
 
 
 def _write_behind_the_session(session: Session, pk: int, json_metadata: str) -> None:
@@ -246,6 +250,37 @@ def test_swap_lost_to_a_writer_of_another_key_is_retried_and_keeps_that_key(
     assert result["revision"] == 2
     assert stored["color_scheme"] == "supersetColors"
     assert set(stored["v2_document"]["nodes"]) == {"root", "x"}
+
+
+def test_history_uses_the_metadata_replaced_by_the_successful_swap(
+    mocker: MockerFixture, editor: None, v2_session: Session
+) -> None:
+    """A retried widget edit records its old value without claiming another edit."""
+    pk = _create()
+    stale = _raw_json_metadata(v2_session, pk)
+    fresh = json.dumps({**json.loads(stale), "color_scheme": "supersetColors"})
+    _write_behind_the_session(v2_session, pk, fresh)
+    mocker.patch(f"{SAVE}.read_current_json_metadata", side_effect=[stale, fresh])
+    mocker.patch(f"{SAVE}.capture_for_write", return_value=True)
+    records: list[ChangeRecord] = []
+
+    def capture(session: Session, *_args: Any) -> None:
+        state = session.info.get(INITIAL_STATES_KEY, {}).get(("dashboard", pk))
+        if state is not None:
+            records.extend(compute_records_from_state(*state))
+
+    event.listen(v2_session, "before_flush", capture, once=True)
+    document = make_document()
+    document["nodes"]["node_1"]["props"]["content"] = "Reviewed"
+    UpdateDashboardV2Command(pk, {"document": document}, 1).run()
+
+    content_changes = [
+        (record.from_value, record.to_value)
+        for record in records
+        if record.path[-1:] == ["content"]
+    ]
+    assert content_changes == [("# node_1", "Reviewed")]
+    assert all(record.path[-1:] != ["color_scheme"] for record in records)
 
 
 def test_save_is_refused_when_the_document_vanished(

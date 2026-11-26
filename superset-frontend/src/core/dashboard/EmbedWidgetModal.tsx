@@ -32,8 +32,11 @@ import { widgetLabel } from './widgetLabel';
 export const EMBED_WIDGET_ID_PROP = 'embedWidgetId';
 
 function datasetIdOf(props: Record<string, unknown>): number | undefined {
-  const binding = props.dataBinding as { datasetId?: number } | undefined;
-  return binding?.datasetId ?? (props.datasetId as number | undefined);
+  const binding = props.dataBinding as { datasetId?: unknown } | undefined;
+  const id = binding?.datasetId ?? props.datasetId;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+    ? id
+    : undefined;
 }
 
 export default function EmbedWidgetModal({
@@ -114,11 +117,22 @@ export default function EmbedWidgetModal({
     ? `<Widget id="${widgetId}" />\n\n` +
       `// guest token\n{ resources: [{ type: "widget", id: "${widgetId}" }], rls: [] }`
     : '';
-  const inlineSnippet = `<Widget\n  type="${node.type}"\n  props={${JSON.stringify(props, null, 2)}}\n/>${
-    datasetId !== undefined
-      ? `\n\n// guest token\n{ resources: [], datasets: [${datasetId}], rls: [] }`
-      : ''
-  }`;
+  const guestTokenRequest =
+    datasetId === undefined
+      ? undefined
+      : JSON.stringify(
+          {
+            resources: [{ type: 'dataset', id: String(datasetId) }],
+            datasets: [datasetId],
+            rls: [{ dataset: datasetId, clause: '1 = 0' }],
+          },
+          null,
+          2,
+        );
+  const guestTokenSnippet = guestTokenRequest
+    ? `\n\n// ${t('Guest token request (server-side)')}\n// ${t('Replace 1 = 0 with the row filter for the authenticated viewer.')}\n${guestTokenRequest}`
+    : '';
+  const inlineSnippet = `<Widget\n  type="${node.type}"\n  props={${JSON.stringify(props, null, 2)}}\n/>${guestTokenSnippet}`;
 
   return (
     <Modal
