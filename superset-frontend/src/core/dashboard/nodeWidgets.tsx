@@ -26,6 +26,7 @@ import { WidgetApplySourceContext } from '@apache-superset/widgets/deferredApply
 import { getWidgetComponent } from '@apache-superset/widgets/registry';
 import { useDashboardRevision, useDashboardStore } from './store';
 import { useDashboardLocalizedText } from './localizedText';
+import { useDashboardViewMode } from './viewMode';
 import { authoredWidgetLabel, widgetLabel } from './widgetLabel';
 
 const EMPTY_PROPS: Record<string, unknown> = {};
@@ -33,27 +34,30 @@ const EMPTY_PROPS: Record<string, unknown> = {};
 /**
  * Renders the package's widget for `type` from a dashboard node: the node's
  * id is the widget's bus identity, the dashboard store is the bus, and data
- * goes through the author's session.
+ * goes through the active user's session.
  */
 export function createNodeWidget(
   type: string,
 ): ComponentType<{ nodeId: string }> {
   function NodeWidget({ nodeId }: { nodeId: string }) {
     const store = useDashboardStore();
+    const mode = useDashboardViewMode();
     useDashboardRevision(store);
     const node = store.getNode(nodeId);
     const WidgetComponent = getWidgetComponent(type);
     const props = node?.props ?? EMPTY_PROPS;
+    const isGrid = type === 'ag-grid-table';
+    const hasAccessibleTitle = type === 'echarts' || isGrid;
     const label =
       type === 'metric-tile'
         ? props.label
-        : type === 'echarts' && node
+        : hasAccessibleTitle && node
           ? widgetLabel(type, props)
           : undefined;
     const localizedLabel = useDashboardLocalizedText(
       typeof label === 'string' ? label : '',
       nodeId,
-      type === 'echarts'
+      hasAccessibleTitle
         ? authoredWidgetLabel(type, props)
         : typeof label === 'string'
           ? label
@@ -74,7 +78,8 @@ export function createNodeWidget(
         localizedLabel !== label
           ? { ...props, label: localizedLabel }
           : props,
-      ...(type === 'echarts' ? { accessibleTitle: localizedLabel } : {}),
+      ...(hasAccessibleTitle ? { accessibleTitle: localizedLabel } : {}),
+      ...(isGrid ? { preferNativeTable: mode === 'view' } : {}),
     };
 
     return (

@@ -16,19 +16,77 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useMemo } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
+import { styled } from '@apache-superset/core/theme';
+import { t } from '@apache-superset/core/translation';
 import {
+  Button,
   Flex,
   Loading,
   ThemedAgGridReact,
   Typography,
 } from '@superset-ui/core/components';
-import type { ColDef } from '@superset-ui/core/components/ThemedAgGridReact';
+import type {
+  ColDef,
+  GridReadyEvent,
+} from '@superset-ui/core/components/ThemedAgGridReact';
 import { formatTemporalLabel } from '../resolveBindings';
-import type { WidgetProps } from '../types';
+import type {
+  QueryDataResult,
+  WidgetDataBindingSpec,
+  WidgetProps,
+} from '../types';
 import { useWidgetData } from '../useWidgetData';
 
 const TYPE = 'ag-grid-table';
+const ROWS_PER_PAGE = 50;
+
+type GridApi = GridReadyEvent['api'];
+
+interface AgGridTableWidgetProps extends WidgetProps {
+  /** The host's displayed title after any dashboard content translation. */
+  accessibleTitle?: string;
+  /** The dashboard viewer opts into the native table as its initial view. */
+  preferNativeTable?: boolean;
+}
+
+const TableScroll = styled.section`
+  flex: 1;
+  min-block-size: 0;
+  overflow: auto;
+
+  &:focus-visible {
+    outline: 2px solid ${({ theme }) => theme.colorPrimary};
+    outline-offset: -2px;
+  }
+
+  table {
+    border-collapse: separate;
+    border-spacing: 0;
+    inline-size: 100%;
+    font-size: ${({ theme }) => theme.fontSizeSM}px;
+  }
+
+  th,
+  td {
+    border-block-end: 1px solid ${({ theme }) => theme.colorBorderSecondary};
+    min-inline-size: 8ch;
+    overflow-wrap: anywhere;
+    padding: ${({ theme }) => theme.sizeXXS}px ${({ theme }) => theme.sizeXS}px;
+    text-align: start;
+  }
+
+  thead th {
+    background: ${({ theme }) => theme.colorBgContainer};
+    inset-block-start: 0;
+    position: sticky;
+    z-index: 1;
+  }
+
+  tbody th {
+    font-weight: inherit;
+  }
+`;
 
 // No module registration needed here, unlike `ChartWidget`'s own
 // `echarts.use([...])` call — `setupAGGridModules()` runs once before any
@@ -180,6 +238,176 @@ export function sanitizeColumnDefs(
   });
 }
 
+/** Show the visible grid columns and its filtered, sorted display values. */
+function NativeDataTable({
+  api,
+  title,
+  rowHeaderField,
+}: {
+  api: GridApi;
+  title: string;
+  rowHeaderField?: string;
+}) {
+  const captionId = useId();
+  const scrollRef = useRef<HTMLElement>(null);
+  const [page, setPage] = useState(0);
+  const columns = api.getAllDisplayedColumns();
+  const rowCount = api.getDisplayedRowCount();
+  const lastPage = Math.max(0, Math.ceil(rowCount / ROWS_PER_PAGE) - 1);
+  const currentPage = Math.min(page, lastPage);
+  const start = currentPage * ROWS_PER_PAGE;
+  const end = Math.min(start + ROWS_PER_PAGE, rowCount);
+
+  const changePage = (newPage: number) => {
+    if (newPage === currentPage) return;
+    setPage(newPage);
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  };
+
+  if (columns.length === 0)
+    return <Typography.Text>{t('No data')}</Typography.Text>;
+
+  return (
+    <>
+      {lastPage > 0 && (
+        <Flex align="center" wrap gap={4}>
+          <Button
+            size="small"
+            aria-disabled={currentPage === 0}
+            onClick={() => changePage(Math.max(0, currentPage - 1))}
+          >
+            {t('Previous')}
+          </Button>
+          <span role="status">
+            {t('Rows %s–%s of %s', start + 1, end, rowCount)}
+          </span>
+          <Button
+            size="small"
+            aria-disabled={currentPage === lastPage}
+            onClick={() => changePage(Math.min(lastPage, currentPage + 1))}
+          >
+            {t('Next')}
+          </Button>
+        </Flex>
+      )}
+      <TableScroll
+        ref={scrollRef}
+        aria-labelledby={captionId}
+        tabIndex={rowCount > 0 ? 0 : undefined}
+      >
+        <table>
+          <caption
+            id={captionId}
+            style={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              overflow: 'hidden',
+              clipPath: 'inset(50%)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {title}
+          </caption>
+          <thead>
+            <tr>
+              {columns.map(column => (
+                <th key={column.getColId()} scope="col">
+                  {api.getDisplayNameForColumn(column, 'header')}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: end - start }, (_, offset) => {
+              const rowNode = api.getDisplayedRowAtIndex(start + offset);
+              if (!rowNode) return null;
+              return (
+                <tr key={rowNode.id ?? start + offset}>
+                  {columns.map((column, columnIndex) => {
+                    const value: unknown = api.getCellValue({
+                      rowNode,
+                      colKey: column,
+                      useFormatter: true,
+                    });
+                    const Cell =
+                      columnIndex === 0 &&
+                      rowHeaderField !== undefined &&
+                      column.getColDef().field === rowHeaderField
+                        ? 'th'
+                        : 'td';
+                    return (
+                      <Cell
+                        key={column.getColId()}
+                        scope={Cell === 'th' ? 'row' : undefined}
+                      >
+                        <bdi>{value == null ? '' : String(value)}</bdi>
+                      </Cell>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {rowCount === 0 && <Typography.Text>{t('No data')}</Typography.Text>}
+      </TableScroll>
+    </>
+  );
+}
+
+/** Keep the interactive grid mounted so switching views preserves its state. */
+function TableViews({
+  result,
+  columnDefs,
+  title,
+  rowHeaderField,
+  showNative,
+  onToggleView,
+}: {
+  result: QueryDataResult;
+  columnDefs: ColDef[];
+  title: string;
+  rowHeaderField?: string;
+  showNative: boolean;
+  onToggleView: () => void;
+}) {
+  const [gridModel, setGridModel] = useState<{ api: GridApi }>();
+  const viewId = useId();
+
+  return (
+    <Flex vertical style={{ height: '100%', minHeight: 0 }}>
+      <Button
+        type="link"
+        size="small"
+        onClick={onToggleView}
+        aria-controls={viewId}
+        style={{ alignSelf: 'flex-end' }}
+      >
+        {showNative ? t('Interactive grid') : t('View as table')}
+      </Button>
+      <Flex id={viewId} vertical style={{ flex: 1, minHeight: 0 }}>
+        <div hidden={showNative} style={{ height: '100%' }}>
+          <ThemedAgGridReact
+            rowData={result.rows}
+            columnDefs={columnDefs}
+            onModelUpdated={({ api }) => setGridModel({ api })}
+          />
+        </div>
+        {showNative &&
+          (gridModel ? (
+            <NativeDataTable
+              api={gridModel.api}
+              title={title}
+              rowHeaderField={rowHeaderField}
+            />
+          ) : (
+            <Loading position="inline-centered" size="s" />
+          ))}
+      </Flex>
+    </Flex>
+  );
+}
 /**
  * The built-in `ag-grid-table` widget — registered like any other
  * widget (see `registry.ts`). Fetches its `dataBinding` the same way
@@ -188,9 +416,18 @@ export function sanitizeColumnDefs(
  * in a right-to-left page. `columnDefs` can optionally be authored (custom
  * headers, widths, pinning); when omitted, columns are derived one-to-one
  * from the query's own result columns.
+ * In the published dashboard viewer, inline widgets can also show AG Grid's
+ * displayed data in a native table for structural navigation.
  */
-export default function AgGridTableWidget(widgetProps: WidgetProps) {
-  const { props } = widgetProps;
+export default function AgGridTableWidget(widgetProps: AgGridTableWidgetProps) {
+  const { accessibleTitle, preferNativeTable, props, savedId } = widgetProps;
+  const [showInteractive, setShowInteractive] = useState(false);
+  const dataBinding = props.dataBinding as WidgetDataBindingSpec | undefined;
+  const useTableViews = preferNativeTable && !savedId && dataBinding;
+  const title =
+    accessibleTitle?.trim() ||
+    (typeof props.label === 'string' && props.label.trim()) ||
+    t('Table');
   const { result, error, loading } = useWidgetData(
     TYPE,
     widgetProps,
@@ -240,9 +477,21 @@ export default function AgGridTableWidget(widgetProps: WidgetProps) {
           <Loading position="inline-centered" size="s" />
         </Flex>
       )}
-      {!error && result && columnDefs && (
-        <ThemedAgGridReact rowData={result.rows} columnDefs={columnDefs} />
-      )}
+      {!error &&
+        result &&
+        columnDefs &&
+        (useTableViews ? (
+          <TableViews
+            result={result}
+            columnDefs={columnDefs}
+            title={title}
+            rowHeaderField={dataBinding.dimensions?.[0]}
+            showNative={!showInteractive}
+            onToggleView={() => setShowInteractive(show => !show)}
+          />
+        ) : (
+          <ThemedAgGridReact rowData={result.rows} columnDefs={columnDefs} />
+        ))}
     </div>
   );
 }
