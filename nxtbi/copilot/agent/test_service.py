@@ -918,6 +918,270 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
     ]
 
 
+def test_registered_dataset_drafts_without_a_model() -> None:
+    """Use named saved metrics from the signed actor's registered dataset."""
+    headers = _authorization("superset")
+    calls: list[str] = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == headers["Authorization"]
+        call = json.loads(request.content)
+        name, args = call["name"], call["arguments"]
+        calls.append(name)
+        if name == "get_dataset":
+            assert args == {"id": 23}
+            return httpx.Response(
+                200,
+                json={
+                    "id": 23,
+                    "table_name": "Budget execution",
+                    "metrics": ["count", "spent"],
+                    "metric_details": [
+                        {"metric_name": "spent", "verbose_name": "Expenditure"}
+                    ],
+                    "groupable_columns": ["status"],
+                },
+            )
+        if name == "profile_dataset":
+            assert args == {"id": 23, "columns": ["status"]}
+            return httpx.Response(
+                200,
+                json={
+                    "dataset_id": 23,
+                    "row_count": 17,
+                    "columns": [{"column_name": "status", "distinct_count": 2}],
+                },
+            )
+        if name == "aggregate_dataset":
+            assert args["id"] == 23
+            assert args["metric"] == "spent"
+            dimension = args.get("dimension")
+            return httpx.Response(
+                200,
+                json={
+                    "dataset_id": 23,
+                    "metric": "spent",
+                    "dimension": dimension,
+                    "rows": (
+                        [
+                            {"group": "Open", "value": 10},
+                            {"group": "Closed", "value": 17},
+                        ]
+                        if dimension
+                        else [{"group": None, "value": 27}]
+                    ),
+                },
+            )
+        assert name == "propose_dashboard"
+        return httpx.Response(200, json={**args, "approvalToken": "existing-approval"})
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        events = _events(
+            client.post(
+                "/ag-ui",
+                headers=headers,
+                json={
+                    **REQUEST,
+                    "context": [
+                        {"description": "dashboard_type", "value": "v1"},
+                        {"description": "content_locale", "value": "ar"},
+                        {"description": "active_dataset_id", "value": "99"},
+                    ],
+                    "forwardedProps": {"datasetDraft": {"datasetId": 23}},
+                },
+            )
+        )
+
+    proposal = next(event for event in events if event["type"] == "CUSTOM")
+    assert proposal["name"] == "nxtbi.dashboard-proposal"
+    assert proposal["value"]["approvalToken"] == "existing-approval"
+    assert proposal["value"]["dashboardType"] == "v1"
+    assert proposal["value"]["contentLocale"] == "ar"
+    assert proposal["value"]["titleTranslations"]["en"] == "Budget execution overview"
+    assert [widget["metric"] for widget in proposal["value"]["widgets"]] == [
+        "spent",
+        "spent",
+    ]
+    assert _evidence_nodes(events)["headline"]["value"] == "27"
+    assert calls[0:2] == ["get_dataset", "profile_dataset"]
+    assert calls[2:4] == ["aggregate_dataset", "aggregate_dataset"]
+    assert calls[4:] == ["propose_dashboard"]
+
+
+@pytest.mark.parametrize(
+    ("metrics", "supported_metric", "expected_attempts", "expected_selected"),
+    [
+        (
+            ["count", "initial", "spend"],
+            "spend",
+            ["initial", "spend"],
+            "spend",
+        ),
+        (
+            ["count", "initial", "spend", "other"],
+            "count",
+            ["initial", "spend", "count"],
+            "count",
+        ),
+        (
+            ["initial", "spend", "other", "later"],
+            "later",
+            ["initial", "spend", "other"],
+            None,
+        ),
+    ],
+)
+def test_registered_dataset_draft_limits_saved_metric_fallback(
+    metrics: list[str],
+    supported_metric: str,
+    expected_attempts: list[str],
+    expected_selected: str | None,
+) -> None:
+    """Profile once and use only the bounded, authorized saved measures."""
+    headers = _authorization("superset")
+    profiles = []
+    attempts = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == headers["Authorization"]
+        call = json.loads(request.content)
+        name, args = call["name"], call["arguments"]
+        if name == "get_dataset":
+            assert args == {"id": 23}
+            return httpx.Response(
+                200,
+                json={
+                    "id": 23,
+                    "metrics": metrics,
+                    "metric_details": [
+                        {"metric_name": supported_metric, "verbose_name": "Observed"}
+                    ],
+                },
+            )
+        if name == "profile_dataset":
+            profiles.append(args)
+            return httpx.Response(
+                200, json={"dataset_id": 23, "row_count": 17, "columns": []}
+            )
+        if name == "aggregate_dataset":
+            metric = args["metric"]
+            assert args == {"id": 23, "metric": metric}
+            attempts.append(metric)
+            return httpx.Response(
+                200,
+                json={
+                    "dataset_id": 23,
+                    "metric": metric,
+                    "rows": [
+                        {
+                            "group": None,
+                            "value": 0 if metric == supported_metric else None,
+                        }
+                    ],
+                },
+            )
+        assert name == "propose_dashboard"
+        assert expected_selected is not None
+        return httpx.Response(200, json={**args, "approvalToken": "existing-approval"})
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/ag-ui",
+            headers=headers,
+            json={**REQUEST, "forwardedProps": {"datasetDraft": {"datasetId": 23}}},
+        )
+
+    assert profiles == [{"id": 23, "columns": []}]
+    assert attempts == expected_attempts
+    if expected_selected is None:
+        assert response.status_code == 200, response.text
+        assert '"type":"RUN_ERROR"' in response.text
+        assert "approvalToken" not in response.text
+    else:
+        events = _events(response)
+        proposal = next(event for event in events if event["type"] == "CUSTOM")
+        assert [widget["metric"] for widget in proposal["value"]["widgets"]] == [
+            expected_selected
+        ]
+        assert _evidence_nodes(events)["headline"]["label"] == "Observed"
+        assert _evidence_nodes(events)["headline"]["value"] == "0"
+
+
+@pytest.mark.parametrize(
+    ("host", "action", "extra", "context"),
+    [
+        ("standalone", {"datasetId": 23}, {}, []),
+        ("superset", {"datasetId": "23"}, {}, []),
+        ("superset", {"datasetId": True}, {}, []),
+        ("superset", {"datasetId": 0}, {}, []),
+        ("superset", {"datasetId": 2**31}, {}, []),
+        ("superset", {"datasetId": 23, "metric": "extra"}, {}, []),
+        ("superset", {"datasetId": 23}, {"a2uiAction": None}, []),
+        ("superset", {"datasetId": 23}, {"dashboardLocalization": None}, []),
+        (
+            "superset",
+            {"datasetId": 23},
+            {},
+            [
+                {"description": "uploaded_dataset_id", "value": "23"},
+                {"description": "uploaded_dataset_action", "value": "draft"},
+            ],
+        ),
+    ],
+)
+def test_registered_dataset_draft_rejects_invalid_or_mixed_intent(
+    host: Literal["superset", "standalone"],
+    action: dict[str, object],
+    extra: dict[str, object],
+    context: list[dict[str, str]],
+) -> None:
+    with TestClient(create_app(Settings(shared_secret=SIGNING_KEY))) as client:
+        response = client.post(
+            "/ag-ui",
+            headers=_authorization(host),
+            json={
+                **REQUEST,
+                "context": context,
+                "forwardedProps": {"datasetDraft": action, **extra},
+            },
+        )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("status", [200, 403])
+def test_registered_dataset_draft_does_not_stage_unavailable_data(status: int) -> None:
+    """Check access, and stop before querying data when there is no saved measure."""
+    attempts = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        attempts.append(json.loads(request.content))
+        return httpx.Response(status, json={"id": 23, "metrics": []})
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    body = {**REQUEST, "forwardedProps": {"datasetDraft": {"datasetId": 23}}}
+    with TestClient(app) as client:
+        assert client.post("/ag-ui", json=body).status_code == 401
+        response = client.post("/ag-ui", headers=_authorization("superset"), json=body)
+
+    assert response.status_code == 200
+    assert "draft_unavailable" in response.text
+    assert "approvalToken" not in response.text
+    assert attempts == [{"name": "get_dataset", "arguments": {"id": 23}}]
+    if status == 200:
+        assert "This dataset has no saved metrics." in response.text
+
+
 def test_upload_shortcut_requires_a_signed_superset_dataset() -> None:
     """Reject a missing selection and never stage a denied dataset."""
     shortcut = {"description": "uploaded_dataset_action", "value": "draft"}

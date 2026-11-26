@@ -20,3 +20,5 @@
 declare module '@nxtbi/copilot/styles.css';
 
 declare module '*proposal.css';
+
+declare module '*authoring-guide.css';

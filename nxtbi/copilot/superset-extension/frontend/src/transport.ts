@@ -54,6 +54,34 @@ const uploadMessages = {
   },
 };
 
+const DATASET_PAGE_SIZE = 20;
+
+function readDatasetOption(value: unknown) {
+  if (typeof value !== 'object' || value === null) return [];
+  const row = value as {
+    id?: unknown;
+    table_name?: unknown;
+    schema?: unknown;
+    database?: { database_name?: unknown };
+  };
+  if (
+    typeof row.id !== 'number' ||
+    !Number.isSafeInteger(row.id) ||
+    row.id <= 0 ||
+    row.id > 2_147_483_647 ||
+    typeof row.table_name !== 'string' ||
+    !row.table_name.trim()
+  ) {
+    return [];
+  }
+  const detail = [row.database?.database_name, row.schema]
+    .filter(
+      (label): label is string => typeof label === 'string' && !!label.trim(),
+    )
+    .join(' · ');
+  return [{ id: row.id, name: row.table_name, ...(detail ? { detail } : {}) }];
+}
+
 function isSavedDashboardUrl(id: number, url: unknown): url is string {
   return url === `/dashboard/${id}/` || url === `/dashboard/v2/${id}/`;
 }
@@ -130,6 +158,42 @@ export function createSessionTransport(base: string, language = () => 'en') {
   return {
     run(input: RunInput, signal: AbortSignal): Promise<Response> {
       return write('run', input, 'text/event-stream', signal);
+    },
+    async listDatasets(query: string, page: number, signal: AbortSignal) {
+      const search = query.trim().slice(0, 100);
+      const params = new URLSearchParams({
+        q: JSON.stringify({
+          columns: ['id', 'table_name', 'schema', 'database.database_name'],
+          filters: search
+            ? [{ col: 'table_name', opr: 'ct', value: search }]
+            : [],
+          page,
+          page_size: DATASET_PAGE_SIZE,
+          order_column: 'table_name',
+          order_direction: 'asc',
+        }),
+      });
+      const response = await fetch(`${base}/api/v1/dataset/?${params}`, {
+        credentials: 'same-origin',
+        redirect: 'error',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal,
+      });
+      if (!response.ok) throw new Error('Could not load datasets.');
+      const data: { count?: unknown; result?: unknown } | null =
+        await response.json();
+      if (
+        !data ||
+        !Array.isArray(data.result) ||
+        typeof data.count !== 'number'
+      ) {
+        throw new Error('Could not load datasets.');
+      }
+      return {
+        items: data.result.flatMap(readDatasetOption),
+        hasMore: (page + 1) * DATASET_PAGE_SIZE < data.count,
+      };
     },
     async uploadDataset(
       file: File,

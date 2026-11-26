@@ -29,6 +29,7 @@ Read in this order:
 | [known-limitations.md](known-limitations.md) | What is not done or not verified |
 | [git-state.md](git-state.md) | Branches, merges, what is pushed |
 | [copilot.md](copilot.md) | Copilot SDK, host integration, agent, and startup |
+| [zero-code-bi.md](zero-code-bi.md) | Authoring workflow, native BI capabilities, and next improvements |
 | [upstream-maintenance-plan.md](upstream-maintenance-plan.md) | Extension boundaries and the Apache update workflow |
 | [saas-tenancy-plan.md](saas-tenancy-plan.md) | Tenant and workspace architecture, RLS, and the SaaS rollout |
 

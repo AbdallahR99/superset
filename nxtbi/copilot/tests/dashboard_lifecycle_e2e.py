@@ -48,6 +48,7 @@ from playwright.sync_api import (
 )
 
 COPILOT_API = "/api/v1/nxtbi_copilot"
+AUTHORING_GUIDE = "/extensions/pages/nxtbi.ai-copilot.authoring"
 WIDGET_DATA = "/api/v1/widget/data"
 TIMEOUT = 45_000
 CSV = (
@@ -441,6 +442,88 @@ def stored_dashboard(page: Page, url: str) -> dict[str, Any]:
     response = page.request.get(url)
     assert response.ok, f"Read Dashboard V2 HTTP {response.status}"
     return response.json()["result"]
+
+
+def verify_registered_dataset_drafts(
+    page: Page, base: str, artifact_dir: Path | None
+) -> None:
+    """Start in the contributed guide and draft from the catalog in a fresh chat."""
+    guide_url = f"{base}{AUTHORING_GUIDE}"
+    table = "registered_sales"
+    for dashboard_format in ("v1", "v2"):
+        page.goto(guide_url)
+        expect(
+            page.get_by_role("heading", name="Build a dashboard", exact=True)
+        ).to_be_visible()
+        if artifact_dir is not None and dashboard_format == "v1":
+            chat_button = page.get_by_role("button", name="NxtBI Copilot", exact=True)
+            if chat_button.get_attribute("aria-expanded") == "true":
+                chat_button.click()
+            expect(page.locator("#nxtbi-copilot-panel")).not_to_be_visible()
+            page.screenshot(path=artifact_dir / "authoring-guide.png")
+        page.get_by_role("button", name="Open Copilot", exact=True).click()
+        panel = page.locator("#nxtbi-copilot-panel")
+        panel.get_by_role(
+            "combobox", name="Dashboard format", exact=True
+        ).select_option(dashboard_format)
+        panel.get_by_role("button", name="Use existing data", exact=True).click()
+        panel.get_by_role("searchbox", name="Search datasets", exact=True).fill(table)
+        with page.expect_response(
+            lambda response: (
+                matches(response, "GET", "/api/v1/dataset/") and table in response.url
+            )
+        ) as search:
+            panel.get_by_role("button", name="Search", exact=True).click()
+        assert search.value.ok, f"Native dataset catalog HTTP {search.value.status}"
+        dataset_id = next(
+            row["id"]
+            for row in search.value.json()["result"]
+            if row["table_name"] == table
+        )
+        panel.get_by_role("radio", name=re.compile(re.escape(table))).check()
+        trigger = panel.get_by_role(
+            "button", name="Draft from existing dataset", exact=True
+        )
+        with page.expect_response(
+            lambda response, selected=dataset_id: is_kpi_preview(response, selected)
+        ) as preview:
+            events = read_agui_run(page, trigger)
+        draft = next(
+            event["value"]
+            for event in events
+            if event.get("type") == "CUSTOM"
+            and event.get("name") == "nxtbi.dashboard-proposal"
+        )
+        assert draft["dashboardType"] == dashboard_format
+        assert {widget["datasetId"] for widget in draft["widgets"]} == {dataset_id}
+        data = preview.value
+        assert data.ok, f"Registered dataset KPI preview HTTP {data.status}"
+        assert float(data.json()["result"]["rows"][0][METRIC]) == TOTAL
+
+        proposal = panel.get_by_role("region", name="Dashboard proposal", exact=True)
+        title = f"Registered dataset dashboard ({dashboard_format.upper()})"
+        proposal.get_by_role("textbox", name="Dashboard title", exact=True).fill(title)
+        if artifact_dir is not None and dashboard_format == "v2":
+            page.screenshot(path=artifact_dir / "registered-dataset-draft.png")
+        proposal.get_by_role("button", name="Review and save", exact=True).click()
+        with page.expect_response(
+            lambda response: matches(response, "POST", f"{COPILOT_API}/approve")
+        ) as approval:
+            proposal.get_by_role("button", name="Save dashboard", exact=True).click()
+        assert approval.value.status == 201
+        saved = approval.value.json()
+        panel.get_by_role("button", name="Open dashboard", exact=True).click()
+        page.wait_for_url(f"{base}{saved['url']}")
+        assert (
+            stored_dashboard(page, f"{base}/api/v1/dashboard/{saved['id']}")[
+                "dashboard_title"
+            ]
+            == title
+        )
+    print(
+        "PASS authoring guide and model-free registered Classic and V2 drafts",
+        flush=True,
+    )
 
 
 def classic_kpi_request(response: Response, chart_id: int) -> bool:
@@ -876,13 +959,19 @@ def verify_model_probe(page: Page, base: str, dataset_id: int) -> None:
     )
 
 
-def verify_arabic_shell(page: Page, base: str) -> None:
-    """Open the real Copilot extension in the Arabic fixture locale."""
+def verify_arabic_shell(page: Page, base: str, artifact_dir: Path | None) -> None:
+    """Open the contributed guide and Copilot in the Arabic fixture locale."""
     page.goto(f"{base}/lang/ar")
-    page.goto(f"{base}/dashboard/list/")
+    page.goto(f"{base}{AUTHORING_GUIDE}")
+    guide = page.get_by_role("region", name="إنشاء لوحة معلومات", exact=True)
+    expect(guide).to_be_visible()
+    expect(guide).to_have_attribute("lang", "ar")
+    expect(guide).to_have_attribute("dir", "rtl")
+    if artifact_dir is not None:
+        page.screenshot(path=artifact_dir / "authoring-guide-rtl.png")
     panel = open_chat(page, arabic=True)
     expect(panel).to_have_attribute("dir", "rtl")
-    print("PASS Arabic Copilot shell, RTL direction and composer", flush=True)
+    print("PASS Arabic authoring guide and Copilot RTL", flush=True)
 
 
 def main() -> None:
@@ -940,6 +1029,7 @@ def main() -> None:
             dashboard_id, classic_id, dataset_id, table, widget_captions = create_draft(
                 owner, base, title, args.artifact_dir
             )
+            verify_registered_dataset_drafts(owner, base, args.artifact_dir)
             verify_saved_localizations(
                 owner,
                 base,
@@ -980,7 +1070,7 @@ def main() -> None:
             arabic = browser.new_context(storage_state=session.storage_state())
             arabic.set_default_timeout(TIMEOUT)
             active_page = arabic.new_page()
-            verify_arabic_shell(active_page, base)
+            verify_arabic_shell(active_page, base, args.artifact_dir)
         except Exception:
             if (
                 args.artifact_dir is not None

@@ -54,9 +54,11 @@ PROVIDER_KEYS = (
 SETUP_DATA = """
 import json
 import os
+from sqlalchemy import text
 from superset.app import create_app
 from superset.extensions import db
 with create_app().app_context():
+    from superset.connectors.sqla.models import SqlaTable, SqlMetric
     from superset.models.core import Database
 
     database = Database(
@@ -66,6 +68,36 @@ with create_app().app_context():
         extra=json.dumps({"schemas_allowed_for_file_upload": ["public"]}),
     )
     db.session.add(database)
+    db.session.flush()
+    with database.get_sqla_engine() as engine, engine.begin() as warehouse:
+        warehouse.execute(text('''
+            CREATE TABLE public.registered_sales (
+                order_date date NOT NULL, region text NOT NULL, revenue integer NOT NULL
+            )
+        '''))
+        warehouse.execute(text('''
+            INSERT INTO public.registered_sales VALUES
+                ('2026-01-01', 'North', 100), ('2026-01-02', 'South', 125),
+                ('2026-01-03', 'North', 150), ('2026-01-04', 'South', 175)
+        '''))
+    dataset = SqlaTable(
+        database=database, schema="public", table_name="registered_sales"
+    )
+    db.session.add(dataset)
+    db.session.flush()
+    dataset.fetch_metadata()
+    dataset.add_missing_metrics([
+        SqlMetric(
+            metric_name="a_unavailable_measure",
+            verbose_name="Unavailable measure",
+            expression="NULLIF(SUM(revenue), SUM(revenue))",
+        ),
+        SqlMetric(
+            metric_name="sum_revenue",
+            verbose_name="Total revenue",
+            expression="SUM(revenue)",
+        )
+    ])
     db.session.commit()
 """
 

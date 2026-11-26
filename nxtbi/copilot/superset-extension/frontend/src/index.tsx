@@ -21,6 +21,7 @@ import { chat, dashboard, navigation, sqlLab } from '@apache-superset/core';
 import { CopilotIcon, CopilotPanel, dashboardLocale } from '@nxtbi/copilot';
 import type { CopilotHost, DashboardType } from '@nxtbi/copilot';
 import '@nxtbi/copilot/styles.css';
+import { registerAuthoringGuide } from './AuthoringGuide';
 import {
   dashboardDestination,
   deploymentBase,
@@ -111,7 +112,7 @@ function Panel() {
         const page = navigation.getPage();
         const activeEntity = {
           dashboardId:
-            page === 'dashboard' ? dashboard.getDashboardId() : undefined,
+            page === 'dashboard' ? dashboard?.getDashboardId() : undefined,
           databaseId:
             page === 'sqllab' ? sqlLab.getCurrentTab()?.databaseId : undefined,
         };
@@ -200,3 +201,4 @@ chat.registerChat(
   Trigger,
   Panel,
 );
+registerAuthoringGuide();

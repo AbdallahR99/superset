@@ -20,6 +20,67 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createSessionTransport } from '../src/transport.ts';
 
+test('lists authorized SQL datasets through the native paged dataset API', async ({
+  mock,
+}) => {
+  const fetchMock = mock.method(
+    globalThis,
+    'fetch',
+    async () =>
+      new Response(
+        JSON.stringify({
+          count: 45,
+          result: [
+            {
+              id: 17,
+              table_name: 'Revenue',
+              schema: 'finance',
+              database: { database_name: 'Warehouse' },
+            },
+            { id: 0, table_name: 'Invalid dataset' },
+          ],
+        }),
+      ),
+  );
+  const signal = new AbortController().signal;
+  const transport = createSessionTransport('https://example.test/bi');
+  const query = "Revenue & team's";
+  assert.deepEqual(await transport.listDatasets(query, 1, signal), {
+    items: [{ id: 17, name: 'Revenue', detail: 'Warehouse · finance' }],
+    hasMore: true,
+  });
+  const [url, options] = fetchMock.mock.calls[0].arguments as [
+    string,
+    RequestInit,
+  ];
+  const endpoint = new URL(url);
+  assert.equal(endpoint.pathname, '/bi/api/v1/dataset/');
+  const request = JSON.parse(endpoint.searchParams.get('q') ?? '{}');
+  assert.deepEqual(request.filters, [
+    { col: 'table_name', opr: 'ct', value: query },
+  ]);
+  assert.equal(request.page, 1);
+  assert.equal(request.page_size, 20);
+  assert.equal(options.credentials, 'same-origin');
+  assert.equal(options.redirect, 'error');
+  assert.equal(options.signal, signal);
+});
+
+test('reports dataset list failures without exposing the server response', async ({
+  mock,
+}) => {
+  mock.method(
+    globalThis,
+    'fetch',
+    async () => new Response('fixture details', { status: 403 }),
+  );
+  const transport = createSessionTransport('https://example.test');
+  await assert.rejects(
+    transport.listDatasets('', 0, new AbortController().signal),
+    /Could not load datasets/,
+  );
+});
+
 test('the session transport obtains CSRF then passes through the streaming response', async ({
   mock,
 }) => {
@@ -84,7 +145,10 @@ test('the session transport returns protected classic and V2 approval references
   for (const url of [...urls]) {
     assert.deepEqual(
       await transport.approve(proposal, new AbortController().signal),
-      { id: 8, url },
+      {
+        id: 8,
+        url,
+      },
     );
   }
 });

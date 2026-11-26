@@ -606,6 +606,160 @@ test('discards stale Classic caption suggestions after a draft edit', async () =
   expect(title).toHaveValue('إجمالي المبيعات');
 });
 
+test('browses existing datasets and drafts without upload context or approval', async () => {
+  const user = userEvent.setup();
+  type ListDatasets = NonNullable<CopilotHost['listDatasets']>;
+  const listDatasets = jest
+    .fn<ReturnType<ListDatasets>, Parameters<ListDatasets>>()
+    .mockResolvedValueOnce({
+      items: [{ id: 17, name: 'Budget' }],
+      hasMore: true,
+    })
+    .mockResolvedValueOnce({
+      items: [{ id: 21, name: 'Population' }],
+      hasMore: false,
+    })
+    .mockResolvedValueOnce({
+      items: [{ id: 27, name: 'Regional sales', detail: 'Sales warehouse' }],
+      hasMore: false,
+    });
+  const run = jest
+    .fn<ReturnType<CopilotHost['run']>, Parameters<CopilotHost['run']>>()
+    .mockResolvedValue(new Response());
+  const approve = jest.fn();
+  jest.mocked(readAgUiEvents).mockImplementationOnce(async function* () {
+    yield {
+      type: 'CUSTOM',
+      name: 'nxtbi.dashboard-proposal',
+      value: {
+        title: 'المبيعات',
+        contentLocale: 'ar',
+        dashboardType: 'v1',
+        approvalToken: 'dataset-approval',
+        widgets: [{ type: 'metric-tile', datasetId: 27, metric: 'total' }],
+      },
+    };
+    yield { type: 'RUN_FINISHED' };
+  });
+  render(
+    <CopilotPanel
+      host={{
+        run,
+        approve,
+        listDatasets,
+        dashboardTypes: ['v2', 'v1'],
+        context: () => ({
+          active_dataset_id: 2,
+          uploaded_dataset_action: 'draft',
+        }),
+      }}
+    />,
+  );
+  expect(listDatasets).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'Use existing data' }));
+  expect(await screen.findByRole('radio', { name: 'Budget' })).toBeVisible();
+  expect(listDatasets).toHaveBeenLastCalledWith('', 0, expect.any(AbortSignal));
+  await user.click(screen.getByRole('button', { name: 'Next datasets' }));
+  expect(
+    await screen.findByRole('radio', { name: 'Population' }),
+  ).toBeVisible();
+  expect(listDatasets).toHaveBeenLastCalledWith('', 1, expect.any(AbortSignal));
+
+  await user.type(
+    screen.getByRole('searchbox', { name: 'Search datasets' }),
+    '  sales  ',
+  );
+  await user.click(screen.getByRole('button', { name: 'Search', exact: true }));
+  await user.click(
+    await screen.findByRole('radio', { name: 'Regional sales' }),
+  );
+  expect(listDatasets).toHaveBeenLastCalledWith(
+    'sales',
+    0,
+    expect.any(AbortSignal),
+  );
+  await user.selectOptions(
+    screen.getByRole('combobox', { name: 'Dashboard format' }),
+    'v1',
+  );
+  await user.selectOptions(
+    screen.getByRole('combobox', { name: 'Dashboard language' }),
+    'ar',
+  );
+  const composer = screen.getByRole('textbox', { name: 'Ask Copilot' });
+  await user.type(composer, 'My unsent question');
+  await user.click(
+    screen.getByRole('button', { name: 'Draft from existing dataset' }),
+  );
+
+  expect(run).toHaveBeenCalledTimes(1);
+  const [input] = run.mock.calls[0];
+  expect(input.forwardedProps).toEqual({ datasetDraft: { datasetId: 27 } });
+  expect(input.context).toEqual(
+    expect.arrayContaining([
+      { description: 'active_dataset_id', value: '2' },
+      { description: 'dashboard_type', value: 'v1' },
+      { description: 'content_locale', value: 'ar' },
+    ]),
+  );
+  expect(
+    input.context.some(item => item.description.startsWith('uploaded_dataset')),
+  ).toBe(false);
+  expect(composer).toHaveValue('My unsent question');
+  expect(
+    await screen.findByRole('button', { name: 'Review and save' }),
+  ).toBeVisible();
+  expect(approve).not.toHaveBeenCalled();
+});
+
+test('discards an older dataset request and retries a failed search safely', async () => {
+  const user = userEvent.setup();
+  type ListDatasets = NonNullable<CopilotHost['listDatasets']>;
+  let resolveOld!: (result: Awaited<ReturnType<ListDatasets>>) => void;
+  const oldRequest = new Promise<Awaited<ReturnType<ListDatasets>>>(resolve => {
+    resolveOld = resolve;
+  });
+  const listDatasets = jest
+    .fn<ReturnType<ListDatasets>, Parameters<ListDatasets>>()
+    .mockReturnValueOnce(oldRequest)
+    .mockRejectedValueOnce(new Error('Internal dataset error'))
+    .mockResolvedValueOnce({ items: [], hasMore: false });
+  render(
+    <CopilotPanel
+      host={{
+        context: () => ({}),
+        run: jest.fn(),
+        approve: jest.fn(),
+        listDatasets,
+      }}
+    />,
+  );
+  await user.click(screen.getByRole('button', { name: 'Use existing data' }));
+  expect(screen.getByText('Loading datasets…')).toBeVisible();
+  await user.type(
+    screen.getByRole('searchbox', { name: 'Search datasets' }),
+    'absent',
+  );
+  await user.click(screen.getByRole('button', { name: 'Search', exact: true }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Could not load datasets.',
+  );
+  expect(listDatasets.mock.calls[0][2].aborted).toBe(true);
+  expect(screen.queryByText('Internal dataset error')).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(
+    await screen.findByText('No datasets match your search.'),
+  ).toBeVisible();
+  await act(async () => {
+    resolveOld({ items: [{ id: 4, name: 'Old result' }], hasMore: false });
+  });
+  expect(screen.queryByText('Old result')).not.toBeInTheDocument();
+  expect(
+    screen.getByRole('button', { name: 'Draft from existing dataset' }),
+  ).toBeDisabled();
+});
+
 test('imports CSV files sequentially and drafts with the selected dataset', async () => {
   const user = userEvent.setup();
   let finishFirst: (dataset: CopilotUploadedDataset) => void = () => {};

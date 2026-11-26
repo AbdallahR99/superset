@@ -1,0 +1,109 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+.nxtbi-authoring-guide {
+  box-sizing: border-box;
+  inline-size: 100%;
+  max-inline-size: 70rem;
+  margin-inline: auto;
+  padding-block: clamp(2rem, 6vw, 4rem);
+  padding-inline: clamp(1rem, 4vw, 2rem);
+  color: var(--nxtbi-guide-text);
+  overflow-wrap: anywhere;
+}
+
+.nxtbi-authoring-guide h1 {
+  margin-block: 0 1.5rem;
+  color: inherit;
+  font-size: clamp(1.75rem, 4.5vw, 2.5rem);
+  line-height: 1.2;
+}
+
+.nxtbi-authoring-guide__steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nxtbi-authoring-guide__steps > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-inline-size: 0;
+  padding: 1.25rem;
+  border: 1px solid var(--nxtbi-guide-border);
+  border-radius: 0.625rem;
+  background: var(--nxtbi-guide-surface);
+}
+
+.nxtbi-authoring-guide h2 {
+  margin: 0;
+  color: inherit;
+  font-size: 1.15rem;
+  line-height: 1.35;
+}
+
+.nxtbi-authoring-guide p {
+  margin: 0;
+  max-inline-size: 52ch;
+  color: var(--nxtbi-guide-secondary);
+}
+
+.nxtbi-authoring-guide__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-block-start: auto;
+  padding-block-start: 0.25rem;
+}
+
+.nxtbi-authoring-guide__actions :where(a, button) {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 2.75rem;
+  color: var(--nxtbi-guide-link);
+  font: inherit;
+  font-weight: 600;
+}
+
+.nxtbi-authoring-guide__actions a {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.nxtbi-authoring-guide__actions button {
+  padding-inline: 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  background: var(--nxtbi-guide-action);
+  cursor: pointer;
+}
+
+.nxtbi-authoring-guide__actions button:hover {
+  border-color: var(--nxtbi-guide-focus);
+}
+
+.nxtbi-authoring-guide__actions :where(a, button):focus-visible {
+  outline: 0.1875rem solid var(--nxtbi-guide-focus);
+  outline-offset: 0.1875rem;
+}

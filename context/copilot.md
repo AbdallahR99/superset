@@ -23,6 +23,20 @@ components, data bindings, and actions again. Explicit renderer actions send
 the resolved form context back on the next AG-UI run.
 [PydanticAI AG-UI adapter](https://ai.pydantic.dev/ui/ag-ui/)
 
+## Drafting from an existing dataset
+
+Open **Build a dashboard** in Superset's navbar, then choose **Open Copilot**.
+Select **Use existing data**, search for an accessible registered dataset, and
+choose **Draft from existing dataset**. Pick the dashboard format and language
+before drafting. Use the proposal editor to adjust saved metrics, chart choices,
+and captions. Select **Review and save** and confirm. Publish from the native
+dashboard editor when the dashboard is ready for authorized viewers.
+
+The picker uses the signed-in native dataset catalog. The draft reads registered
+fields and aggregate evidence through the existing Copilot gateway. The planner
+can run without a model and uses saved metrics on SQL datasets. Generated drafts
+use the existing approval and access checks. [Zero-code BI workflow](zero-code-bi.md)
+
 ## CSV imports in Copilot
 
 Open Copilot and select **Choose CSV files**, then **Import CSV files**.

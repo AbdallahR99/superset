@@ -56,6 +56,7 @@ import {
 } from './contracts';
 import { a2uiOperations, fitAgUiInput, readAgUiEvents } from './stream';
 import { CopilotIcon } from './CopilotIcon';
+import { ExistingDatasetPicker } from './ExistingDatasetPicker';
 
 /** Only render a link when the browser resolves it to a supported protocol. */
 function MarkdownLink({
@@ -195,6 +196,8 @@ const english = {
   draftFromDataset: 'Draft dashboard from dataset',
   draftDatasetPrompt: (id: number) =>
     `Inspect dataset #${id} and draft a dashboard using its data.`,
+  draftExistingDatasetPrompt: (name: string) =>
+    `Draft a dashboard using ${name}.`,
   csvType: 'Choose a .csv file.',
   csvEmpty: 'This CSV is empty.',
   csvSize: 'Choose a CSV of 10 MiB or less.',
@@ -277,6 +280,8 @@ const arabic: typeof english = {
   draftFromDataset: 'أنشئ مسودة لوحة من مجموعة البيانات',
   draftDatasetPrompt: id =>
     `افحص مجموعة البيانات رقم ${id} وأنشئ مسودة لوحة معلومات باستخدام بياناتها.`,
+  draftExistingDatasetPrompt: name =>
+    `أنشئ مسودة لوحة معلومات باستخدام مجموعة البيانات ${name}.`,
   csvType: 'اختر ملفًا بامتداد .csv.',
   csvEmpty: 'ملف CSV هذا فارغ.',
   csvSize: 'اختر ملف CSV بحجم 10 ميبي بايت أو أقل.',
@@ -696,6 +701,7 @@ export function CopilotPanel({
     value: string,
     action?: A2uiAction,
     uploadedDatasetAction?: 'draft',
+    datasetDraft?: AgUiRunInput['forwardedProps']['datasetDraft'],
   ) {
     const text = value.trim().slice(0, MAX_PROMPT);
     if (!text || connection.current || mutation.current) return;
@@ -732,7 +738,7 @@ export function CopilotPanel({
     setStreaming(true);
     setError('');
     setFailedPrompt('');
-    if (!action && !uploadedDatasetAction) setDraft('');
+    if (!action && !uploadedDatasetAction && !datasetDraft) setDraft('');
     replaceProposal(undefined);
     setConfirming(false);
 
@@ -746,13 +752,16 @@ export function CopilotPanel({
           tools: [],
           context: buildContext(
             host,
-            uploadedDatasetId,
+            datasetDraft ? undefined : uploadedDatasetId,
             uploadedDatasetAction,
             dashboardType,
             dashboardTypes && contentLocale,
           ),
           state: {},
-          forwardedProps: action ? { a2uiAction: action } : {},
+          forwardedProps: {
+            ...(action && { a2uiAction: action }),
+            ...(datasetDraft && { datasetDraft }),
+          },
         }),
         controller.signal,
       );
@@ -815,7 +824,7 @@ export function CopilotPanel({
       complete = false;
       replaceProposal(undefined);
       if (!controller.signal.aborted) {
-        setFailedPrompt(text);
+        if (!datasetDraft) setFailedPrompt(text);
         setError(copy.streamError);
       }
     } finally {
@@ -1359,6 +1368,21 @@ export function CopilotPanel({
               </div>
             )}
           </div>
+          {host.listDatasets && host.approve && (
+            <ExistingDatasetPicker
+              locale={shellLocale}
+              listDatasets={host.listDatasets}
+              busy={busy}
+              onDraft={dataset => {
+                send(
+                  copy.draftExistingDatasetPrompt(dataset.name),
+                  undefined,
+                  undefined,
+                  { datasetId: dataset.id },
+                );
+              }}
+            />
+          )}
           {host.uploadDataset && attachments.length > 0 && (
             <section
               className="nxtbi-copilot__uploads"

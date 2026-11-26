@@ -556,45 +556,77 @@ def _register_snapshot_tool(agent: Agent[RunDeps, str]) -> None:
         }
 
 
-async def _plan_uploaded_dashboard(
+async def _observe_saved_measure(
+    deps: RunDeps, dataset_id: int, candidates: list[uploads.UploadFields]
+) -> tuple[uploads.UploadFields, object] | None:
+    """Return the first saved measure with a verified numeric observation."""
+    for fields in candidates:
+        total = await deps.gateway(
+            "aggregate_dataset", {"id": dataset_id, "metric": fields.metric}
+        )
+        if uploads.supported_aggregate(total, dataset_id, fields.metric):
+            return fields, total
+    return None
+
+
+async def _plan_dataset_dashboard(
     deps: RunDeps,
-    title: str,
+    dataset_id: int,
+    *,
+    title: str | None = None,
     metric: str | None = None,
     title_translations: TitleTranslations | None = None,
+    is_upload: bool = False,
 ) -> dict[str, object]:
-    """Measure a selected CSV and stage a dashboard using the actor's permissions."""
-    dataset_id = deps.hints.uploaded_dataset_id
-    if dataset_id is None:
-        return {"error": "Select an uploaded dataset first."}
+    """Measure a selected dataset and stage a draft under the actor's permissions."""
     if deps.proposal_staged:
         return {"status": "A dashboard draft is already awaiting approval."}
     metadata = await deps.gateway("get_dataset", {"id": dataset_id})
     try:
-        fields = uploads.select_fields(metadata, dataset_id, metric)
-        profile = await deps.gateway(
-            "profile_dataset", {"id": dataset_id, "columns": fields.profile_columns}
+        candidates = uploads.select_fields(
+            metadata, dataset_id, metric, is_upload=is_upload
         )
+        profile = await deps.gateway(
+            "profile_dataset",
+            {"id": dataset_id, "columns": candidates[0].profile_columns},
+        )
+        fields = candidates[0]
         category, temporal = uploads.select_dimensions(profile, dataset_id, fields)
+    except uploads.NoSavedMetricsError as exc:
+        return {"error": str(exc), "code": "no_saved_metrics"}
     except ValueError as exc:
         return {"error": str(exc)}
 
-    args: dict[str, object] = {"id": dataset_id, "metric": fields.metric}
-    if category:
+    groups = None
+    if is_upload and category:
+        args = {"id": dataset_id, "metric": fields.metric}
         total, groups = await asyncio.gather(
             deps.gateway("aggregate_dataset", args),
             deps.gateway("aggregate_dataset", {**args, "dimension": category}),
         )
-        if not uploads.supported_aggregate(
-            groups, dataset_id, fields.metric, dimension=category
-        ):
-            category = None
-            groups = None
     else:
-        total = await deps.gateway("aggregate_dataset", args)
+        observed = await _observe_saved_measure(deps, dataset_id, candidates)
+        if observed is None:
+            return {"error": "The selected dataset's saved measure is unavailable."}
+        fields, total = observed
+        category, temporal = uploads.select_dimensions(profile, dataset_id, fields)
+        if category:
+            groups = await deps.gateway(
+                "aggregate_dataset",
+                {"id": dataset_id, "metric": fields.metric, "dimension": category},
+            )
+
+    if category and not uploads.supported_aggregate(
+        groups, dataset_id, fields.metric, dimension=category
+    ):
+        category = None
         groups = None
     if not uploads.supported_aggregate(total, dataset_id, fields.metric):
-        return {"error": "The imported dataset's saved measure is unavailable."}
+        return {"error": "The selected dataset's saved measure is unavailable."}
 
+    if title is None:
+        title_translations = uploads.registered_titles(metadata, dataset_id)
+        title = title_translations.en or "Dataset overview"
     draft = uploads.make_draft(
         title,
         dataset_id,
@@ -621,6 +653,25 @@ async def _plan_uploaded_dashboard(
         "headline": total,
         "comparison": groups,
     }
+
+
+async def _plan_uploaded_dashboard(
+    deps: RunDeps,
+    title: str,
+    metric: str | None = None,
+    title_translations: TitleTranslations | None = None,
+) -> dict[str, object]:
+    """Preserve the import-specific title and measure choices for selected files."""
+    if (dataset_id := deps.hints.uploaded_dataset_id) is None:
+        return {"error": "Select an uploaded dataset first."}
+    return await _plan_dataset_dashboard(
+        deps,
+        dataset_id,
+        title=title,
+        metric=metric,
+        title_translations=title_translations,
+        is_upload=True,
+    )
 
 
 def _register_uploaded_tool(agent: Agent[RunDeps, str]) -> None:
@@ -822,22 +873,27 @@ async def _stream_caption_suggestions(
     yield RunFinishedEvent(**ids, outcome=RunFinishedSuccessOutcome(type="success"))
 
 
-async def _stream_uploaded_draft(deps: RunDeps) -> AsyncIterator[BaseEvent]:
-    """Handle the selected-file draft button without calling a model provider."""
+async def _stream_dataset_draft(deps: RunDeps) -> AsyncIterator[BaseEvent]:
+    """Handle a selected dataset draft without calling a model provider."""
     ids = {"threadId": deps.claims.thread_id, "runId": deps.claims.run_id}
     yield RunStartedEvent(**ids)
     arabic = deps.hints.locale == "ar"
     english_title = "Uploaded dataset overview"
     title_variants = captions.titles(english_title, "نظرة عامة على البيانات المرفوعة")
+    selection = deps.hints.dataset_draft
+    result: dict[str, object] = {}
 
     try:
         if deps.has_superset_tools:
             async with asyncio.timeout(MODEL_TIMEOUT):
-                await _plan_uploaded_dashboard(
-                    deps, english_title, title_translations=title_variants
-                )
+                if selection is None:
+                    result = await _plan_uploaded_dashboard(
+                        deps, english_title, title_translations=title_variants
+                    )
+                else:
+                    result = await _plan_dataset_dashboard(deps, selection.dataset_id)
     except Exception as exc:
-        logger.warning("Copilot upload draft stopped: %s", type(exc).__name__)
+        logger.warning("Copilot dataset draft stopped: %s", type(exc).__name__)
 
     if not deps.proposal_staged:
         message = (
@@ -845,6 +901,12 @@ async def _stream_uploaded_draft(deps: RunDeps) -> AsyncIterator[BaseEvent]:
             if arabic
             else "Could not draft this dashboard. Check dataset access and try again."
         )
+        if selection is not None and result.get("code") == "no_saved_metrics":
+            message = (
+                "لا توجد مقاييس محفوظة. اختر مجموعة بيانات أخرى أو أضف مقياسًا."
+                if arabic
+                else "This dataset has no saved metrics. Choose another dataset."
+            )
         yield RunErrorEvent(message=message, code="draft_unavailable")
         return
 
@@ -892,7 +954,7 @@ async def _stream_events(
     ) as client:
         deps = RunDeps(claims, authorization, hints, tool_url, client)
         if adapter is None:
-            async for event in _stream_uploaded_draft(deps):
+            async for event in _stream_dataset_draft(deps):
                 yield event
             return
         try:
@@ -961,6 +1023,7 @@ def create_app(
         is_shortcut = (
             hints.uploaded_dataset_action == "draft"
             or hints.dashboard_localization is not None
+            or hints.dataset_draft is not None
         )
         if agent is None and not is_shortcut:
             raise HTTPException(503, "The Copilot model is not configured")

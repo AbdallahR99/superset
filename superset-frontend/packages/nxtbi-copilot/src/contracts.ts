@@ -51,6 +51,7 @@ export interface AgUiRunInput {
   forwardedProps: {
     a2uiAction?: A2uiAction;
     dashboardLocalization?: DashboardLocalizationRequest;
+    datasetDraft?: { datasetId: number };
   };
 }
 
@@ -156,6 +157,12 @@ export interface CopilotUploadedDataset {
   name: string;
 }
 
+export interface CopilotDatasetOption {
+  id: number;
+  name: string;
+  detail?: string;
+}
+
 /** Host capabilities stay outside model-generated UI. */
 export interface CopilotHost {
   locale?: string;
@@ -164,6 +171,12 @@ export interface CopilotHost {
   /** Available draft formats. The first is the default. */
   dashboardTypes?: readonly DashboardType[];
   run: (input: AgUiRunInput, signal: AbortSignal) => Promise<Response>;
+  /** List authorized datasets using a zero-based page. */
+  listDatasets?: (
+    query: string,
+    page: number,
+    signal: AbortSignal,
+  ) => Promise<{ items: CopilotDatasetOption[]; hasMore: boolean }>;
   uploadDataset?: (
     file: File,
     signal: AbortSignal,

@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 
 from .captions import arabic_label, titles
-from .contracts import ContentLocale, DashboardDraft, WidgetDraft
+from .contracts import ContentLocale, DashboardDraft, TitleTranslations, WidgetDraft
 
 _CATEGORY = re.compile(
     r"(?:^|_)(?:status|state|stage|category|type|region|area|city|country|zone|"
@@ -33,11 +33,12 @@ _PRIVATE_FIELD = re.compile(
     r"(?:^|_)(?:id|key|reference|ref|uuid|code|person|personal|surname|"
     r"contact|email|phone|address|username|password|passport|ssn|comment|notes)(?:_|$)"
 )
+_REGISTERED_METRIC_LIMIT = 3
 
 
 @dataclass(frozen=True)
 class UploadFields:
-    """Saved measures and bounded candidate dimensions for a selected file."""
+    """Saved measures and bounded candidate dimensions for a selected dataset."""
 
     metric: str
     metric_label: str
@@ -49,6 +50,10 @@ class UploadFields:
     def profile_columns(self) -> list[str]:
         """Return no more than three registered columns for evidence."""
         return ([self.temporal] if self.temporal else []) + list(self.categories)
+
+
+class NoSavedMetricsError(ValueError):
+    """The authorized dataset has no saved metric the draft can use."""
 
 
 def _names(metadata: dict[str, object], key: str) -> list[str]:
@@ -64,34 +69,43 @@ def _names(metadata: dict[str, object], key: str) -> list[str]:
 
 
 def select_fields(
-    metadata: object, dataset_id: int, requested_metric: str | None
-) -> UploadFields:
-    """Choose useful saved measures and conventional categories, never row IDs."""
+    metadata: object, dataset_id: int, requested_metric: str | None, *, is_upload: bool
+) -> list[UploadFields]:
+    """Choose saved measures and a shared profile of conventional dimensions."""
     if (
         not isinstance(metadata, dict)
         or type(metadata.get("id")) is not int
         or metadata["id"] != dataset_id
     ):
-        raise ValueError("The imported dataset is unavailable to the signed-in user.")
+        raise ValueError("The selected dataset is unavailable to the signed-in user.")
     metrics = _names(metadata, "metrics")
-    if not metrics or (requested_metric and requested_metric not in metrics):
-        raise ValueError("Choose a saved metric from the imported dataset.")
+    if not metrics:
+        raise NoSavedMetricsError("This dataset has no saved metrics.")
+    if requested_metric and requested_metric not in metrics:
+        raise ValueError("Choose a saved metric from the selected dataset.")
+    authored = [name for name in metrics if name.casefold() != "count"]
     if requested_metric:
-        metric = requested_metric
+        candidates = [requested_metric]
+    elif is_upload:
+        fallback = authored[0] if authored else metrics[0]
+        candidates = [
+            next((name for name in metrics if name.startswith("sum_")), fallback)
+        ]
     else:
-        fallback = next((name for name in metrics if name != "count"), metrics[0])
-        metric = next((name for name in metrics if name.startswith("sum_")), fallback)
-    label = metric.replace("_", " ").capitalize()
+        count = [name for name in metrics if name.casefold() == "count"][:1]
+        candidates = authored[: _REGISTERED_METRIC_LIMIT - len(count)] + count
+
+    labels: dict[str, str] = {}
     if isinstance(details := metadata.get("metric_details"), list):
         for detail in details:
             if (
                 isinstance(detail, dict)
-                and detail.get("metric_name") == metric
+                and isinstance(name := detail.get("metric_name"), str)
+                and name in candidates
                 and isinstance(verbose := detail.get("verbose_name"), str)
                 and verbose.strip()
             ):
-                label = verbose.strip()
-                break
+                labels.setdefault(name, verbose.strip())
 
     groupable = _names(metadata, "groupable_columns")
     temporal_columns = _names(metadata, "temporal_columns")
@@ -100,11 +114,34 @@ def select_fields(
         name
         for name in groupable
         if name not in temporal_columns
-        and name != metric
+        and (not is_upload or name != candidates[0])
         and _CATEGORY.search(name.lower())
         and not _PRIVATE_FIELD.search(name.lower())
     )[: (2 if temporal else 3)]
-    return UploadFields(metric, label, "count" in metrics, temporal, categories)
+    return [
+        UploadFields(
+            metric,
+            labels.get(metric, metric.replace("_", " ").capitalize()),
+            is_upload and "count" in metrics,
+            temporal,
+            categories,
+        )
+        for metric in candidates
+    ]
+
+
+def registered_titles(metadata: object, dataset_id: int) -> TitleTranslations:
+    """Derive stable, readable draft titles from authorized source metadata."""
+    name = metadata.get("table_name") if isinstance(metadata, dict) else None
+    if isinstance(name, str) and not re.fullmatch(r"copilot_csv_[0-9a-f]{24}", name):
+        label = " ".join(name.replace("_", " ").split())[:120].strip()
+        if label and label.isprintable():
+            label = label[0].upper() + label[1:]
+            return titles(f"{label} overview", f"نظرة عامة على {arabic_label(label)}")
+    return titles(
+        f"Dataset #{dataset_id} overview",
+        f"نظرة عامة على مجموعة البيانات #{dataset_id}",
+    )
 
 
 def select_dimensions(
@@ -118,7 +155,7 @@ def select_dimensions(
         or count < 1
         or not isinstance(columns := profile.get("columns"), list)
     ):
-        raise ValueError("The imported dataset has no verified rows to chart.")
+        raise ValueError("The selected dataset has no verified rows to chart.")
     counts = {
         entry["column_name"]: entry["distinct_count"]
         for entry in columns
@@ -127,12 +164,20 @@ def select_dimensions(
         and type(entry.get("distinct_count")) is int
     }
     category = next(
-        (name for name in candidates.categories if 2 <= counts.get(name, 0) <= 10),
+        (
+            name
+            for name in candidates.categories
+            if name != candidates.metric and 2 <= counts.get(name, 0) <= 10
+        ),
         None,
     )
     temporal = candidates.temporal
     # Dashboard V2's proposal compiler fetches up to 100 grouped rows.
-    if not temporal or not 2 <= counts.get(temporal, 0) <= 100:
+    if (
+        not temporal
+        or temporal == candidates.metric
+        or not 2 <= counts.get(temporal, 0) <= 100
+    ):
         temporal = None
     return category, temporal
 
@@ -172,8 +217,12 @@ def make_draft(
     temporal: str | None,
     locale: ContentLocale,
 ) -> DashboardDraft:
-    """Compose full-file charts with existing widgets and separate save approval."""
-    label = fields.metric_label if fields.metric != "count" else "Records"
+    """Compose charts with existing widgets for separate save approval."""
+    label = (
+        "Records"
+        if fields.count_available and fields.metric == "count"
+        else fields.metric_label
+    )
     arabic = arabic_label(label)
     widgets = [
         WidgetDraft(

@@ -154,6 +154,14 @@ class CaptionSuggestions(BaseModel):
     captions: CaptionList
 
 
+class DatasetDraftRequest(BaseModel):
+    """Select a registered SQL dataset for a deterministic dashboard draft."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    dataset_id: Annotated[POSITIVE_ID, Field(alias="datasetId")]
+
+
 class RunHints(BaseModel):
     """Untrusted page hints used for presentation and tool selection."""
 
@@ -168,6 +176,7 @@ class RunHints(BaseModel):
     uploaded_dataset_action: Literal["draft"] | None = None
     form_values: dict[str, str] | None = None
     dashboard_localization: DashboardLocalization | None = None
+    dataset_draft: DatasetDraftRequest | None = None
 
 
 class FormAction(BaseModel):
@@ -278,6 +287,21 @@ def _parse_dashboard_localization(
     return DashboardLocalization.model_validate(forwarded["dashboardLocalization"])
 
 
+def _parse_dataset_draft(
+    forwarded: object, host: Literal["superset", "standalone"], upload_draft: bool
+) -> DatasetDraftRequest | None:
+    """Read only an explicit Superset dataset action without a competing intent."""
+    if not isinstance(forwarded, dict) or "datasetDraft" not in forwarded:
+        return None
+    if (
+        host != "superset"
+        or upload_draft
+        or {"dashboardLocalization", "a2uiAction"} & forwarded.keys()
+    ):
+        raise ValueError("A dataset draft requires a separate Superset request")
+    return DatasetDraftRequest.model_validate(forwarded["datasetDraft"])
+
+
 def _parse_hints(
     raw: object, forwarded: object, host: Literal["superset", "standalone"]
 ) -> RunHints:
@@ -310,6 +334,9 @@ def _parse_hints(
                 _parse_draft_hint(hints, key, value)
     if hints.uploaded_dataset_action and hints.uploaded_dataset_id is None:
         raise ValueError("Select a dataset before staging an upload draft")
+    hints.dataset_draft = _parse_dataset_draft(
+        forwarded, host, hints.uploaded_dataset_action is not None
+    )
     hints.dashboard_localization = _parse_dashboard_localization(
         forwarded, host, hints.uploaded_dataset_action is not None
     )
