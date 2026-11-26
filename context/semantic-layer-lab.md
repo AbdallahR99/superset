@@ -700,3 +700,72 @@ They are 366px wide and 288px tall, with an 8px gap. The previous 512px card
 heights prevented this. The test waited for actual numerical values and
 native canvases before capturing screenshots. The published document and
 data were preserved. All 57 focused grid and reader tests passed.
+
+### Workload comparisons, viewer scope, and accessibility
+
+Copilot distinguishes total eligible workload, affected count, and rate in
+each measured grouping. An open V2 proposal that selects a verified rate
+must retain all three measures in live widgets at the same dataset, dimension,
+and filter scope. A complete comparison requires a verified baseline and
+no truncated or unverified groups. The private evidence exposes leaders and
+ties for all three measures. It does not copy leader values into saved
+dashboard prose. Model-selected explicit layout exceptions remain advisory.
+
+Generic V1 and V2 approvals reject generated saves for bindings with native
+RLS or database impersonation. Virtual datasets must resolve to registered
+physical sources whose native policies can be checked. The private preview,
+manual dashboard authoring and viewer-scoped live queries remain available.
+The approval guard covers the current dataset bindings. Warehouse policies,
+evidence from earlier chat messages and already saved prose require separate
+review before broad sharing.
+
+V2 viewer widget captions are navigable headings. Supported ECharts widgets
+offer a localized **View as table** control with semantic row and column
+headers. The table uses the plotted values or the existing authorized query
+rows. It supports keyboard scrolling and category cross-filters where the
+chart supports them. Unsupported custom inline visuals can still require an
+author-provided accessible equivalent.
+
+The rebuilt loopback lab used Superset image `c1b73d4c929a` and Copilot
+agent image `c33e083e228d`. Two separately authenticated read-only viewers
+saw their assigned synthetic scopes, North (2) and South (4), in ChartData,
+the V2 KPI and grid, and the keyboard-opened ECharts table. All four query
+surfaces had a cold miss and warm hit for each viewer. Cache keys were stable
+within each scope and distinct across scopes. Dremio still supplied only one
+warehouse principal. The Superset result does not verify Dremio delegation.
+
+Orca 43.1 and Firefox ESR read dashboard V2 headings and opened the chart
+table by keyboard in English and Arabic. The final chart test produced 41
+English and 40 Arabic speech records, including a column header and the 37.0%
+value. Speech Dispatcher confirmed `en-us` and `ar`. The Arabic run selected
+the installed Arabic eSpeak voice. Metric and category names retained their
+saved English labels. In a separate traversal, Orca raised a coordinate
+exception on a structural shortcut in the existing AG Grid. Tab still read
+the data row. The native chart table run had no Orca error.
+
+The frozen 7,850-review holdout used a neutral brief and a separate oracle.
+The first three attempts stopped before proposing a dashboard. Narrowed
+diagnostics identified the 4,096-token completion cap. The cap is 8,192 with
+the existing run-wide output limit and timeout still applied. The first
+completed draft included the two workload breakdowns but omitted both leaders
+from the narrative. The next exact-prompt run, draft revision 1 at
+`/dashboard/v2/10/`, reports Parkside Permit Center's 455 returns and
+Residential drainage connection's 422 returns alongside the two supported
+rate leaders and both 21-review outliers. Independent calculation verified
+168 tool values and 150 native values in each desktop and mobile capture.
+At 390 × 844, English LTR and Arabic RTL fit three loaded KPIs and two complete
+chart cards. The Arabic view uses localized captions and an English source
+narrative for this run. The draft document digest begins `73f70600045a`.
+
+Opus 5.5 and Fable 5.2 each scored the final draft 8/12, up from 6/12 and
+7/12 for the first completed draft. Both verified the four leadership claims
+and the pooled baseline. Both asked for an explicit support threshold and a
+practical next step. The chart still ranks the 21-review groups by raw rate,
+and the narrative describes monthly rates as stable without a variation test.
+Publication and merge were held on this evidence.
+
+All attempts and reviewer inputs are preserved locally under
+`nxtbi/out/semantic-lab/government-readiness/`. The final tested scopes include
+754 backend unit tests, 97 agent tests, and 48 frontend tests. Targeted
+frontend type checks, mypy, Ruff, and the repository-configured Pylint run
+for the two changed backend files passed.
