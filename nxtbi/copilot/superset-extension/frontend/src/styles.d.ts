@@ -18,3 +18,5 @@
  */
 
 declare module '@nxtbi/copilot/styles.css';
+
+declare module '*proposal.css';

@@ -1,0 +1,105 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+.nxtbi-proposal-editor {
+  display: grid;
+  gap: 0.85rem;
+  min-inline-size: 0;
+}
+
+.nxtbi-proposal-editor__tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.nxtbi-proposal-editor__tools span,
+.nxtbi-proposal-widget__header p {
+  color: var(--copilot-muted);
+  font-size: 0.82em;
+}
+
+.nxtbi-proposal-widget {
+  display: grid;
+  min-inline-size: 0;
+  border: 1px solid var(--copilot-border);
+  border-radius: 0.625rem;
+  background: var(--copilot-surface);
+}
+
+.nxtbi-proposal-widget__header,
+.nxtbi-proposal-widget__preview {
+  min-inline-size: 0;
+  padding-inline: 0.75rem;
+}
+
+.nxtbi-proposal-widget__header {
+  padding-block: 0.65rem 0.1rem;
+}
+
+.nxtbi-proposal-widget__header h4,
+.nxtbi-proposal-widget__header p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.nxtbi-proposal-widget__header h4 {
+  font-size: 0.94em;
+  font-weight: 650;
+}
+
+.nxtbi-proposal-widget__preview > p {
+  margin-block: 0.75rem;
+  color: var(--copilot-muted);
+}
+
+.nxtbi-proposal-widget__settings {
+  border-block-start: 1px solid var(--copilot-border);
+}
+
+.nxtbi-proposal-widget__settings summary {
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.nxtbi-proposal-widget__settings summary:focus-visible {
+  outline: 2px solid var(--copilot-accent);
+  outline-offset: -2px;
+}
+
+.nxtbi-proposal-widget__settings fieldset {
+  display: grid;
+  gap: 0.65rem;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0.65rem 0.75rem 0.8rem;
+  border: 0;
+}
+
+.nxtbi-proposal-widget__settings label {
+  display: grid;
+  gap: 0.15rem;
+  min-inline-size: 0;
+}
+
+.nxtbi-proposal-widget__settings label :is(input, select) {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}

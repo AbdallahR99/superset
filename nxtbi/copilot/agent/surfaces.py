@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Sequence
 from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
@@ -24,10 +26,12 @@ from uuid import uuid4
 from ag_ui.core import ActivitySnapshotEvent
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .contracts import LABEL, POSITIVE_ID
+from .contracts import DatasetFilter, LABEL, POSITIVE_ID
 
 CATALOG_ID = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+NXTBI_CATALOG_ID = "urn:nxtbi:a2ui:1.0"
 WIDGET_CATALOG_ID = "urn:nxtbi:superset-widgets:1.0"
+EVIDENCE_GROUP_LIMIT = 5
 WIDGET_ID_PATTERN = (
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -337,6 +341,148 @@ def card(title: str, description: str) -> ActivitySnapshotEvent:
         [
             *_frame(title, ["description"]),
             {"id": "description", "component": "Text", "text": description},
+        ]
+    )
+
+
+def _observation(value: object) -> str | None:
+    """Display a finite gateway observation without rounding or adding a unit."""
+    if type(value) is int or (type(value) is float and math.isfinite(value)):
+        return f"{value:,}"
+    return None
+
+
+def _evidence_comparison(
+    result: object, metric_label: str, arabic: bool
+) -> dict[str, object] | None:
+    """Display at most five measured groups in the gateway's result order."""
+    if (
+        not isinstance(result, dict)
+        or not isinstance(dimension := result.get("dimension"), str)
+        or not isinstance(rows := result.get("rows"), list)
+    ):
+        return None
+    measured = [
+        {
+            "group": str(row["group"])
+            if row["group"] is not None
+            else ("قيمة مفقودة" if arabic else "Missing value"),
+            "value": value,
+        }
+        for row in rows
+        if isinstance(row, dict)
+        and "group" in row
+        and (value := _observation(row.get("value"))) is not None
+    ]
+    if not measured:
+        return None
+
+    shown = min(len(measured), EVIDENCE_GROUP_LIMIT)
+    caption = dimension
+    if result.get("truncated") is True:
+        suffix = (
+            f"عرض {shown} مجموعات، وتوجد نتائج أخرى"
+            if arabic
+            else (f"{shown} groups shown · more available")
+        )
+        caption = f"{dimension} · {suffix}"
+    elif len(measured) > shown:
+        suffix = (
+            f"عرض {shown} من {len(measured)} مجموعات"
+            if arabic
+            else (f"{shown} of {len(measured)} groups shown")
+        )
+        caption = f"{dimension} · {suffix}"
+    return {
+        "id": "comparison",
+        "component": "Table",
+        "@catalogId": NXTBI_CATALOG_ID,
+        "caption": caption,
+        "columns": [
+            {"key": "group", "label": "المجموعة" if arabic else "Group"},
+            {"key": "value", "label": metric_label},
+        ],
+        "rows": measured[:shown],
+    }
+
+
+def _evidence_dataset_name(metadata: object, fallback: str) -> str:
+    """Read a display name only from a Copilot upload's receipt-like description."""
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(name := metadata.get("table_name"), str)
+        or not name.strip()
+    ):
+        return fallback
+    if re.fullmatch(r"copilot_csv_[0-9a-f]{24}", name) and isinstance(
+        description := metadata.get("description"), str
+    ):
+        if receipt := re.fullmatch(
+            r"Uploaded through Copilot from ([^/\\]{1,120}\.csv)\.", description
+        ):
+            display_name = receipt[1]
+            if display_name.isprintable() and display_name[:-4].strip():
+                return display_name
+    return name.strip()[:160]
+
+
+def dashboard_evidence(
+    metadata: object,
+    metric_label: str,
+    total: object,
+    groups: object,
+    *,
+    locale: Literal["ar", "en"],
+    profile: object = None,
+    snapshot_scope: DatasetFilter | None = None,
+) -> ActivitySnapshotEvent | None:
+    """Present the original draft's verified headline, source, and scope."""
+    if (
+        not isinstance(total, dict)
+        or type(dataset_id := total.get("dataset_id")) is not int
+        or not isinstance(rows := total.get("rows"), list)
+        or len(rows) != 1
+        or not isinstance(rows[0], dict)
+        or (value := _observation(rows[0].get("value"))) is None
+    ):
+        return None
+
+    arabic = locale == "ar"
+    dataset_name = _evidence_dataset_name(
+        metadata, "مجموعة البيانات" if arabic else "Dataset"
+    )
+    source = f"{dataset_name} · #{dataset_id}"
+    if snapshot_scope:
+        label = "لقطة" if arabic else "Snapshot"
+        scope = f"{label} · {snapshot_scope.column} = {snapshot_scope.value}"
+    else:
+        scope = "كل الصفوف المتاحة" if arabic else "All accessible rows"
+        count = profile.get("row_count") if isinstance(profile, dict) else None
+        if type(count) is int and count >= 0:
+            scope = f"{scope} ({count:,})"
+
+    comparison = _evidence_comparison(groups, metric_label, arabic)
+    children = (
+        ["source", "headline", "comparison"]
+        if comparison
+        else [
+            "source",
+            "headline",
+        ]
+    )
+    return _surface(
+        [
+            *_frame("الأدلة المستخدمة" if arabic else "Evidence used", children),
+            {"id": "source", "component": "Text", "text": source, "variant": "caption"},
+            {
+                "id": "headline",
+                "component": "Metric",
+                "@catalogId": NXTBI_CATALOG_ID,
+                "label": metric_label,
+                "value": value,
+                "detail": scope,
+            },
+            *([comparison] if comparison else []),
         ]
     )
 

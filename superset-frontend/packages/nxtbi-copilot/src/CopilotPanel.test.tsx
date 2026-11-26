@@ -17,9 +17,10 @@
  * under the License.
  */
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
+import { BASIC_A2UI_CATALOG_ID } from './a2ui';
 import { CopilotPanel } from './CopilotPanel';
 import type { CopilotHost, CopilotUploadedDataset } from './contracts';
 import { readAgUiEvents } from './stream';
@@ -28,6 +29,179 @@ jest.mock('./stream', () => ({
   ...jest.requireActual('./stream'),
   readAgUiEvents: jest.fn(),
 }));
+
+beforeEach(() => {
+  jest.mocked(readAgUiEvents).mockReset();
+});
+
+function formActivity(
+  label: string,
+  value: string,
+  surfaceId = 'investigation',
+) {
+  return {
+    type: 'ACTIVITY_SNAPSHOT',
+    activityType: 'a2ui-surface',
+    content: {
+      a2ui_operations: [
+        {
+          version: '1.0',
+          createSurface: {
+            surfaceId,
+            catalogId: BASIC_A2UI_CATALOG_ID,
+            components: [
+              {
+                id: 'root',
+                component: 'Column',
+                children: ['value', 'submit'],
+              },
+              {
+                id: 'value',
+                component: 'TextField',
+                label,
+                value: { '@path': '/selection' },
+              },
+              {
+                id: 'submit',
+                component: 'Button',
+                child: 'submitText',
+                action: {
+                  event: {
+                    name: 'nxtbi.submit-form',
+                    context: { selection: { '@path': '/selection' } },
+                  },
+                },
+              },
+              { id: 'submitText', component: 'Text', text: 'Apply selection' },
+            ],
+            dataModel: { selection: value },
+          },
+        },
+      ],
+    },
+  };
+}
+
+test('keeps interactive results in turn order and resolves actions against their own edits', async () => {
+  const user = userEvent.setup();
+  jest
+    .mocked(readAgUiEvents)
+    .mockImplementationOnce(async function* () {
+      yield formActivity('First period', '2025');
+      yield { type: 'RUN_FINISHED' };
+    })
+    .mockImplementationOnce(async function* () {
+      yield formActivity('Second period', '2026');
+      yield { type: 'RUN_FINISHED' };
+    })
+    .mockImplementationOnce(async function* () {
+      yield { type: 'RUN_FINISHED' };
+    });
+  const run = jest
+    .fn<ReturnType<CopilotHost['run']>, Parameters<CopilotHost['run']>>()
+    .mockImplementation(async () => new Response());
+
+  render(<CopilotPanel host={{ context: () => ({}), run }} />);
+  const composer = screen.getByRole('textbox', { name: 'Ask Copilot' });
+  const send = () => user.click(screen.getByRole('button', { name: 'Send' }));
+  await user.type(composer, 'Analyze the earlier period');
+  await send();
+  const firstPeriod = await screen.findByRole('textbox', {
+    name: 'First period',
+  });
+  await user.clear(firstPeriod);
+  await user.type(firstPeriod, '2024');
+  await user.type(composer, 'Analyze the later period');
+  await send();
+
+  const secondPeriod = await screen.findByRole('textbox', {
+    name: 'Second period',
+  });
+  expect(firstPeriod).toHaveValue('2024');
+  expect(secondPeriod).toHaveValue('2026');
+  expect(
+    firstPeriod.compareDocumentPosition(
+      screen.getByText('Analyze the later period'),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+
+  await user.type(composer, 'An unsent question');
+  const firstResult = firstPeriod.closest('fieldset') as HTMLFieldSetElement;
+  await user.click(
+    within(firstResult).getByRole('button', { name: 'Apply selection' }),
+  );
+  expect(
+    run.mock.calls[2][0].forwardedProps.a2uiAction?.action.context,
+  ).toEqual({
+    selection: '2024',
+  });
+  expect(composer).toHaveValue('An unsent question');
+});
+
+test.each(['failed', 'stopped'] as const)(
+  'keeps prior results and discards the partial reply when a run is %s',
+  async interruption => {
+    const user = userEvent.setup();
+    const unfinishedReply = 'An unfinished comparison';
+    let finish = () => {};
+    const pending = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    jest
+      .mocked(readAgUiEvents)
+      .mockImplementationOnce(async function* () {
+        yield formActivity('Ready period', '2025');
+        yield { type: 'RUN_FINISHED' };
+      })
+      .mockImplementationOnce(async function* () {
+        yield formActivity('Unfinished period', '2026', 'interrupted');
+        yield { type: 'TEXT_MESSAGE_CONTENT', delta: unfinishedReply };
+        await pending;
+        yield {
+          type: interruption === 'failed' ? 'RUN_ERROR' : 'RUN_FINISHED',
+        };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'RUN_FINISHED' };
+      });
+    const run = jest
+      .fn<ReturnType<CopilotHost['run']>, Parameters<CopilotHost['run']>>()
+      .mockImplementation(async () => new Response());
+    render(<CopilotPanel host={{ context: () => ({}), run }} />);
+    const composer = screen.getByRole('textbox', { name: 'Ask Copilot' });
+    const send = () => user.click(screen.getByRole('button', { name: 'Send' }));
+    await user.type(composer, 'Show a usable result');
+    await send();
+    await screen.findByRole('textbox', { name: 'Ready period' });
+
+    await user.type(composer, 'Try another result');
+    await send();
+    const stop = await screen.findByRole('button', { name: 'Stop' });
+    expect(await screen.findByText(unfinishedReply)).toBeInTheDocument();
+    const partial = screen.queryByRole('textbox', {
+      name: 'Unfinished period',
+    });
+    if (interruption === 'stopped') await user.click(stop);
+    finish();
+    expect(partial).toBeNull();
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    });
+    expect(screen.getByRole('textbox', { name: 'Ready period' })).toBeEnabled();
+    expect(
+      screen.queryByRole('textbox', { name: 'Unfinished period' }),
+    ).toBeNull();
+    expect(screen.queryByText(unfinishedReply)).not.toBeInTheDocument();
+
+    await user.type(composer, 'Run a fresh comparison');
+    await send();
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(
+      run.mock.calls[2][0].messages.map(message => message.content),
+    ).not.toContain(unfinishedReply);
+  },
+);
 
 test('renders streamed assistant Markdown and keeps the user prompt literal', async () => {
   let finish = () => {};

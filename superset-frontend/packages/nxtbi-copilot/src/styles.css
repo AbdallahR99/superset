@@ -181,6 +181,28 @@
   overflow-wrap: anywhere;
 }
 
+.nxtbi-copilot__message--interactive {
+  inline-size: 100%;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.nxtbi-copilot__artifact {
+  min-inline-size: 0;
+  margin: 0.5rem 0 0;
+  padding: 0.55rem 0.75rem 0.75rem;
+  border: 1px solid var(--copilot-border);
+  border-radius: 0.65rem;
+  background: var(--copilot-surface);
+}
+
+.nxtbi-copilot__artifact > legend {
+  padding-inline: 0.35rem;
+  color: var(--copilot-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
 .nxtbi-copilot__message--user p {
   margin: 0;
   white-space: pre-wrap;

@@ -131,15 +131,18 @@ or percentage. Never infer freshness or a date range from the presence of a date
 For requests about the selected CSV upload, use the supplied uploaded dataset ID.
 For an ordinary dashboard draft, call propose_uploaded_dataset_dashboard directly.
 It reads scoped metadata, measures a saved metric, selects useful chart dimensions,
-and stages a full-file draft. Use that tool rather than treating transaction dates
-as stock snapshots. For specific analyses use get_dataset and scoped evidence
+and stages a draft across accessible rows. Treat transaction dates as event dates.
+For specific analyses use get_dataset and scoped evidence
 tools on that ID. Use only saved metrics. Do not infer joins with other uploads.
 For a requested population or other stock/snapshot dashboard, resolve the named
 dataset once with list_datasets when its ID is ambiguous. After get_dataset, call
 propose_snapshot_dashboard immediately. It checks the latest observed temporal
 value and scoped aggregates, then stages the preview. Skip manual exploratory
-queries and use its returned measures to summarize the result briefly. Describe
-each staged widget using the returned display type, title, and dimension.
+queries and use its returned measures to summarize the result briefly. The verified
+drafts include an evidence panel sourced from measured queries. Lead with the decision
+the draft supports and one observed comparison when available. Mention the source,
+scope and any material coverage or unit gap. Describe other charts as proposed views
+when you have no measured trend or comparison for them.
 For a focused opportunity question, profile the temporal field once and run one
 grouped measure with a filter on the observed period. One supporting measure
 is enough. Then give one concise Markdown answer with the observed comparison,
@@ -404,7 +407,9 @@ def _register_dataset_tools(agent: Agent[RunDeps, str]) -> None:
         return await ctx.deps.gateway("aggregate_dataset", arguments)
 
 
-async def _stage_proposal(deps: RunDeps, draft: DashboardDraft) -> object:
+async def _stage_proposal(
+    deps: RunDeps, draft: DashboardDraft, evidence: ActivitySnapshotEvent | None = None
+) -> object:
     """Stage one gateway-validated preview without saving it."""
     if deps.proposal_staged:
         return {"status": "A draft is already awaiting user approval in this run."}
@@ -417,6 +422,8 @@ async def _stage_proposal(deps: RunDeps, draft: DashboardDraft) -> object:
     except ValidationError:
         return {"error": "Superset could not validate the dashboard draft."}
     deps.proposal_staged = True
+    if evidence is not None:
+        deps.show_surface(evidence)
     deps.events.append(
         CustomEvent(
             name="nxtbi.dashboard-proposal",
@@ -473,8 +480,12 @@ def _register_snapshot_tool(agent: Agent[RunDeps, str]) -> None:
                 "profile_dataset", {"id": dataset_id, "columns": [temporal_column]}
             )
             latest = snapshot.latest_date(profile, dataset_id, temporal_column)
-            scope = {"column": temporal_column, "value": latest}
-            args = {"id": dataset_id, "metric": headline_metric, "filter": scope}
+            scope = DatasetFilter(column=temporal_column, value=latest)
+            args = {
+                "id": dataset_id,
+                "metric": headline_metric,
+                "filter": scope.model_dump(mode="json"),
+            }
             total, groups = await asyncio.gather(
                 ctx.deps.gateway("aggregate_dataset", args),
                 ctx.deps.gateway(
@@ -496,7 +507,18 @@ def _register_snapshot_tool(agent: Agent[RunDeps, str]) -> None:
             )
         except ValueError as exc:
             return {"error": str(exc)}
-        status = await _stage_proposal(ctx.deps, draft)
+        status = await _stage_proposal(
+            ctx.deps,
+            draft,
+            surfaces.dashboard_evidence(
+                metadata,
+                labels.get(headline_metric, headline_metric),
+                total,
+                groups,
+                locale=ctx.deps.hints.locale,
+                snapshot_scope=scope,
+            ),
+        )
         return {
             "proposal": status,
             "snapshot": latest,
@@ -545,7 +567,18 @@ async def _plan_uploaded_dashboard(
         title, dataset_id, fields, category, temporal, deps.hints.locale
     )
     return {
-        "proposal": await _stage_proposal(deps, draft),
+        "proposal": await _stage_proposal(
+            deps,
+            draft,
+            surfaces.dashboard_evidence(
+                metadata,
+                fields.metric_label,
+                total,
+                groups,
+                locale=deps.hints.locale,
+                profile=profile,
+            ),
+        ),
         "profile": profile,
         "headline": total,
         "comparison": groups,

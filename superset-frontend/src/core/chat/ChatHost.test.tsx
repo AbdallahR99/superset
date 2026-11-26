@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { supersetTheme } from '@apache-superset/core/theme';
 import { act, render, screen } from 'spec/helpers/testing-library';
 import { chat } from 'src/core/chat';
 import ChatProvider from './ChatProvider';
@@ -64,6 +65,22 @@ test('mounts the panel when the chat opens and unmounts it on close', () => {
   act(() => chat.close());
 
   expect(screen.queryByText('Acme Panel')).not.toBeInTheDocument();
+});
+
+test('keeps an open floating chat below the modal popup layer', () => {
+  chat.registerChat(
+    { id: 'acme.chat', name: 'Acme Chat' },
+    () => <button type="button">Acme Bubble</button>,
+    () => <div>Acme Panel</div>,
+  );
+  render(<ChatHost />);
+  act(() => chat.open());
+
+  expect(screen.getByText('Acme Panel')).toBeInTheDocument();
+  expect(screen.getByTestId('chat-mount')).toHaveStyleRule(
+    'z-index',
+    String(supersetTheme.zIndexPopupBase - 1),
+  );
 });
 
 test('renders the last-registered chat when several are installed', () => {

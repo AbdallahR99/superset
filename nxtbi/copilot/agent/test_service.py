@@ -34,7 +34,7 @@ from pydantic_ai.models.test import TestModel as PydanticTestModel
 from . import app as service
 from .app import _search_arguments, create_app, Settings
 from .contracts import MAX_BODY_BYTES, parse_run, sign_context, verify_gateway_token
-from .surfaces import CATALOG_ID, SurfaceDraft
+from .surfaces import CATALOG_ID, dashboard_evidence, SurfaceDraft
 
 SIGNING_KEY = "standalone-unit-test-fixture-" * 2
 TOOL_URL = "https://gateway.example.test/tools"
@@ -73,6 +73,56 @@ def _events(response: httpx.Response) -> list[dict[str, Any]]:
     assert data[0]["type"] == "RUN_STARTED"
     assert data[-1]["type"] == "RUN_FINISHED", data
     return data
+
+
+def _evidence_nodes(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read the single native evidence surface emitted by a verified draft."""
+    activities = [e for e in events if e["type"] == "ACTIVITY_SNAPSHOT"]
+    if not activities:
+        return {}
+    (evidence,) = activities
+    assert evidence["activityType"] == "a2ui-surface"
+    operations = evidence["content"]["a2ui_operations"]
+    assert all(operation["version"] == "1.0" for operation in operations)
+    return {
+        node["id"]: node for node in operations[1]["updateComponents"]["components"]
+    }
+
+
+@pytest.mark.parametrize(
+    ("table_name", "description", "expected"),
+    [
+        (
+            "copilot_csv_0123456789abcdef01234567",
+            "Uploaded through Copilot from Demo orders.csv.",
+            "Demo orders.csv",
+        ),
+        (
+            "copilot_csv_0123456789abcdef01234567",
+            "Uploaded through Copilot from private/orders.csv.",
+            "copilot_csv_0123456789abcdef01234567",
+        ),
+        (
+            "ordinary_orders",
+            "Uploaded through Copilot from other.csv.",
+            "ordinary_orders",
+        ),
+    ],
+)
+def test_evidence_uses_only_valid_copilot_upload_display_names(
+    table_name: str, description: str, expected: str
+) -> None:
+    """Present a recognizable filename and retain the dataset reference."""
+    surface = dashboard_evidence(
+        {"table_name": table_name, "description": description},
+        "Records",
+        {"dataset_id": 47, "rows": [{"value": 1}]},
+        None,
+        locale="en",
+    )
+    assert surface is not None
+    nodes = _evidence_nodes([surface.model_dump(mode="json", by_alias=True)])
+    assert nodes["source"]["text"] == f"{expected} · #47"
 
 
 def _forms_submission() -> dict[str, object]:
@@ -572,6 +622,7 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
         if name == "get_dataset":
             result = {
                 "id": dataset_id,
+                "table_name": "Demo orders",
                 "metrics": ["count", "avg_order_total", metric],
                 "metric_details": [
                     {"metric_name": metric, "verbose_name": "Total order value"}
@@ -644,7 +695,12 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
     )
     context = [{"description": "uploaded_dataset_id", "value": "47"}]
     if use_shortcut:
-        context.append({"description": "uploaded_dataset_action", "value": "draft"})
+        context.extend(
+            [
+                {"description": "uploaded_dataset_action", "value": "draft"},
+                {"description": "locale", "value": "ar"},
+            ]
+        )
     with TestClient(app) as client:
         events = _events(
             client.post(
@@ -659,6 +715,21 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
     proposal = next(event for event in events if event["type"] == "CUSTOM")
     assert proposal["name"] == "nxtbi.dashboard-proposal"
     assert proposal["value"]["approvalToken"] == approval
+    nodes = _evidence_nodes(events)
+    assert nodes["title"]["text"] == (
+        "الأدلة المستخدمة" if use_shortcut else "Evidence used"
+    )
+    assert nodes["source"]["text"] == "Demo orders · #47"
+    assert nodes["headline"]["value"] == "6,439,445.27"
+    assert nodes["headline"]["label"] == "Total order value"
+    assert nodes["headline"]["detail"] == (
+        "كل الصفوف المتاحة (2,000)" if use_shortcut else "All accessible rows (2,000)"
+    )
+    assert nodes["comparison"]["rows"] == [
+        {"group": "active", "value": "3,500,000"},
+        {"group": "pending", "value": "2,939,445.27"},
+    ]
+    assert approval not in str(nodes)
     widgets = proposal["value"]["widgets"]
     assert [widget["metric"] for widget in widgets[:2]] == [metric, "count"]
     assert widgets[-1]["dimension"] == "status"
@@ -811,7 +882,7 @@ def test_snapshot_proposal_verifies_latest_temporal_scope(missing_groups: bool) 
         "title": "Population",
         "temporal_column": "year_date",
         "headline_metric": "persons",
-        "kpis": ["persons"],
+        "kpis": ["households"],
         "breakdowns": ["region_en", "gender"],
     }
     calls = []
@@ -825,7 +896,8 @@ def test_snapshot_proposal_verifies_latest_temporal_scope(missing_groups: bool) 
         if name == "get_dataset":
             result = {
                 "id": 23,
-                "metrics": ["persons"],
+                "table_name": "Population by region",
+                "metrics": ["households", "persons"],
                 "temporal_columns": ["year_date"],
                 "groupable_columns": ["year_date", "region_en", "gender"],
                 "filterable_columns": ["year_date"],
@@ -843,7 +915,14 @@ def test_snapshot_proposal_verifies_latest_temporal_scope(missing_groups: bool) 
             assert args["filter"] == expected_filter
             group = args.get("dimension")
             rows = (
-                [{"group": "North", "value": 8}, {"group": "South", "value": 2}]
+                [
+                    {"group": "North", "value": 8},
+                    {"group": "South", "value": 1},
+                    {"group": "East", "value": 0.4},
+                    {"group": "West", "value": 0.3},
+                    {"group": "Coastal", "value": 0.2},
+                    {"group": "Central", "value": 0.1},
+                ]
                 if group
                 else [{"group": None, "value": 10}]
             )
@@ -907,3 +986,24 @@ def test_snapshot_proposal_verifies_latest_temporal_scope(missing_groups: bool) 
         any(e.get("name") == "nxtbi.dashboard-proposal" for e in events)
         != missing_groups
     )
+    _assert_snapshot_evidence(events, expected=not missing_groups)
+
+
+def _assert_snapshot_evidence(events: list[dict[str, Any]], *, expected: bool) -> None:
+    """Show the measured headline and scope with the comparison rows capped."""
+    nodes = _evidence_nodes(events)
+    assert bool(nodes) == expected
+    if not nodes:
+        return
+    assert nodes["source"]["text"] == "Population by region · #23"
+    assert nodes["headline"]["label"] == "Population"
+    assert nodes["headline"]["value"] == "10"
+    assert nodes["headline"]["detail"] == "Snapshot · year_date = 2026-01-01"
+    assert nodes["comparison"]["caption"] == "region_en · 5 of 6 groups shown"
+    assert [row["group"] for row in nodes["comparison"]["rows"]] == [
+        "North",
+        "South",
+        "East",
+        "West",
+        "Coastal",
+    ]

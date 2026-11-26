@@ -76,10 +76,11 @@ def select_fields(
     metrics = _names(metadata, "metrics")
     if not metrics or (requested_metric and requested_metric not in metrics):
         raise ValueError("Choose a saved metric from the imported dataset.")
-    metric = requested_metric or next(
-        (name for name in metrics if name.startswith("sum_")),
-        next((name for name in metrics if name != "count"), metrics[0]),
-    )
+    if requested_metric:
+        metric = requested_metric
+    else:
+        fallback = next((name for name in metrics if name != "count"), metrics[0])
+        metric = next((name for name in metrics if name.startswith("sum_")), fallback)
     label = metric.replace("_", " ").capitalize()
     if isinstance(details := metadata.get("metric_details"), list):
         for detail in details:

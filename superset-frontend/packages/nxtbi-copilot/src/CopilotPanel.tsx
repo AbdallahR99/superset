@@ -28,7 +28,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import Markdown, { type MarkdownToJSX } from 'markdown-to-jsx/react';
+import MarkdownRenderer, { type MarkdownToJSX } from 'markdown-to-jsx/react';
 import {
   A2uiRenderer,
   applyA2uiMessage,
@@ -36,6 +36,7 @@ import {
   parseA2uiMessage,
   updateA2uiData,
   type A2uiAction,
+  type A2uiState,
 } from './a2ui';
 import {
   readProposal,
@@ -99,11 +100,11 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
 }) {
   return (
     <div className="nxtbi-copilot__markdown" dir="auto">
-      <Markdown
+      <MarkdownRenderer
         options={{ ...markdownOptions, optimizeForStreaming: streaming }}
       >
         {content}
-      </Markdown>
+      </MarkdownRenderer>
     </div>
   );
 });
@@ -144,6 +145,7 @@ const english = {
   send: 'Send',
   stop: 'Stop',
   working: 'Working…',
+  interactiveResult: 'Interactive result',
   submit: 'Continue with these values.',
   streamError: 'The response ended early. Please try again.',
   restorePrompt: 'Restore prompt',
@@ -208,6 +210,7 @@ const arabic: typeof english = {
   send: 'إرسال',
   stop: 'إيقاف',
   working: 'جارٍ العمل…',
+  interactiveResult: 'نتيجة تفاعلية',
   submit: 'المتابعة بهذه القيم.',
   streamError: 'انقطع الرد. يرجى المحاولة مرة أخرى.',
   restorePrompt: 'استعادة الطلب',
@@ -252,9 +255,15 @@ interface CopilotPanelProps {
 const MAX_MESSAGES = 16;
 const MAX_PROMPT = 3000;
 const MAX_ANSWER = 24000;
+const MAX_ACTIVITY_BATCHES = 13;
 const HISTORY_TIMEOUT = 8000;
 const SCROLL_MARGIN = 32;
 const MAX_CSV_SIZE = 10 * 1024 * 1024;
+
+interface InteractiveResult {
+  surface: A2uiState;
+  activities: unknown[][];
+}
 
 type CsvAttachment =
   | { id: string; status: 'ready' | 'failed'; file: File }
@@ -301,6 +310,7 @@ function wireHistory(history: CopilotTextMessage[]): CopilotTextMessage[] {
   let remaining = 27000;
   const result: CopilotTextMessage[] = [];
   for (const message of [...history].reverse()) {
+    if (!message.content) continue;
     const content = message.content.slice(0, Math.min(remaining, 6500));
     if (!content) break;
     result.unshift({ ...message, content });
@@ -375,8 +385,7 @@ export function CopilotPanel({
   >('idle');
   const [historySaveFailed, setHistorySaveFailed] = useState(false);
   const [historyRequest, setHistoryRequest] = useState(0);
-  const [surface, setSurface] = useState(initialA2uiState);
-  const [activities, setActivities] = useState<unknown[][]>([]);
+  const [results, setResults] = useState<Record<string, InteractiveResult>>({});
   const [proposal, setProposal] = useState<DashboardProposal>();
   const [confirming, setConfirming] = useState(false);
   const connection = useRef<AbortController>();
@@ -402,13 +411,13 @@ export function CopilotPanel({
   useEffect(() => {
     if (!historyOpen && followLatest.current && viewport.current)
       viewport.current.scrollTop = viewport.current.scrollHeight;
-  }, [historyOpen, messages, surface, proposal, savedDashboard, error]);
+  }, [historyOpen, messages, results, proposal, savedDashboard, error]);
 
   useEffect(() => {
     if (!archive || !historyOpen) return undefined;
     const controller = new AbortController();
     setHistoryStatus('loading');
-    void archive
+    archive
       .list(
         AbortSignal.any([
           controller.signal,
@@ -435,7 +444,7 @@ export function CopilotPanel({
       await archive.save(
         {
           threadId,
-          messages: transcript,
+          messages: transcript.filter(message => message.content),
           updatedAt: new Date().toISOString(),
           savedDashboard: dashboard,
         },
@@ -452,8 +461,7 @@ export function CopilotPanel({
     setThreadId(conversation?.threadId ?? crypto.randomUUID());
     setMessages(conversation?.messages ?? []);
     setSavedDashboard(conversation?.savedDashboard);
-    setSurface(initialA2uiState);
-    setActivities([]);
+    setResults({});
     setProposal(undefined);
     setConfirming(false);
     setDraft('');
@@ -492,12 +500,21 @@ export function CopilotPanel({
       content: '',
     };
     let complete = false;
+    let runSurface = initialA2uiState;
+    let runProposal: DashboardProposal | undefined;
+    const runActivities: unknown[][] = [];
     followLatest.current = true;
     setMessages(history);
+    const retainedIds = new Set(history.map(message => message.id));
+    setResults(previous =>
+      Object.fromEntries(
+        Object.entries(previous).filter(([id]) => retainedIds.has(id)),
+      ),
+    );
     setStreaming(true);
     setError('');
     setFailedPrompt('');
-    if (!uploadedDatasetAction) setDraft('');
+    if (!action && !uploadedDatasetAction) setDraft('');
     setProposal(undefined);
     setConfirming(false);
 
@@ -531,49 +548,51 @@ export function CopilotPanel({
           event.type === 'CUSTOM' &&
           event.name === 'nxtbi.dashboard-proposal'
         ) {
-          const next = readProposal(event.value);
-          if (next) setProposal(next);
+          runProposal = readProposal(event.value) ?? runProposal;
         }
         const operations = a2uiOperations(event);
         if (operations) {
-          if (renderActivities) {
-            setActivities(previous => [...previous.slice(-12), operations]);
-          } else {
-            try {
-              const parsed = operations.map(item =>
-                parseA2uiMessage(item, catalogs),
-              );
-              setSurface(previous => {
-                try {
-                  return parsed.reduce(
-                    (result, message) =>
-                      applyA2uiMessage(result, message, catalogs),
-                    previous,
-                  );
-                } catch {
-                  return previous;
-                }
-              });
-            } catch {
-              setError(copy.uiError);
-            }
+          if (runActivities.length === MAX_ACTIVITY_BATCHES) {
+            setError(copy.uiError);
+            continue;
+          }
+          try {
+            const parsed = operations.map(item =>
+              parseA2uiMessage(item, catalogs),
+            );
+            runSurface = parsed.reduce(
+              (state, message) => applyA2uiMessage(state, message, catalogs),
+              runSurface,
+            );
+            runActivities.push(operations);
+          } catch {
+            setError(copy.uiError);
           }
         }
       }
-      if (controller.signal.aborted) {
-        setProposal(undefined);
-      } else if (!complete) {
-        throw new Error('Incomplete AG-UI run');
+      if (controller.signal.aborted) return;
+      if (!complete) throw new Error('Incomplete AG-UI run');
+      if (
+        Object.values(runSurface.surfaces).some(surface =>
+          Object.hasOwn(surface.components, 'root'),
+        )
+      ) {
+        setResults(previous => ({
+          ...previous,
+          [reply.id]: { surface: runSurface, activities: runActivities },
+        }));
+        setMessages([...history, { ...reply }]);
       }
+      if (runProposal) setProposal(runProposal);
     } catch {
       complete = false;
       setProposal(undefined);
       if (!controller.signal.aborted) {
-        setMessages(history);
         setFailedPrompt(text);
         setError(copy.streamError);
       }
     } finally {
+      if (!complete || controller.signal.aborted) setMessages(history);
       await promptSaved;
       if (complete && reply.content && !controller.signal.aborted) {
         await remember([...history, { ...reply }]);
@@ -586,8 +605,9 @@ export function CopilotPanel({
   }
 
   function handleAction(action: A2uiAction) {
+    if (busy || connection.current || mutation.current) return;
     if (host.onAction?.(action)) return;
-    void send(action.action.userMessage || copy.submit, action);
+    send(action.action.userMessage || copy.submit, action);
   }
 
   function chooseFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -685,7 +705,7 @@ export function CopilotPanel({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void send(draft);
+    send(draft);
   }
 
   return (
@@ -731,7 +751,9 @@ export function CopilotPanel({
             </button>
           </div>
           {historyStatus === 'loading' && (
-            <p role="status">{copy.loadingHistory}</p>
+            <p>
+              <output>{copy.loadingHistory}</output>
+            </p>
           )}
           {historyStatus === 'error' && (
             <div role="alert">
@@ -813,43 +835,65 @@ export function CopilotPanel({
                 )}
               </div>
             )}
-            {messages.map((message, index) => (
-              <div
-                key={message.id}
-                className={`nxtbi-copilot__message nxtbi-copilot__message--${message.role}`}
-              >
-                {message.role === 'assistant' ? (
-                  <>
-                    <span className="nxtbi-copilot__speaker">
-                      {copy.speaker}
-                    </span>
-                    <AssistantMarkdown
-                      content={message.content}
-                      streaming={streaming && index === messages.length - 1}
-                    />
-                  </>
-                ) : (
-                  <p dir="auto">{message.content}</p>
-                )}
-              </div>
-            ))}
-            {renderActivities ? (
-              renderActivities(activities, handleAction)
-            ) : (
-              <A2uiRenderer
-                state={surface}
-                locale={host.locale}
-                direction={direction}
-                catalogs={catalogs}
-                allowedActions={host.allowedActions}
-                onAction={handleAction}
-                onDataChange={(surfaceId, path, value) =>
-                  setSurface(previous =>
-                    updateA2uiData(previous, surfaceId, path, value),
-                  )
-                }
-              />
-            )}
+            {messages.map((message, index) => {
+              const result = results[message.id];
+              return (
+                <div
+                  key={message.id}
+                  className={`nxtbi-copilot__message nxtbi-copilot__message--${message.role}${result ? ' nxtbi-copilot__message--interactive' : ''}`}
+                >
+                  {message.role === 'assistant' ? (
+                    <>
+                      <span className="nxtbi-copilot__speaker">
+                        {copy.speaker}
+                      </span>
+                      {message.content && (
+                        <AssistantMarkdown
+                          content={message.content}
+                          streaming={streaming && index === messages.length - 1}
+                        />
+                      )}
+                      {result && (
+                        <fieldset
+                          className="nxtbi-copilot__artifact"
+                          disabled={busy}
+                        >
+                          <legend>{copy.interactiveResult}</legend>
+                          {renderActivities ? (
+                            renderActivities(result.activities, handleAction)
+                          ) : (
+                            <A2uiRenderer
+                              state={result.surface}
+                              locale={host.locale}
+                              direction={direction}
+                              catalogs={catalogs}
+                              allowedActions={host.allowedActions}
+                              onAction={handleAction}
+                              onDataChange={(surfaceId, path, value) =>
+                                setResults(previous => ({
+                                  ...previous,
+                                  [message.id]: {
+                                    ...previous[message.id],
+                                    surface: updateA2uiData(
+                                      previous[message.id].surface,
+                                      surfaceId,
+                                      path,
+                                      value,
+                                    ),
+                                  },
+                                }))
+                              }
+                            />
+                          )}
+                        </fieldset>
+                      )}
+                    </>
+                  ) : (
+                    <p dir="auto">{message.content}</p>
+                  )}
+                </div>
+              );
+            })}
             {proposal && host.approve && (
               <section
                 className="nxtbi-copilot__proposal"
@@ -879,7 +923,7 @@ export function CopilotPanel({
                       className="nxtbi-copilot__primary"
                       type="button"
                       disabled={busy}
-                      onClick={() => void approve()}
+                      onClick={approve}
                     >
                       {saving ? copy.saving : copy.confirm}
                     </button>
@@ -904,14 +948,16 @@ export function CopilotPanel({
               </section>
             )}
             {streaming && (
-              <p className="nxtbi-copilot__working" role="status">
-                {copy.working}
+              <p className="nxtbi-copilot__working">
+                <output>{copy.working}</output>
               </p>
             )}
             {savedDashboard && (
               <div className="nxtbi-copilot__saved">
                 <div>
-                  <strong role="status">{copy.saved}</strong>
+                  <strong>
+                    <output>{copy.saved}</output>
+                  </strong>
                   {host.navigate && <p>{copy.publishHint}</p>}
                 </div>
                 {host.navigate && (
@@ -927,8 +973,8 @@ export function CopilotPanel({
               </div>
             )}
             {historySaveFailed && (
-              <p className="nxtbi-copilot__error" role="status">
-                {copy.historySaveError}
+              <p className="nxtbi-copilot__error">
+                <output>{copy.historySaveError}</output>
               </p>
             )}
             {error && (
@@ -955,13 +1001,13 @@ export function CopilotPanel({
               className="nxtbi-copilot__uploads"
               aria-label={copy.csvFiles}
             >
-              <p role="status" className="nxtbi-copilot__upload-status">
+              <output className="nxtbi-copilot__upload-status">
                 {uploadProgress
                   ? copy.importing
                   : hasImported
                     ? copy.datasetReady
                     : null}
-              </p>
+              </output>
               {uploadProgress && uploadProgress.total > 1 && (
                 <progress
                   aria-label={copy.importing}
@@ -1025,11 +1071,7 @@ export function CopilotPanel({
               </ul>
               <div className="nxtbi-copilot__upload-actions">
                 {pendingFiles.length > 0 && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void importFiles()}
-                  >
+                  <button type="button" disabled={busy} onClick={importFiles}>
                     {pendingFiles.some(item => item.status === 'ready')
                       ? copy.importFiles
                       : copy.retryImport}
@@ -1040,7 +1082,7 @@ export function CopilotPanel({
                     type="button"
                     disabled={busy}
                     onClick={() =>
-                      void send(
+                      send(
                         copy.draftDatasetPrompt(uploadedDatasetId),
                         undefined,
                         'draft',

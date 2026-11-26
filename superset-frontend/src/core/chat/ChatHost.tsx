@@ -19,13 +19,25 @@
 import { type ComponentType, type ReactNode, useRef } from 'react';
 import { t } from '@apache-superset/core/translation';
 import { logging } from '@apache-superset/core/utils';
-import { css, useTheme } from '@apache-superset/core/theme';
+import { css, styled } from '@apache-superset/core/theme';
 import { ErrorBoundary } from 'src/components/ErrorBoundary';
 import { addDangerToast } from 'src/components/MessageToasts/actions';
 import { store } from 'src/views/store';
 import { useChat } from '.';
 
 const CHAT_EDGE_MARGIN = 24;
+
+const FloatingOverlay = styled.div`
+  position: fixed;
+  right: ${CHAT_EDGE_MARGIN}px;
+  bottom: ${CHAT_EDGE_MARGIN}px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: ${({ theme }) => theme.sizeUnit * 2}px;
+  /* Keep the overlay above page content and below modal backdrops. */
+  z-index: ${({ theme }) => theme.zIndexPopupBase - 1};
+`;
 
 /**
  * Returns an onError handler that shows a toast on crash, once per chat id.
@@ -89,7 +101,6 @@ export const ChatPanelHost = () => {
  * registered; the panel overlay is suppressed in panel mode.
  */
 export const ChatFloatingHost = ({ children }: { children?: ReactNode }) => {
-  const theme = useTheme();
   const { open: panelOpen, mode, chat, trigger, panel } = useChat();
   const onError = useCrashNotifier(chat?.id);
 
@@ -98,20 +109,7 @@ export const ChatFloatingHost = ({ children }: { children?: ReactNode }) => {
   }
 
   return (
-    <div
-      data-test="chat-mount"
-      css={css`
-        position: fixed;
-        right: ${CHAT_EDGE_MARGIN}px;
-        bottom: ${CHAT_EDGE_MARGIN}px;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: ${theme.sizeUnit * 2}px;
-        /* Above dashboard content and the toast layer, below modal dialogs. */
-        z-index: ${theme.zIndexPopupBase + 2};
-      `}
-    >
+    <FloatingOverlay data-test="chat-mount">
       {/*
         Separate boundaries so a crashing panel cannot take the trigger down
         with it — the trigger is the user's only way back.
@@ -130,6 +128,6 @@ export const ChatFloatingHost = ({ children }: { children?: ReactNode }) => {
         component={trigger}
         onError={onError}
       />
-    </div>
+    </FloatingOverlay>
   );
 };
