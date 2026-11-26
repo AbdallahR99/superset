@@ -414,6 +414,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
     height,
     width,
     data,
+    paginationQuery,
     totals,
     isRawRecords,
     rowCount = 0,
@@ -1711,6 +1712,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
       const modifiedOwnState = {
         ...serverPaginationData,
         sortBy,
+        currentPage: 0,
       };
       updateTableOwnState(setDataMask, modifiedOwnState);
     },
@@ -1736,6 +1738,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
         ...serverPaginationData,
         searchColumn: searchCol,
         searchText: '',
+        currentPage: 0,
       };
       updateTableOwnState(setDataMask, modifiedOwnState);
     }
@@ -1788,6 +1791,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
   return (
     <Styles>
       <DataTable<D>
+        pageResetKey={paginationQuery}
         columns={columns}
         data={data}
         rowCount={rowCount}

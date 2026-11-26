@@ -16,6 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+/// <reference types="@emotion/jest" />
+import { supersetTheme } from '@apache-superset/core/theme';
 import {
   cleanup,
   render,
@@ -284,3 +286,15 @@ test.each(['ltr', 'rtl'] as const)(
     });
   },
 );
+
+test('tree node titles show a visible keyboard focus ring', () => {
+  const { container } = render(<FilterScopeSelector {...defaultProps} />, {
+    useRedux: true,
+  });
+
+  expect(container.querySelector('.filters-scope-selector')).toHaveStyleRule(
+    'outline',
+    `2px solid ${supersetTheme.colorPrimary}`,
+    { target: '.rct-node-clickable:focus-visible' },
+  );
+});

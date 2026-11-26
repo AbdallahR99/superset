@@ -41,7 +41,7 @@ import {
   getClientErrorObject,
   ensureIsArray,
 } from '@superset-ui/core';
-import Chart, { Slice } from 'src/types/Chart';
+import { Chart, Slice } from 'src/types/Chart';
 import { useAppDispatch } from 'src/views/store';
 import { saveSliceSuccess } from 'src/explore/actions/saveModalActions';
 import withToasts from 'src/components/MessageToasts/withToasts';

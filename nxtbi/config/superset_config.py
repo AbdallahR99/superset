@@ -175,6 +175,8 @@ AUTH_ROLES_SYNC_AT_LOGIN = True  # Keycloak groups are the source of truth on ev
 # this is set. Only the local service account has a password, so this opens exactly one
 # machine identity for REST automation; browsers still get Keycloak only.
 AUTH_API_LOGIN_ALLOW_MULTIPLE_PROVIDERS = True
+# Keep the branded sign-in screen, including after Keycloak ends the SSO session.
+OAUTH_AUTO_REDIRECT_SINGLE_PROVIDER = False
 OAUTH_PROVIDERS = [
     {
         "name": _KC_PROVIDER,

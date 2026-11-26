@@ -29,6 +29,11 @@ from superset.models.dashboard import Dashboard
 from superset.models.slice import Slice
 from superset.utils.core import get_user_id
 from superset.utils.dates import datetime_to_epoch, naive_utcnow
+from superset.utils.i18n import (
+    is_asset_translation_enabled,
+    translate,
+    translate_many,
+)
 
 
 class LogDAO(BaseDAO[Log]):
@@ -119,27 +124,59 @@ class LogDAO(BaseDAO[Log]):
                 .offset(page * page_size)
             )
 
-        qry = qry.options(
+        logs = qry.options(
             Load(Dashboard).load_only(
                 Dashboard.id,
                 Dashboard.slug,
                 Dashboard.dashboard_title,
                 Dashboard.json_metadata,
             )
-        )
+        ).all()
+
+        # Resolve the whole page's titles up front so the per-entry lookups
+        # below read from the request memo rather than calling the translation
+        # hook once per row. Gated so a disabled deployment does not pay for the
+        # extra passes over the page.
+        if is_asset_translation_enabled():
+            translate_many(
+                (
+                    log.Dashboard.dashboard_title
+                    for log in logs
+                    if log.Dashboard is not None
+                ),
+                model_name="Dashboard",
+                field_name="dashboard_title",
+            )
+            translate_many(
+                (
+                    log.slice_name
+                    for log in logs
+                    if log.Dashboard is None and log.slice_id
+                ),
+                model_name="Slice",
+                field_name="slice_name",
+            )
+
         payload = []
-        for log in qry.all():
+        for log in logs:
             item_url = None
             item_title = None
             item_type = None
-            if log.dashboard_id and log.Dashboard:
+            if log.Dashboard is not None:
                 item_type = "dashboard"
                 item_url = log.Dashboard.url
-                item_title = log.Dashboard.dashboard_title
+                item_title = log.Dashboard.localized_title
             elif log.slice_id:
                 item_type = "slice"
                 item_url = Slice.build_explore_url(log.slice_id)
-                item_title = log.slice_name or "<empty>"
+                item_title = (
+                    translate(
+                        log.slice_name,
+                        model_name="Slice",
+                        field_name="slice_name",
+                    )
+                    or "<empty>"
+                )
 
             payload.append(
                 {

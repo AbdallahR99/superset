@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-ARG SUPERSET_BASE_IMAGE=nxtbi/superset-fork:upstream-sync-6e54f477a0
+ARG SUPERSET_BASE_IMAGE=nxtbi/superset-fork:upstream-sync-2c58859901
 FROM ${SUPERSET_BASE_IMAGE} AS superset
 COPY --chown=superset:superset superset/copilot /app/superset/copilot
 COPY --chown=superset:superset superset/config.py /app/superset/config.py

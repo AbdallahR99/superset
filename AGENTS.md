@@ -2,6 +2,12 @@
 
 Apache Superset is a data visualization platform with Flask/Python backend and React/TypeScript frontend.
 
+## Parallel Engineering
+
+- For independent workstreams, use the local `conductor` skill when available. Read `context/README.md` before assigning NxtBI work. Split writes by owned paths or isolated worktrees, then refill available agent slots as tasks finish.
+- Keep one owner for the shared Git integration branch, dependency lockfiles, demo Docker stack, and final verification. Aim for one heavy frontend build at a time per shared Docker host. Test parallel branches with separate working directories and service resources.
+- Use worktree-specific ports or browser session names for isolated checks. Test the main demo at its configured URL so Keycloak and origin-sensitive behavior use the real settings. Preserve shared Keycloak and persistent demo data as documented in `context/README.md`.
+
 ## Run Pre-commit Before Pushing
 
 Always run pre-commit against the files changed by the current branch before

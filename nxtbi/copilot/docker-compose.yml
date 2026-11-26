@@ -20,7 +20,7 @@ x-copilot-superset-build: &copilot-superset-build
   context: ..
   dockerfile: nxtbi/copilot/superset.Dockerfile
   args:
-    SUPERSET_BASE_IMAGE: ${NXTBI_COPILOT_SUPERSET_BASE_IMAGE:-nxtbi/superset-fork:upstream-sync-6e54f477a0}
+    SUPERSET_BASE_IMAGE: ${NXTBI_COPILOT_SUPERSET_BASE_IMAGE:-nxtbi/superset-fork:upstream-sync-2c58859901}
 x-copilot-superset-environment: &copilot-superset-environment
   NXTBI_COPILOT_ENABLED: "true"
   NXTBI_COPILOT_AGENT_URL: http://copilot-agent:8100/ag-ui

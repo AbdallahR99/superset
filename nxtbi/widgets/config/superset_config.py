@@ -229,6 +229,9 @@ if NXTBI_WIDGETS_AUTH == "keycloak":
     _main = _load_main_demo_config()
     for _name in _KEYCLOAK_SETTINGS:
         globals()[_name] = getattr(_main, _name)
+    OAUTH_AUTO_REDIRECT_SINGLE_PROVIDER = getattr(
+        _main, "OAUTH_AUTO_REDIRECT_SINGLE_PROVIDER", False
+    )
     _log.info("authentication: Keycloak OIDC settings imported from the main demo")
 elif NXTBI_WIDGETS_AUTH == "db":
     AUTH_TYPE = AUTH_DB

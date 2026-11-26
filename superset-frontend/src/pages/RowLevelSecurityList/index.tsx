@@ -27,6 +27,7 @@ import {
 import {
   ModifiedInfo,
   ListView,
+  type ListViewColumn,
   ListViewFilterOperator as FilterOperator,
   type ListViewProps,
   type ListViewFilters,
@@ -136,18 +137,18 @@ function RowLevelSecurityList(props: RLSProps) {
   const canEdit = hasPerm('can_write');
   const canExport = hasPerm('can_export');
 
-  const columns = useMemo(
+  const columns = useMemo<ListViewColumn<RLSObject>[]>(
     () => [
       {
         accessor: 'name',
         Header: t('Name'),
-        size: 'xxl',
+        layout: 'title',
         id: 'name',
       },
       {
         accessor: 'filter_type',
         Header: t('Filter Type'),
-        size: 'lg',
+        layout: 'status',
         id: 'filter_type',
       },
       {
@@ -160,14 +161,14 @@ function RowLevelSecurityList(props: RLSProps) {
         }) => <SubjectPile subjects={subjectsList || []} />,
         Header: t('Subjects'),
         accessor: 'subjects',
-        size: 'xl',
+        layout: 'people',
         id: 'subjects',
         disableSortBy: true,
       },
       {
         accessor: 'group_key',
         Header: t('Group Key'),
-        size: 'lg',
+        layout: 'text',
         id: 'group_key',
       },
       {
@@ -182,7 +183,7 @@ function RowLevelSecurityList(props: RLSProps) {
         }) => <LtrIsolate as="bdi">{clause}</LtrIsolate>,
         accessor: 'clause',
         Header: t('Clause'),
-        size: 'xl',
+        layout: 'longtext',
         id: 'clause',
       },
       {
@@ -196,7 +197,7 @@ function RowLevelSecurityList(props: RLSProps) {
         }: any) => <ModifiedInfo date={changedOn} user={changedBy} />,
         Header: t('Last modified'),
         accessor: 'changed_on_delta_humanized',
-        size: 'xl',
+        layout: 'dateRelative',
         id: 'changed_on_delta_humanized',
       },
       {
@@ -256,7 +257,7 @@ function RowLevelSecurityList(props: RLSProps) {
         id: 'actions',
         hidden: !canEdit && !canWrite && !canExport,
         disableSortBy: true,
-        size: 'lg',
+        layout: 'actions',
       },
       {
         accessor: QueryObjectColumns.ChangedBy,
