@@ -29,6 +29,7 @@ import {
 import { views } from 'src/core/views';
 import DashboardProvider from './DashboardProvider';
 import { registerBuiltInWidgets } from './registerBuiltInWidgets';
+import { DashboardViewModeContext } from './viewMode';
 import WidgetView from './WidgetView';
 
 const mockSetOption = jest.fn();
@@ -122,6 +123,26 @@ test('a widget says which one it is', () => {
   expect(screen.getByTestId(`widget-title-${id}`)).toHaveTextContent(
     'Quarterly notes',
   );
+});
+
+test('the viewer exposes the visible widget title as a level-two heading', () => {
+  const id = provider.addWidget(provider.getRoot().id, 0, {
+    type: 'metric-tile',
+    props: { label: 'Quarterly notes' },
+  });
+  render(
+    <DashboardViewModeContext.Provider value="view">
+      <WidgetView nodeId={id} />
+    </DashboardViewModeContext.Provider>,
+  );
+
+  const heading = screen.getByRole('heading', {
+    name: 'Quarterly notes',
+    level: 2,
+  });
+  expect(heading).toBe(screen.getByTestId(`widget-title-${id}`));
+  expect(heading).toBeVisible();
+  expect(heading).toHaveStyle({ margin: '0px' });
 });
 
 test('the delete control does not have to be found first', () => {

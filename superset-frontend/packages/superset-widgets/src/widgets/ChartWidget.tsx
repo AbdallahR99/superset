@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as echarts from 'echarts/core';
 import type { EChartsCoreOption, ECharts } from 'echarts/core';
 import {
@@ -52,7 +52,8 @@ import {
 import { LabelLayout } from 'echarts/features';
 import { CanvasRenderer } from 'echarts/renderers';
 import { dashboard as dashboardApi } from '@apache-superset/core';
-import { LtrIsolate, useTheme } from '@apache-superset/core/theme';
+import { LtrIsolate, styled, useTheme } from '@apache-superset/core/theme';
+import { t } from '@apache-superset/core/translation';
 import type { QueryFormMetric } from '@superset-ui/core';
 import { Flex, Loading, Typography } from '@superset-ui/core/components';
 import { useWidgetBus } from '../bus';
@@ -74,6 +75,248 @@ import {
 const TYPE = 'echarts';
 
 type DataBindingSpec = dashboardApi.DataBindingSpec;
+interface ChartWidgetProps extends WidgetProps {
+  /** The host's displayed title after any dashboard content translation. */
+  accessibleTitle?: string;
+}
+
+const EMPTY_ROWS: dashboardApi.DataRow[] = [];
+
+const DataToggle = styled.button`
+  align-self: flex-end;
+  background: transparent;
+  border: 0;
+  border-radius: ${({ theme }) => theme.borderRadiusSM}px;
+  color: ${({ theme }) => theme.colorLink};
+  cursor: pointer;
+  flex: none;
+  font: inherit;
+  font-size: ${({ theme }) => theme.fontSizeSM}px;
+  min-height: 24px;
+  padding-inline: ${({ theme }) => theme.sizeSM}px;
+  text-decoration: underline;
+
+  &:focus-visible {
+    outline: 2px solid ${({ theme }) => theme.colorPrimary};
+    outline-offset: -2px;
+  }
+`;
+
+const TableScroll = styled.section`
+  box-sizing: border-box;
+  height: 100%;
+  overflow: auto;
+  padding-inline: ${({ theme }) => theme.sizeSM}px;
+
+  &:focus-visible {
+    outline: 2px solid ${({ theme }) => theme.colorPrimary};
+    outline-offset: -2px;
+  }
+
+  table {
+    border-collapse: separate;
+    border-spacing: 0;
+    inline-size: 100%;
+    font-size: ${({ theme }) => theme.fontSizeSM}px;
+  }
+
+  th,
+  td {
+    border-block-end: 1px solid ${({ theme }) => theme.colorBorderSecondary};
+    min-inline-size: 5ch;
+    overflow-wrap: anywhere;
+    padding: ${({ theme }) => theme.sizeXXS}px ${({ theme }) => theme.sizeXS}px;
+    text-align: start;
+  }
+
+  thead th {
+    background: ${({ theme }) => theme.colorBgContainer};
+    inset-block-start: 0;
+    position: sticky;
+    z-index: 1;
+  }
+
+  tbody th {
+    font-weight: inherit;
+  }
+
+  .chart-number {
+    white-space: nowrap;
+  }
+`;
+
+const visuallyHidden = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  overflow: 'hidden',
+  clipPath: 'inset(50%)',
+} as const;
+
+type ChartCell = string | number | boolean | null | undefined;
+
+interface ChartTableData {
+  headers: string[];
+  rows: ChartCell[][];
+  formatValue: (value: number) => string;
+  rowHeader?: 'category' | 'name';
+}
+
+function optionRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function firstOption(value: unknown) {
+  return optionRecord(Array.isArray(value) ? value[0] : value);
+}
+
+function chartText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function chartCell(value: unknown): ChartCell {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  return typeof value === 'string' || typeof value === 'boolean'
+    ? value
+    : undefined;
+}
+
+function pointValue(point: unknown) {
+  const entry = optionRecord(point);
+  return entry && 'value' in entry ? entry.value : point;
+}
+
+function chartValueFormatter(
+  valueAxis: Record<string, unknown> | undefined,
+  locale: string | undefined,
+) {
+  const template = optionRecord(valueAxis?.axisLabel)?.formatter;
+  const interval = valueAxis?.minInterval;
+  const precision =
+    typeof interval === 'number' && interval > 0 && interval <= 1
+      ? -Math.log10(interval)
+      : undefined;
+  const digits =
+    precision !== undefined && Number.isInteger(precision) && precision <= 10
+      ? precision
+      : undefined;
+  const isPercent = template === '{value}%' || template === '{value}٪';
+  const formatter = new Intl.NumberFormat(locale, {
+    style: isPercent ? 'percent' : 'decimal',
+    minimumFractionDigits: digits,
+    maximumFractionDigits: isPercent ? (digits ?? 15) : 15,
+  });
+  return (value: number) => {
+    const formatted = formatter.format(isPercent ? value / 100 : value);
+    return template === '${value}' ? `$${formatted}` : formatted;
+  };
+}
+
+function chartTable(
+  option: Record<string, unknown>,
+  binding: DataBindingSpec | undefined,
+  locale: string | undefined,
+): ChartTableData | undefined {
+  const xAxis = firstOption(option.xAxis);
+  const yAxis = firstOption(option.yAxis);
+  const categoryOnY = yAxis?.type === 'category';
+  const categoryAxis = categoryOnY ? yAxis : xAxis;
+  const valueAxis = categoryOnY ? xAxis : yAxis;
+  const authoredSeries = Array.isArray(option.series)
+    ? option.series
+    : [option.series];
+  const series = authoredSeries
+    .map(optionRecord)
+    .filter((item): item is Record<string, unknown> & { data: unknown[] } =>
+      Array.isArray(item?.data),
+    );
+
+  // A dataset-backed series can share the option with explicitly authored
+  // points. Showing just those points would omit part of the chart.
+  if (!series.length || series.length !== authoredSeries.length)
+    return undefined;
+
+  const categories = categoryAxis?.data;
+  if (
+    categoryAxis &&
+    Array.isArray(categories) &&
+    (categoryAxis.type === undefined || categoryAxis.type === 'category') &&
+    valueAxis?.type !== 'category' &&
+    [option.xAxis, option.yAxis].every(
+      axis => !Array.isArray(axis) || axis.length === 1,
+    ) &&
+    series.every(
+      item =>
+        (item.type === 'bar' ||
+          item.type === 'line' ||
+          item.type === 'scatter') &&
+        (item.xAxisIndex ?? 0) === 0 &&
+        (item.yAxisIndex ?? 0) === 0 &&
+        item.xAxisId === undefined &&
+        item.yAxisId === undefined &&
+        item.encode === undefined &&
+        (item.coordinateSystem === undefined ||
+          item.coordinateSystem === 'cartesian2d') &&
+        item.data.length <= categories.length &&
+        item.data.every(point => {
+          const value = pointValue(point);
+          return value == null || chartCell(value) !== undefined;
+        }),
+    )
+  ) {
+    return {
+      headers: [
+        chartText(categoryAxis.name) ||
+          binding?.dimensions?.[0] ||
+          t('Category'),
+        ...series.map(
+          (item, index) =>
+            chartText(item.name) ||
+            (series.length === 1 ? chartText(valueAxis?.name) : '') ||
+            (typeof binding?.metrics?.[index] === 'string'
+              ? binding.metrics[index]
+              : '') ||
+            (series.length === 1 ? t('Value') : `${t('Series')} ${index + 1}`),
+        ),
+      ],
+      rows: series.some(item => item.data.length)
+        ? categories.map((category, index) => [
+            chartCell(pointValue(category)),
+            ...series.map(item => chartCell(pointValue(item.data[index]))),
+          ])
+        : [],
+      formatValue: chartValueFormatter(valueAxis, locale),
+      rowHeader: 'category',
+    };
+  }
+
+  if (series.length === 1) {
+    const [item] = series;
+    if (
+      item.type === 'pie' ||
+      item.type === 'funnel' ||
+      item.type === 'gauge'
+    ) {
+      return {
+        headers: [t('Name'), chartText(item.name) || t('Value')],
+        rows: item.data.map((point, index) => {
+          const entry = optionRecord(point);
+          return [
+            chartCell(entry?.name) ?? index + 1,
+            chartCell(pointValue(point)),
+          ];
+        }),
+        formatValue: chartValueFormatter(undefined, locale),
+        rowHeader: 'name',
+      };
+    }
+  }
+  return undefined;
+}
 
 /** The one field of ECharts' own click-event payload this widget reads — a data point's category/name, exactly what a bar/pie/etc. click carries for a categorical series. */
 interface EchartsClickParams {
@@ -271,11 +514,15 @@ function EchartsCanvas({
  * `echarts` widget with `crossFilter` unset behaves exactly as it always
  * has; this is additive, not a mode switch.
  */
-export default function ChartWidget(widgetProps: WidgetProps) {
-  const { instanceId, props } = widgetProps;
+export default function ChartWidget(widgetProps: ChartWidgetProps) {
+  const { accessibleTitle, instanceId, props } = widgetProps;
   const bus = useWidgetBus();
   const theme = useTheme();
   const [containerRef, size] = useElementSize();
+  const contentId = useId();
+  const captionId = useId();
+  const [showTable, setShowTable] = useState(false);
+  const dataBinding = props.dataBinding as DataBindingSpec | undefined;
   // Fetches for the binding and the filters that apply to this widget, and
   // re-renders it on every bus emit (see `useWidgetData`).
   const data = useWidgetData(
@@ -283,10 +530,7 @@ export default function ChartWidget(widgetProps: WidgetProps) {
     widgetProps,
     'This chart widget has no dataBinding.',
   );
-  const rows = data.result?.rows ?? null;
-  const { error } = data;
-
-  const dataBinding = props.dataBinding as DataBindingSpec | undefined;
+  const rows = dataBinding ? data.result?.rows : EMPTY_ROWS;
 
   // Cross-filtering: opt-in (see `props.crossFilter`) and, for this
   // prototype, scoped to the *first* dimension only — a data point from a
@@ -298,6 +542,10 @@ export default function ChartWidget(widgetProps: WidgetProps) {
   const crossFilterColumn = dataBinding?.dimensions?.[0];
   const crossFilterEnabled =
     Boolean(props.crossFilter) && crossFilterColumn !== undefined;
+  const currentSelection = bus.getValue(
+    instanceId,
+    dashboardApi.VALUE_CHANGED_EVENT,
+  ) as FilterValueChangedPayload | undefined;
 
   const handlePointClick = (params: EchartsClickParams) => {
     if (!crossFilterEnabled || !crossFilterColumn || !dataBinding) return;
@@ -340,13 +588,20 @@ export default function ChartWidget(widgetProps: WidgetProps) {
       | undefined
   )?.series;
   const chrome = props.chrome as EchartsChromeValue | undefined;
+  const authoredOption = props.echartsOptions as
+    | Record<string, unknown>
+    | undefined;
+  const title =
+    chartText(accessibleTitle) ||
+    chartText(chrome?.titleText) ||
+    chartText(firstOption(authoredOption?.title)?.text) ||
+    t('Chart');
+  const locale =
+    globalThis.document?.documentElement.lang.replaceAll('_', '-') || undefined;
 
   const option = useMemo(() => {
     if (!rows) return undefined;
-    const resolved = resolveBindings(
-      (props.echartsOptions as Record<string, unknown>) ?? {},
-      { rows, theme },
-    );
+    const resolved = resolveBindings(authoredOption ?? {}, { rows, theme });
     const withStructuredSeries = applyStructuredEchartsSeries(
       resolved,
       chartType,
@@ -367,7 +622,7 @@ export default function ChartWidget(widgetProps: WidgetProps) {
     // Last, on the finished option: nothing after this adds authored values.
     return sanitizeEchartsOption(withDefaultGrid(withoutTitle));
   }, [
-    props.echartsOptions,
+    authoredOption,
     chartType,
     customizeSeries,
     chrome,
@@ -376,9 +631,36 @@ export default function ChartWidget(widgetProps: WidgetProps) {
     theme,
   ]);
 
+  const table = useMemo<ChartTableData | undefined>(() => {
+    if (!option) return undefined;
+    const plotted = chartTable(option, dataBinding, locale);
+    if (plotted) return plotted;
+
+    // Unstructured options can have a more complex shape (e.g. scatter).
+    // The authorized query result still gives readers the source values.
+    // Structured series omit explicitly hidden metrics in the plotted view.
+    const { result } = data;
+    if (chartType || !result?.columns?.length) return undefined;
+    return {
+      headers: result.columns,
+      rows: result.rows.map(row =>
+        result.columns.map(column => chartCell(row[column])),
+      ),
+      formatValue: chartValueFormatter(undefined, locale),
+    };
+  }, [chartType, data.result, dataBinding, locale, option]);
+  const error = dataBinding || !table?.rows.length ? data.error : undefined;
+  const canInspect = !error && table !== undefined;
+  const filterValues =
+    showTable &&
+    table?.rowHeader === 'category' &&
+    crossFilterEnabled &&
+    crossFilterColumn
+      ? new Set(rows?.map(row => row[crossFilterColumn]))
+      : undefined;
+
   return (
     <div
-      ref={containerRef}
       data-test={`chart-${instanceId}`}
       // `WidgetView`'s own root has an onClick that selects this widget on
       // *any* click inside it, native-DOM-bubbling up to it regardless of
@@ -422,38 +704,137 @@ export default function ChartWidget(widgetProps: WidgetProps) {
         // draws around this widget and the name above it, so that the name is
         // inside the frame rather than over it.
         overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      {error && (
-        <Flex
-          align="center"
-          justify="center"
-          style={{ width: '100%', height: '100%' }}
+      {canInspect && (
+        <DataToggle
+          type="button"
+          aria-expanded={showTable}
+          aria-controls={contentId}
+          aria-describedby={captionId}
+          data-widget-interactive
+          onClick={event => {
+            event.stopPropagation();
+            setShowTable(open => !open);
+          }}
         >
-          <Typography.Text type="danger">{error}</Typography.Text>
-        </Flex>
+          {t('View as table')}
+        </DataToggle>
       )}
-      {!error && !option && (
-        <Flex
-          align="center"
-          justify="center"
-          style={{ width: '100%', height: '100%' }}
-        >
-          <Loading position="inline-centered" size="s" />
-        </Flex>
-      )}
-      {!error && option && size.width > 0 && size.height > 0 && (
-        // A chart is drawn left to right in every locale, as in the rest of
-        // Superset: axes, legends and tooltips keep their physical layout.
-        <LtrIsolate>
-          <EchartsCanvas
-            width={size.width}
-            height={size.height}
-            option={option}
-            onPointClick={handlePointClick}
-          />
-        </LtrIsolate>
-      )}
+      <span id={captionId} style={visuallyHidden}>
+        {title}
+      </span>
+      <div
+        ref={containerRef}
+        id={contentId}
+        style={{ flex: '1 1 0', minHeight: 0, minWidth: 0, overflow: 'hidden' }}
+      >
+        {error && (
+          <Flex align="center" justify="center" style={{ height: '100%' }}>
+            <Typography.Text type="danger">{error}</Typography.Text>
+          </Flex>
+        )}
+        {!error && !option && (
+          <Flex align="center" justify="center" style={{ height: '100%' }}>
+            <Loading position="inline-centered" size="s" />
+          </Flex>
+        )}
+        {!error && option && size.width > 0 && size.height > 0 && (
+          <div hidden={canInspect && showTable}>
+            {/* Axes, legends and tooltips keep their physical layout. */}
+            <LtrIsolate>
+              <EchartsCanvas
+                width={size.width}
+                height={size.height}
+                option={option}
+                onPointClick={handlePointClick}
+              />
+            </LtrIsolate>
+          </div>
+        )}
+        {canInspect && showTable && (
+          <TableScroll
+            aria-labelledby={captionId}
+            tabIndex={table.rows.length ? 0 : undefined}
+            data-widget-interactive
+          >
+            {table.rows.length === 0 ? (
+              <output>{t('No data')}</output>
+            ) : (
+              <table>
+                <caption style={visuallyHidden}>{title}</caption>
+                <thead>
+                  <tr>
+                    {table.headers.map((header, index) => (
+                      <th scope="col" key={`${index}-${header}`}>
+                        <bdi>{header}</bdi>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {table.rows.map((row, rowIndex) => (
+                    // Some series have repeated categories and no point IDs.
+                    // eslint-disable-next-line react/no-array-index-key
+                    <tr key={rowIndex}>
+                      {row.map((value, index) => {
+                        const isRowHeader = index === 0 && table.rowHeader;
+                        const isNumber = typeof value === 'number';
+                        const cell = isNumber
+                          ? isRowHeader
+                            ? String(value)
+                            : table.formatValue(value)
+                          : value == null
+                            ? t('N/A')
+                            : String(value);
+                        const content = (
+                          <bdi
+                            className={isNumber ? 'chart-number' : undefined}
+                          >
+                            {cell}
+                          </bdi>
+                        );
+                        if (isRowHeader) {
+                          return (
+                            <th scope="row" key={table.headers[index]}>
+                              {typeof value === 'string' &&
+                              filterValues?.has(value) ? (
+                                <DataToggle
+                                  type="button"
+                                  title={t('Filter by')}
+                                  aria-pressed={
+                                    currentSelection?.resolved?.column ===
+                                      crossFilterColumn &&
+                                    currentSelection?.resolved?.value === value
+                                  }
+                                  onClick={() =>
+                                    handlePointClick({ name: value })
+                                  }
+                                >
+                                  {content}
+                                </DataToggle>
+                              ) : (
+                                content
+                              )}
+                            </th>
+                          );
+                        }
+                        return (
+                          <td key={`${index}-${table.headers[index]}`}>
+                            {content}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </TableScroll>
+        )}
+      </div>
     </div>
   );
 }

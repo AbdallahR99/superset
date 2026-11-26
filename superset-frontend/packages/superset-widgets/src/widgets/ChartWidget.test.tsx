@@ -17,7 +17,13 @@
  * under the License.
  */
 import { dashboard as dashboardApi } from '@apache-superset/core';
-import { fireEvent, render, waitFor } from 'spec/helpers/testing-library';
+import {
+  fireEvent,
+  render,
+  userEvent,
+  waitFor,
+  within,
+} from 'spec/helpers/testing-library';
 import { WidgetBusContext, createWidgetBus } from '../bus';
 import { WidgetDataClientContext } from '../dataClient';
 import type { WidgetBus, WidgetDataClient } from '../types';
@@ -71,11 +77,20 @@ beforeEach(() => {
 
 const INSTANCE = 'chart_1';
 
-const renderChart = (props: Record<string, unknown>, savedId?: string) =>
+const renderChart = (
+  props: Record<string, unknown>,
+  savedId?: string,
+  accessibleTitle?: string,
+) =>
   render(
     <WidgetBusContext.Provider value={bus}>
       <WidgetDataClientContext.Provider value={client}>
-        <ChartWidget instanceId={INSTANCE} props={props} savedId={savedId} />
+        <ChartWidget
+          instanceId={INSTANCE}
+          props={props}
+          savedId={savedId}
+          accessibleTitle={accessibleTitle}
+        />
       </WidgetDataClientContext.Provider>
     </WidgetBusContext.Provider>,
   );
@@ -170,6 +185,140 @@ test('an existing raw-only echarts widget (no chartType) renders exactly as befo
   expect(option.legend).toEqual({ show: true });
 });
 
+test('keyboard users can inspect named, formatted chart values without another query', async () => {
+  const user = userEvent.setup();
+  fetchData.mockResolvedValue({
+    columns: ['period', 'rate'],
+    rows: [
+      { period: Date.UTC(2026, 0, 1), rate: 0.37 },
+      { period: Date.UTC(2026, 1, 1), rate: null },
+    ],
+  });
+  const { findByRole, queryByRole } = renderChart({
+    dataBinding: { datasetId: 1, dimensions: ['period'], metrics: ['rate'] },
+    echartsOptions: {
+      title: { text: 'Monthly returns' },
+      xAxis: {
+        type: 'category',
+        name: 'Month',
+        data: {
+          $bind: { source: 'dimension', alias: 'period', format: 'date' },
+        },
+      },
+      yAxis: { minInterval: 0.1, axisLabel: { formatter: '{value}%' } },
+      series: [
+        {
+          name: 'Return rate',
+          type: 'line',
+          data: {
+            $bind: { source: 'metric', alias: 'rate', format: 'percent' },
+          },
+        },
+      ],
+    },
+  });
+
+  const toggle = await findByRole('button', { name: 'View as table' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(queryByRole('table')).not.toBeInTheDocument();
+  await user.tab();
+  expect(toggle).toHaveFocus();
+  await user.keyboard('{Enter}');
+
+  const table = await findByRole('table', { name: 'Monthly returns' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  expect(
+    within(table).getByRole('columnheader', { name: 'Month' }),
+  ).toBeVisible();
+  expect(
+    within(table).getByRole('columnheader', { name: 'Return rate' }),
+  ).toBeVisible();
+  expect(
+    within(table).getByRole('rowheader', { name: '2026-01-01' }),
+  ).toBeVisible();
+  expect(within(table).getByRole('cell', { name: '37.0%' })).toBeVisible();
+  expect(within(table).getByRole('cell', { name: 'N/A' })).toBeVisible();
+  await user.tab();
+  expect(await findByRole('region', { name: 'Monthly returns' })).toHaveFocus();
+  await user.tab({ shift: true });
+  await user.keyboard(' ');
+  expect(queryByRole('table')).not.toBeInTheDocument();
+  expect(toggle).toHaveFocus();
+  expect(fetchData).toHaveBeenCalledTimes(1);
+});
+
+test('the table shows inline pie data without a query binding', async () => {
+  const { findByRole } = renderChart(
+    {
+      echartsOptions: {
+        title: { text: 'Permit regions' },
+        series: { type: 'pie', data: [{ name: 'Central', value: 0 }] },
+      },
+    },
+    undefined,
+    'مناطق التصاريح',
+  );
+  await userEvent.click(await findByRole('button', { name: 'View as table' }));
+  const table = await findByRole('table', { name: 'مناطق التصاريح' });
+  expect(
+    within(table).getByRole('rowheader', { name: 'Central' }),
+  ).toBeVisible();
+  expect(within(table).getByRole('cell', { name: '0' })).toBeVisible();
+  expect(fetchData).not.toHaveBeenCalled();
+});
+
+test('the data view reports a settled empty result', async () => {
+  fetchData.mockResolvedValue({ columns: ['x', 'y'], rows: [] });
+  const { findByRole, findByText, queryByRole } = renderChart({
+    dataBinding: { datasetId: 1, dimensions: ['x'], metrics: ['y'] },
+    echartsOptions: {
+      xAxis: {
+        type: 'category',
+        data: { $bind: { source: 'dimension', alias: 'x' } },
+      },
+      series: [
+        { type: 'bar', data: { $bind: { source: 'metric', alias: 'y' } } },
+      ],
+    },
+  });
+  await userEvent.click(await findByRole('button', { name: 'View as table' }));
+  expect(await findByText('No data')).toBeVisible();
+  expect(queryByRole('table')).not.toBeInTheDocument();
+});
+
+test('mixed chart series use query rows instead of a partial plotted table', async () => {
+  fetchData.mockResolvedValue({
+    columns: ['territory', 'total'],
+    rows: [{ territory: 'Authorized territory', total: 12 }],
+  });
+  const { findByRole } = renderChart({
+    dataBinding: {
+      datasetId: 1,
+      dimensions: ['territory'],
+      metrics: ['total'],
+    },
+    echartsOptions: {
+      xAxis: [
+        { type: 'category', data: ['First'] },
+        { type: 'category', data: ['Second'] },
+      ],
+      yAxis: { type: 'value' },
+      series: [
+        { type: 'bar', xAxisIndex: 1, data: [120] },
+        { type: 'line', datasetIndex: 0 },
+      ],
+    },
+  });
+  await userEvent.click(await findByRole('button', { name: 'View as table' }));
+  const table = await findByRole('table');
+  expect(
+    within(table).getByRole('cell', { name: 'Authorized territory' }),
+  ).toBeVisible();
+  expect(within(table).getByRole('cell', { name: '12' })).toBeVisible();
+  expect(within(table).queryByText('First')).not.toBeInTheDocument();
+  expect(fetchData).toHaveBeenCalledTimes(1);
+});
+
 test('selecting a structured chart type replaces series with one generated per metric', async () => {
   fetchData.mockResolvedValue({
     columns: ['count'],
@@ -230,6 +379,53 @@ const crossFilterProps = (crossFilter: boolean | undefined) => ({
   crossFilter,
   dataBinding: { datasetId: DATASET_ID, dimensions: ['region'], metrics: [] },
   echartsOptions: { series: [{ type: 'bar' }] },
+});
+
+test('the horizontal bar table toggles the same cross-filter by keyboard', async () => {
+  const user = userEvent.setup();
+  fetchData.mockResolvedValue({
+    columns: ['region', 'total'],
+    rows: [{ region: 'west', total: 3 }],
+  });
+  const { findByRole } = renderChart({
+    ...crossFilterProps(true),
+    echartsOptions: {
+      yAxis: {
+        type: 'category',
+        data: { $bind: { source: 'dimension', alias: 'region' } },
+      },
+      xAxis: { type: 'value' },
+      series: [
+        {
+          name: 'Total',
+          type: 'bar',
+          data: { $bind: { source: 'metric', alias: 'total' } },
+        },
+      ],
+    },
+  });
+  await findByRole('button', { name: 'View as table' });
+  await user.tab();
+  await user.keyboard('{Enter}');
+  const category = await findByRole('button', { name: 'west' });
+  expect(category).toHaveAttribute('aria-pressed', 'false');
+  await user.tab();
+  await user.tab();
+  expect(category).toHaveFocus();
+  await user.keyboard('{Enter}');
+  expect(category).toHaveAttribute('aria-pressed', 'true');
+  expect(
+    bus.getValue(INSTANCE, dashboardApi.VALUE_CHANGED_EVENT),
+  ).toMatchObject({
+    selection: 'west',
+    resolved: { column: 'region', value: 'west', datasource: DATASET_ID },
+  });
+  await user.keyboard('{Enter}');
+  expect(category).toHaveAttribute('aria-pressed', 'false');
+  expect(bus.getValue(INSTANCE, dashboardApi.VALUE_CHANGED_EVENT)).toEqual({
+    selection: null,
+    resolved: null,
+  });
 });
 
 test('clicking a data point does nothing when crossFilter is not enabled', async () => {

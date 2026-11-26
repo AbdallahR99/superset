@@ -26,6 +26,7 @@ import { WidgetApplySourceContext } from '@apache-superset/widgets/deferredApply
 import { getWidgetComponent } from '@apache-superset/widgets/registry';
 import { useDashboardRevision, useDashboardStore } from './store';
 import { useDashboardLocalizedText } from './localizedText';
+import { authoredWidgetLabel, widgetLabel } from './widgetLabel';
 
 const EMPTY_PROPS: Record<string, unknown> = {};
 
@@ -43,10 +44,20 @@ export function createNodeWidget(
     const node = store.getNode(nodeId);
     const WidgetComponent = getWidgetComponent(type);
     const props = node?.props ?? EMPTY_PROPS;
-    const label = type === 'metric-tile' ? props.label : undefined;
+    const label =
+      type === 'metric-tile'
+        ? props.label
+        : type === 'echarts' && node
+          ? widgetLabel(type, props)
+          : undefined;
     const localizedLabel = useDashboardLocalizedText(
       typeof label === 'string' ? label : '',
       nodeId,
+      type === 'echarts'
+        ? authoredWidgetLabel(type, props)
+        : typeof label === 'string'
+          ? label
+          : null,
     );
     if (!node || !WidgetComponent) return null;
 
@@ -55,19 +66,22 @@ export function createNodeWidget(
       parentId !== undefined && store.getNode(parentId)?.type === 'filter.bar'
         ? parentId
         : undefined;
+    const widgetProps = {
+      instanceId: nodeId,
+      props:
+        type === 'metric-tile' &&
+        typeof label === 'string' &&
+        localizedLabel !== label
+          ? { ...props, label: localizedLabel }
+          : props,
+      ...(type === 'echarts' ? { accessibleTitle: localizedLabel } : {}),
+    };
 
     return (
       <WidgetBusContext.Provider value={store}>
         <WidgetDataClientContext.Provider value={sessionDataClient}>
           <WidgetApplySourceContext.Provider value={applySourceId}>
-            <WidgetComponent
-              instanceId={nodeId}
-              props={
-                typeof label === 'string' && localizedLabel !== label
-                  ? { ...props, label: localizedLabel }
-                  : props
-              }
-            />
+            <WidgetComponent {...widgetProps} />
           </WidgetApplySourceContext.Provider>
         </WidgetDataClientContext.Provider>
       </WidgetBusContext.Provider>

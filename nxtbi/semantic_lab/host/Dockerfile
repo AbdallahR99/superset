@@ -27,6 +27,7 @@ COPY superset-frontend/src/core/dashboard/EmbedWidgetModal.tsx src/core/dashboar
 COPY superset-frontend/src/core/dashboard/StaticGrid.tsx src/core/dashboard/StaticGrid.tsx
 COPY superset-frontend/src/core/dashboard/WidgetView.tsx src/core/dashboard/WidgetView.tsx
 COPY superset-frontend/src/core/dashboard/layoutStyle.ts src/core/dashboard/layoutStyle.ts
+COPY superset-frontend/src/core/dashboard/nodeWidgets.tsx src/core/dashboard/nodeWidgets.tsx
 COPY superset-frontend/src/core/dashboard/widgetLabel.ts src/core/dashboard/widgetLabel.ts
 COPY superset-frontend/src/features/home/RightMenu.tsx src/features/home/RightMenu.tsx
 COPY superset-frontend/src/pages/DashboardBuilderV2/DashboardHeader.tsx src/pages/DashboardBuilderV2/DashboardHeader.tsx

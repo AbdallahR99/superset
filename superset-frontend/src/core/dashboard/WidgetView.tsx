@@ -144,11 +144,26 @@ const BlockHeader = styled.div`
     @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
       block-size: auto;
       min-block-size: ${theme.controlHeightSM}px;
+    }
+  `}
+`;
 
-      > [data-test^='widget-title-'] {
-        white-space: normal;
-        overflow-wrap: anywhere;
-      }
+const BlockTitle = styled.span`
+  ${({ theme }) => css`
+    flex: 1 1 auto;
+    max-inline-size: 100%;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: ${theme.fontSize}px;
+    font-weight: ${theme.fontWeightStrong};
+    line-height: ${theme.lineHeight};
+    color: ${theme.colorText};
+
+    @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
   `}
 `;
@@ -619,24 +634,13 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
 
             return hasTitle ? (
               <BlockHeader data-test={`widget-header-${nodeId}`}>
-                <Typography.Text
-                  ellipsis
+                <BlockTitle
+                  as={editable ? 'span' : 'h2'}
                   dir="auto"
                   data-test={`widget-title-${nodeId}`}
-                  style={{
-                    flex: '1 1 auto',
-                    // The name of the thing below it, not a note about it. At the
-                    // small size in the secondary colour it read as a caption
-                    // hanging over the widget — and this is the first thing anyone
-                    // scanning a canvas uses to tell one widget from the next, so
-                    // it is drawn at the weight that job deserves.
-                    fontSize: theme.fontSize,
-                    fontWeight: theme.fontWeightStrong,
-                    color: theme.colorText,
-                  }}
                 >
                   {label}
-                </Typography.Text>
+                </BlockTitle>
                 {editable && (
                   <HeaderTrailingControls>
                     {trailingControls}
