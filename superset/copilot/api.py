@@ -40,6 +40,7 @@ from superset.commands.widget.exceptions import (
     SavedWidgetNotFoundError,
 )
 from superset.commands.widget.saved import GetSavedWidgetCommand
+from superset.copilot.classic import create_classic_dashboard
 from superset.copilot.contracts import (
     AggregateArguments,
     APPROVAL_AUDIENCE,
@@ -64,6 +65,7 @@ from superset.copilot.services import (
     profile_dataset,
     read_metadata,
     validate_dashboard_proposal,
+    validate_proposal_references,
 )
 from superset.copilot.upload import CSV_MAX_BYTES, CSVUploadError, upload_csv_dataset
 from superset.dashboard_v2.document import DocumentValidationError, parse_strict_json
@@ -128,7 +130,7 @@ def _secret() -> str:
 
 
 def _require_widgets() -> None:
-    """Dashboard proposal and approval are available only with Dashboard V2."""
+    """Require the feature flag for saved widgets and V2 proposals."""
     if not is_feature_enabled("DASHBOARD_V2"):
         abort(404)
 
@@ -163,6 +165,29 @@ def _tool_actor() -> User:
     return cast("User", user)
 
 
+def _preview_dashboard(arguments: dict[str, Any], user_id: int) -> Response:
+    """Validate one proposal and bind its format to the approval capability."""
+    proposal = DashboardProposal.model_validate(arguments)
+    if proposal.dashboard_type == "v2":
+        _require_widgets()
+        validate_dashboard_proposal(proposal)
+    else:
+        validate_proposal_references(proposal)
+    return jsonify(
+        **proposal.model_dump(by_alias=True, exclude_none=True, exclude_unset=True),
+        approvalToken=sign_claims(
+            _secret(),
+            {
+                "aud": APPROVAL_AUDIENCE,
+                "sub": str(user_id),
+                "exp": int(time.time()) + APPROVAL_TTL,
+                "uuid": str(uuid4()),
+                "dashboard_type": proposal.dashboard_type,
+            },
+        ),
+    )
+
+
 def _internal_tools() -> Response:
     """Run a narrow operation for the current permissions of a verified actor."""
     user = _tool_actor()
@@ -189,21 +214,7 @@ def _internal_tools() -> Response:
                 return jsonify(id=ref)
             if call.name != "propose_dashboard":
                 return jsonify(read_metadata(user, call))
-            _require_widgets()
-            proposal = DashboardProposal.model_validate(call.arguments)
-            validate_dashboard_proposal(proposal)
-            return jsonify(
-                **proposal.model_dump(by_alias=True, exclude_none=True),
-                approvalToken=sign_claims(
-                    _secret(),
-                    {
-                        "aud": APPROVAL_AUDIENCE,
-                        "sub": str(user.id),
-                        "exp": int(time.time()) + APPROVAL_TTL,
-                        "uuid": str(uuid4()),
-                    },
-                ),
-            )
+            return _preview_dashboard(call.arguments, user.id)
     except (CopilotAccessError, SupersetSecurityException):
         abort(403)
     except (ValidationError, CommandException, ValueError):
@@ -386,7 +397,6 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
     @protect()
     def approve(self) -> Response:
         """Validate a confirmed proposal and create the dashboard exactly once."""
-        _require_widgets()
         user = _actor()
         try:
             proposal = DashboardApproval.model_validate(_body())
@@ -396,23 +406,36 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
             claims = verify_claims(
                 _secret(), proposal.approval_token, APPROVAL_AUDIENCE, APPROVAL_TTL
             )
-            if claims["sub"] != str(user.id):
+            if (
+                claims["sub"] != str(user.id)
+                or claims.get("dashboard_type", "v2") != proposal.dashboard_type
+            ):
                 raise ValueError
             approval_uuid = UUID(claims["uuid"])
         except (KeyError, ValueError):
             return self.response(
                 403, message="This dashboard approval has expired or is unavailable."
             )
+        if proposal.dashboard_type == "v2":
+            _require_widgets()
         try:
-            document = validate_dashboard_proposal(proposal)
-            command = CreateDashboardV2Command(
-                {
-                    "dashboard_title": proposal.title,
-                    "document": document,
-                    "uuid": approval_uuid,
-                }
-            )
-            saved = command.run()
+            if proposal.dashboard_type == "v1":
+                dashboard_id, created = create_classic_dashboard(
+                    proposal, approval_uuid, validate_proposal_references(proposal)
+                )
+                url = f"/dashboard/{dashboard_id}/"
+            else:
+                document = validate_dashboard_proposal(proposal)
+                command = CreateDashboardV2Command(
+                    {
+                        "dashboard_title": proposal.title,
+                        "document": document,
+                        "uuid": approval_uuid,
+                    }
+                )
+                dashboard_id = command.run()["id"]
+                created = command.created
+                url = f"/dashboard/v2/{dashboard_id}/"
         except (CopilotAccessError, SupersetSecurityException):
             return self.response(403, message="You cannot save this dashboard.")
         except CommandException as err:
@@ -422,9 +445,9 @@ class NxtbiCopilotRestApi(BaseSupersetApi):
                 422, message="Check the dashboard's dataset selections."
             )
         return self.response(
-            201 if command.created else 200,
-            id=saved["id"],
-            url=f"/dashboard/v2/{saved['id']}/",
+            201 if created else 200,
+            id=dashboard_id,
+            url=url,
         )
 
 

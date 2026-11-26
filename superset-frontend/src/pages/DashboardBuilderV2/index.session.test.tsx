@@ -31,6 +31,7 @@ import DashboardBuilderV2 from '.';
 registerBuiltInWidgets();
 
 const provider = DashboardProvider.getInstance();
+const originalLanguage = document.documentElement.lang;
 
 const NEW = '/dashboard/v2/new/';
 const pathOf = (id: number | string): string => `/dashboard/v2/${id}/`;
@@ -78,7 +79,7 @@ type RouterHistory = ReturnType<typeof useHistory>;
  * router's own kind, the one `history.block` behaves on as it does in the
  * app.
  */
-const renderAt = (path: string): RouterHistory => {
+const renderAt = (path: string, direction?: 'ltr' | 'rtl'): RouterHistory => {
   const captured: { history?: RouterHistory } = {};
   const Capture = () => {
     captured.history = useHistory();
@@ -99,7 +100,7 @@ const renderAt = (path: string): RouterHistory => {
         </Route>
       </Switch>
     </MemoryRouter>,
-    { useRedux: true },
+    { useRedux: true, direction },
   );
   if (!captured.history) throw new Error('the router did not render');
   return captured.history;
@@ -124,6 +125,64 @@ beforeEach(() => {
 
 afterEach(() => {
   fetchMock.clearHistory().removeRoutes();
+  document.documentElement.lang = originalLanguage;
+});
+
+test('a localized dashboard shows translated names in view and canonical names in edit', async () => {
+  document.documentElement.lang = 'ar-SA';
+  const nodes: Record<string, DocumentNode> = {
+    root: {
+      type: 'grid',
+      children: ['widget_1'],
+      props: {
+        nxtbiLocalization: {
+          sourceLocale: 'en',
+          title: { source: 'Dashboard 5', translations: { ar: 'المبيعات' } },
+          widgets: {
+            widget_1: {
+              source: 'Net  revenue',
+              translations: { ar: 'صافي الإيرادات' },
+            },
+          },
+        },
+      },
+    },
+    widget_1: { type: 'ag-grid-table', props: { label: 'Net  revenue' } },
+  };
+  fetchMock.get('glob:*/api/v1/dashboard_v2/5', {
+    result: { ...row(5, 2, nodes), can_edit: true },
+  });
+
+  renderAt(pathOf(5), 'rtl');
+
+  expect(await screen.findByTestId('static-grid')).toBeInTheDocument();
+  expect(screen.getByTestId('canvas').closest('[dir]')).toHaveAttribute(
+    'dir',
+    'rtl',
+  );
+  expect(screen.getByTestId('header-title')).toHaveTextContent('المبيعات');
+  expect(screen.getByText('صافي الإيرادات')).toBeInTheDocument();
+  expect(screen.queryByTestId('editor-panel')).not.toBeInTheDocument();
+  expect(provider.getNode('widget_1')?.props?.label).toBe('Net  revenue');
+
+  await userEvent.click(screen.getByTestId('header-toggle-edit'));
+
+  expect(screen.getByTestId('editor-panel')).toBeInTheDocument();
+  expect(screen.getByTestId('header-title')).toHaveValue('Dashboard 5');
+  expect(screen.getByText('Net revenue')).toBeInTheDocument();
+  act(() => {
+    provider.updateProps('widget_1', { label: 'Net revenue' });
+    provider.updateProps('root', { title: 'Executive dashboard' });
+  });
+
+  await userEvent.click(screen.getByTestId('header-toggle-edit'));
+
+  expect(screen.getByText('Net revenue')).toBeInTheDocument();
+  expect(screen.getByTestId('header-title')).toHaveTextContent(
+    'Executive dashboard',
+  );
+  expect(screen.queryByText('صافي الإيرادات')).not.toBeInTheDocument();
+  expect(requestsTo('PUT')).toBe(0);
 });
 
 test('a saved dashboard shows a spinner, not an editable canvas, until it has loaded', async () => {

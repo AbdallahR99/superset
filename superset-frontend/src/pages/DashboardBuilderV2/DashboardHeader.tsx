@@ -37,6 +37,8 @@ import { Icons } from '@superset-ui/core/components/Icons';
 import type { BootstrapUser } from 'src/types/bootstrapTypes';
 import { provider, useDashboardRevision } from 'src/core/dashboard/store';
 import { useDashboardSession } from 'src/core/dashboard/session';
+import { useDashboardLocalizedText } from 'src/core/dashboard/localizedText';
+import { useDashboardViewMode } from 'src/core/dashboard/viewMode';
 import ConflictDialog from './ConflictDialog';
 import DashboardHistory from './DashboardHistory';
 import EmbedDashboardModal from './EmbedDashboardModal';
@@ -168,6 +170,12 @@ const TitleInput = styled(Input)`
   `}
 `;
 
+const TitleHeading = styled.h1`
+  margin: 0;
+  font-size: ${({ theme }) => theme.fontSizeLG}px;
+  font-weight: ${({ theme }) => theme.fontWeightStrong};
+`;
+
 /**
  * The dashboard's name, edited where it is read.
  *
@@ -265,9 +273,16 @@ const Actions = styled.span`
  * the root's own properties now, where a canvas is selected and arranged in
  * one place.
  */
-export default function DashboardHeader(): ReactElement {
+export default function DashboardHeader({
+  onToggleEdit,
+}: {
+  onToggleEdit?: () => void;
+}): ReactElement {
   useDashboardRevision();
   const root = provider.getRoot();
+  const title = typeof root.props?.title === 'string' ? root.props.title : '';
+  const displayTitle = useDashboardLocalizedText(title);
+  const viewing = useDashboardViewMode() === 'view';
   // Which dashboard this is, whether it is loaded, and whether a save is
   // running are the session's to say (`src/core/dashboard/session`). Nothing
   // about them is kept here, so this bar cannot disagree with the tree about
@@ -291,10 +306,13 @@ export default function DashboardHeader(): ReactElement {
       <Inert label={t('Templates')} test="header-templates" reads>
         {t('Templates')}
       </Inert>
-      <Title
-        nodeId={root.id}
-        title={typeof root.props?.title === 'string' ? root.props.title : ''}
-      />
+      {viewing ? (
+        <TitleHeading data-test="header-title" dir="auto">
+          {displayTitle || t('Untitled dashboard')}
+        </TitleHeading>
+      ) : (
+        <Title nodeId={root.id} title={title} />
+      )}
       <Inert label={t('Favorite')} test="header-favorite" buttonStyle="link">
         <Icons.StarOutlined iconSize="m" />
       </Inert>
@@ -317,6 +335,16 @@ export default function DashboardHeader(): ReactElement {
       )}
 
       <Actions>
+        {onToggleEdit && (
+          <Button
+            buttonStyle="secondary"
+            buttonSize="small"
+            data-test="header-toggle-edit"
+            onClick={onToggleEdit}
+          >
+            {viewing ? t('Edit dashboard') : t('Preview')}
+          </Button>
+        )}
         <Button
           aria-label={t('Undo')}
           tooltip={t('Undo')}
@@ -369,7 +397,9 @@ export default function DashboardHeader(): ReactElement {
           // A tree that is still loading, or that failed to load, is not the
           // dashboard the route names, and saving it would write a blank
           // over the one that is.
-          disabled={!ready || session.publishing}
+          disabled={
+            !ready || session.publishing || (viewing && !session.canEdit)
+          }
           loading={session.saving}
           onClick={save}
           data-test="header-save"

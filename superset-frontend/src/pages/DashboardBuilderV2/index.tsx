@@ -56,6 +56,8 @@ import {
 import { availableDropSpan } from 'src/core/dashboard/gridPacking';
 import type { PackedRect } from 'src/core/dashboard/gridPacking';
 import WidgetView from 'src/core/dashboard/WidgetView';
+import { DashboardViewModeContext } from 'src/core/dashboard/viewMode';
+import { readDashboardLocalization } from 'src/core/dashboard/localizedText';
 import { NodeErrorsContext } from 'src/core/dashboard/nodeErrors';
 import { registerBuiltInWidgetsIfEnabled } from 'src/core/dashboard/registerBuiltInWidgets';
 import DashboardHeader from './DashboardHeader';
@@ -263,6 +265,14 @@ export default function DashboardBuilderV2() {
   const session = useDashboardSession();
   const save = useSaveDashboard();
   const root = dashboard.getRoot();
+  const [editingDashboardId, setEditingDashboardId] = useState<number>();
+  const localized =
+    session.status === 'ready' &&
+    session.dashboardId !== undefined &&
+    Boolean(readDashboardLocalization(root.props?.nxtbiLocalization));
+  const viewing =
+    localized &&
+    (!session.canEdit || editingDashboardId !== session.dashboardId);
 
   // The route decides which dashboard this is. Deliberately without a
   // cleanup: going from a dashboard that was just created to the route that
@@ -405,10 +415,19 @@ export default function DashboardBuilderV2() {
   };
 
   return (
-    <>
+    <DashboardViewModeContext.Provider value={viewing ? 'view' : 'edit'}>
       <Global styles={viewportBoundPageCss} />
-      <PageContainer vertical>
-        <DashboardHeader />
+      <PageContainer vertical dir={isRtl ? 'rtl' : 'ltr'}>
+        <DashboardHeader
+          onToggleEdit={
+            localized && session.canEdit
+              ? () =>
+                  setEditingDashboardId(
+                    viewing ? session.dashboardId : undefined,
+                  )
+              : undefined
+          }
+        />
         {session.status === 'loading' && (
           <Workspace data-test="dashboard-loading">
             <LoadErrorWrapper>
@@ -439,7 +458,7 @@ export default function DashboardBuilderV2() {
         )}
         {session.status === 'ready' && (
           <Workspace>
-            <EditorPanel onAdd={addBlock} />
+            {!viewing && <EditorPanel onAdd={addBlock} />}
             <Canvas
               data-test="canvas"
               onClick={event => {
@@ -451,7 +470,7 @@ export default function DashboardBuilderV2() {
                 }
               }}
             >
-              {isEmpty ? (
+              {isEmpty && !viewing ? (
                 <EmptyCanvasWrapper>
                   {/* The dashboard itself, standing in for a canvas that has
                   nothing on it yet. It selects the root because that is the
@@ -567,6 +586,6 @@ export default function DashboardBuilderV2() {
         onConfirmNavigation={handleConfirmNavigation}
         handleSave={handleSaveAndCloseModal}
       />
-    </>
+    </DashboardViewModeContext.Provider>
   );
 }

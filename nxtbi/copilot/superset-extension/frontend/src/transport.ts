@@ -54,6 +54,10 @@ const uploadMessages = {
   },
 };
 
+function isSavedDashboardUrl(id: number, url: unknown): url is string {
+  return url === `/dashboard/${id}/` || url === `/dashboard/v2/${id}/`;
+}
+
 function readConversation(value: unknown): CopilotConversation | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const item = value as Partial<CopilotConversation>;
@@ -81,7 +85,7 @@ function readConversation(value: unknown): CopilotConversation | undefined {
       dashboard &&
       Number.isSafeInteger(dashboard.id) &&
       dashboard.id > 0 &&
-      dashboard.url === `/dashboard/v2/${dashboard.id}/`
+      isSavedDashboardUrl(dashboard.id, dashboard.url)
         ? { id: dashboard.id, url: dashboard.url }
         : undefined,
   };
@@ -231,7 +235,7 @@ export function createSessionTransport(base: string, language = () => 'en') {
         typeof id !== 'number' ||
         !Number.isSafeInteger(id) ||
         id < 1 ||
-        url !== `/dashboard/v2/${id}/`
+        !isSavedDashboardUrl(id, url)
       ) {
         throw new Error('Superset returned an invalid dashboard response.');
       }

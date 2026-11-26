@@ -30,6 +30,9 @@ from superset.copilot.contracts import (
     verify_claims,
 )
 from superset.copilot.services import delegated_mcp_token
+from superset.dashboard_v2.document import normalize_document
+from superset.dashboards.schemas import validate_json_metadata
+from superset.utils import json
 
 
 def test_run_claims_are_bound_to_the_type_and_time() -> None:
@@ -184,3 +187,54 @@ def test_mcp_delegation_is_read_only_and_user_scoped() -> None:
     assert claims["sub"] == "editor@example.invalid"
     assert claims["scope"] == "superset:read"
     assert claims["exp"] - claims["iat"] == 30
+
+
+def test_localization_captions_survive_v2_document_normalization() -> None:
+    """The document keeps translated captions separate from chart bindings."""
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "Revenue",
+            "contentLocale": "en",
+            "titleTranslations": {"ar": "الإيرادات"},
+            "widgets": [
+                {
+                    "type": "metric-tile",
+                    "datasetId": 23,
+                    "metric": "sum_revenue",
+                    "title": "Total revenue",
+                    "titleTranslations": {"ar": "إجمالي الإيرادات"},
+                }
+            ],
+        }
+    )
+    document, _widgets = normalize_document(make_document(proposal))
+    assert document["nodes"]["root"]["props"]["nxtbiLocalization"] == {
+        "sourceLocale": "en",
+        "title": {"source": "Revenue", "translations": {"ar": "الإيرادات"}},
+        "widgets": {
+            "widget_1": {
+                "source": "Total revenue",
+                "translations": {"ar": "إجمالي الإيرادات"},
+            }
+        },
+    }
+    assert document["nodes"]["widget_1"]["props"]["dataBinding"]["metrics"] == [
+        "sum_revenue"
+    ]
+
+
+def test_classic_edit_accepts_localization_metadata() -> None:
+    """Classic editors can save a generated dashboard with localized captions."""
+    validate_json_metadata(
+        json.dumps(
+            {
+                "nxtbi_localization": {
+                    "sourceLocale": "ar",
+                    "title": {"source": "الإيرادات", "translations": {"en": "Revenue"}},
+                    "widgets": {
+                        "42": {"source": "الإيرادات", "translations": {"en": "Revenue"}}
+                    },
+                },
+            }
+        )
+    )

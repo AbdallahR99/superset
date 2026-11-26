@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
 
-from .contracts import DashboardDraft, WidgetDraft
+from .captions import arabic_label, titles
+from .contracts import ContentLocale, DashboardDraft, WidgetDraft
 
 _CATEGORY = re.compile(
     r"(?:^|_)(?:status|state|stage|category|type|region|area|city|country|zone|"
@@ -170,26 +170,32 @@ def make_draft(
     fields: UploadFields,
     category: str | None,
     temporal: str | None,
-    locale: Literal["ar", "en"],
+    locale: ContentLocale,
 ) -> DashboardDraft:
     """Compose full-file charts with existing widgets and separate save approval."""
-    records = "السجلات" if locale == "ar" else "Records"
-    labeling = fields.metric_label if fields.metric != "count" else records
+    label = fields.metric_label if fields.metric != "count" else "Records"
+    arabic = arabic_label(label)
     widgets = [
         WidgetDraft(
             type="metric-tile",
             datasetId=dataset_id,
             metric=fields.metric,
-            title=labeling[:160],
+            title=label[:160],
+            title_translations=titles(label, arabic),
         )
     ]
     if fields.count_available and fields.metric != "count":
         widgets.append(
             WidgetDraft(
-                type="metric-tile", datasetId=dataset_id, metric="count", title=records
+                type="metric-tile",
+                datasetId=dataset_id,
+                metric="count",
+                title="Records",
+                title_translations=titles("Records", "السجلات"),
             )
         )
     if temporal:
+        title_variants = titles(f"{label} over time", f"{arabic} عبر الزمن")
         widgets.append(
             WidgetDraft(
                 type="echarts",
@@ -197,14 +203,16 @@ def make_draft(
                 metric=fields.metric,
                 dimension=temporal,
                 chartStyle="line",
-                title=f"{labeling} {'عبر الزمن' if locale == 'ar' else 'over time'}"[
-                    :160
-                ],
+                title=title_variants.en,
+                title_translations=title_variants,
             )
         )
     if category:
-        by = "حسب" if locale == "ar" else "by"
-        category_label = category.replace("_", " ")
+        dimension_label = category.replace("_", " ")
+        title_variants = titles(
+            f"{label} by {dimension_label}",
+            f"{arabic} حسب {arabic_label(dimension_label)}",
+        )
         widgets.append(
             WidgetDraft(
                 type="echarts",
@@ -212,7 +220,8 @@ def make_draft(
                 metric=fields.metric,
                 dimension=category,
                 chartStyle="bar",
-                title=f"{labeling} {by} {category_label}"[:160],
+                title=title_variants.en,
+                title_translations=title_variants,
             )
         )
-    return DashboardDraft(title=title, widgets=widgets)
+    return DashboardDraft(title=title, widgets=widgets, content_locale=locale)

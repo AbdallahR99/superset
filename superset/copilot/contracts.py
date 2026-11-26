@@ -40,6 +40,8 @@ ShortText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
 ]
 ResourceId = Annotated[int, Field(gt=0, le=2**31 - 1)]
+ContentLocale = Literal["en", "ar"]
+TitleTranslations = dict[ContentLocale, ShortText]
 WireId = Annotated[str, StringConstraints(pattern=r"^[\w-]{1,80}$")]
 
 
@@ -64,6 +66,9 @@ class ProposalWidget(Contract):
     metric: ShortText
     dimension: ShortText | None = None
     title: ShortText | None = None
+    title_translations: TitleTranslations = Field(
+        default_factory=dict, alias="titleTranslations"
+    )
     chart_style: Literal["bar", "line"] | None = Field(default=None, alias="chartStyle")
     filter: AggregateFilter | None = None
 
@@ -82,6 +87,11 @@ class DashboardProposal(Contract):
 
     title: ShortText
     widgets: list[ProposalWidget] = Field(min_length=1, max_length=8)
+    title_translations: TitleTranslations = Field(
+        default_factory=dict, alias="titleTranslations"
+    )
+    content_locale: ContentLocale | None = Field(default=None, alias="contentLocale")
+    dashboard_type: Literal["v1", "v2"] = Field(default="v2", alias="dashboardType")
 
 
 class DashboardApproval(DashboardProposal):
@@ -167,12 +177,12 @@ class CopilotHistoryDashboard(Contract):
     """A same-site link returned after dashboard approval."""
 
     id: ResourceId
-    url: str = Field(pattern=r"^/dashboard/v2/[1-9][0-9]{0,9}/$")
+    url: str = Field(pattern=r"^/dashboard/(?:v2/)?[1-9][0-9]{0,9}/$")
 
     @model_validator(mode="after")
     def validate_dashboard_url(self) -> CopilotHistoryDashboard:
         """Keep the saved dashboard link tied to the matching ID."""
-        if self.url != f"/dashboard/v2/{self.id}/":
+        if self.url not in (f"/dashboard/{self.id}/", f"/dashboard/v2/{self.id}/"):
             raise ValueError("Dashboard URL must match the dashboard ID.")
         return self
 
@@ -336,5 +346,23 @@ def make_document(
                 "rowSpan": 4 if widget.type == "metric-tile" else 9,
             },
             "props": props,
+        }
+    if proposal.content_locale:
+        nodes["root"]["props"] = {
+            "nxtbiLocalization": {
+                "sourceLocale": proposal.content_locale,
+                "title": {
+                    "source": proposal.title,
+                    "translations": proposal.title_translations,
+                },
+                "widgets": {
+                    f"widget_{index}": {
+                        "source": widget.title,
+                        "translations": widget.title_translations,
+                    }
+                    for index, widget in enumerate(proposal.widgets, 1)
+                    if widget.title and widget.title_translations
+                },
+            }
         }
     return {"version": 1, "root": "root", "nodes": nodes}

@@ -18,8 +18,8 @@
 
 Use a Superset deployment with local browser auth, Copilot and an upload target
 configured, and the SDK Vite example on another port of the same hostname.
-The script creates a dataset and saves a dashboard and widget. The deployment
-and the imported fixture data should be discarded after the run.
+The script creates a dataset, saves both dashboard formats, and saves a widget.
+Discard the deployment and imported fixture data after the run.
 Set NXTBI_E2E_MODEL_PROBE=1 for a separate natural-language check against
 the configured model provider, scoped to the synthetic CSV.
 """
@@ -59,6 +59,8 @@ METRIC = "sum_revenue"
 TOTAL = 550
 NORTH_TOTAL = 250
 PROPOSED_WIDGET_TITLE = "Revenue total for review"
+ARABIC_DASHBOARD_TITLE = "لوحة مراجعة المبيعات"
+ARABIC_WIDGET_TITLE = "إجمالي الإيرادات للمراجعة"
 
 
 @dataclass(frozen=True)
@@ -224,10 +226,71 @@ def is_kpi_preview(response: Response, dataset_id: int) -> bool:
     )
 
 
+def edit_proposal_titles(proposal: Locator, title: str) -> Locator:
+    """Edit English and Arabic display text on one dashboard proposal."""
+    languages = proposal.get_by_role("combobox", name="Preview language", exact=True)
+    title_field = proposal.get_by_role("textbox", name="Dashboard title", exact=True)
+    widget = proposal.get_by_role("article").first
+    settings = widget.locator("summary").filter(has_text="Edit widget")
+    widget_title = widget.get_by_role("textbox", name="Widget title", exact=True)
+    languages.select_option("en")
+    title_field.fill(title)
+    settings.click()
+    widget_title.fill(PROPOSED_WIDGET_TITLE)
+    languages.select_option("ar")
+    expect(title_field).to_have_attribute("dir", "rtl")
+    title_field.fill(ARABIC_DASHBOARD_TITLE)
+    widget_title.fill(ARABIC_WIDGET_TITLE)
+    preview = widget.locator(".nxtbi-proposal-widget__preview")
+    expect(preview).to_have_attribute("dir", "rtl")
+    proposal.get_by_role("button", name="Refresh previews", exact=True).click()
+    expect(preview.get_by_text(ARABIC_WIDGET_TITLE, exact=True)).to_be_visible()
+    expect(preview.get_by_text(str(TOTAL), exact=True)).to_be_visible()
+    languages.select_option("en")
+    expect(title_field).to_have_value(title)
+    expect(preview).to_have_attribute("dir", "ltr")
+    expect(preview.get_by_text(PROPOSED_WIDGET_TITLE, exact=True)).to_be_visible()
+    settings.click()
+    return title_field
+
+
+def approve_proposal(
+    page: Page, proposal: Locator, dashboard_type: Literal["v1", "v2"]
+) -> tuple[int, str]:
+    """Approve the selected format through the normal browser confirmation."""
+    proposal.get_by_role("button", name="Review and save", exact=True).click()
+    with page.expect_response(
+        lambda response: matches(response, "POST", f"{COPILOT_API}/approve")
+    ) as approval:
+        proposal.get_by_role("button", name="Save dashboard", exact=True).click()
+    response = approval.value
+    assert response.status == 201, (
+        f"Copilot {dashboard_type} approval HTTP {response.status}"
+    )
+    body = response.request.post_data_json
+    assert body["dashboardType"] == dashboard_type
+    assert body["titleTranslations"]["ar"] == ARABIC_DASHBOARD_TITLE
+    assert body["widgets"][0]["titleTranslations"]["ar"] == ARABIC_WIDGET_TITLE
+    result = response.json()
+    dashboard_id = result["id"]
+    prefix = "/dashboard/v2/" if dashboard_type == "v2" else "/dashboard/"
+    assert result["url"] == f"{prefix}{dashboard_id}/"
+    if dashboard_type == "v1":
+        headers = response.request.all_headers()
+        repeated = page.request.post(
+            response.url,
+            data=body,
+            headers={"X-CSRFToken": headers["x-csrftoken"], "Referer": page.url},
+        )
+        assert repeated.status == 200, f"Classic approval retry HTTP {repeated.status}"
+        assert repeated.json()["id"] == dashboard_id
+    return dashboard_id, result["url"]
+
+
 def create_draft(
     page: Page, base: str, title: str, artifact_dir: Path | None
-) -> tuple[int, int, str]:
-    """Import a fixture, stream an editable proposal, and approve the draft."""
+) -> tuple[int, int, int, str]:
+    """Import one fixture and approve a dashboard in each format."""
     panel = open_chat(page)
     panel.locator('input[type="file"][accept*=".csv"]').set_input_files(
         {"name": f"{title}.csv", "mimeType": "text/csv", "buffer": CSV}
@@ -242,16 +305,21 @@ def create_draft(
     dataset = page.request.get(f"{base}/api/v1/dataset/{dataset_id}")
     assert dataset.ok, f"Read imported dataset HTTP {dataset.status}"
     table = dataset.json()["result"]["table_name"]
+    dashboard_format = panel.get_by_role(
+        "combobox", name="Dashboard format", exact=True
+    )
+    dashboard_format.select_option("v2")
+    panel.get_by_role("combobox", name="Dashboard language", exact=True).select_option(
+        "en"
+    )
+    draft_button = panel.get_by_role(
+        "button", name="Draft dashboard from dataset", exact=True
+    )
 
     with page.expect_response(
         lambda response: is_kpi_preview(response, dataset_id)
     ) as preview:
-        events = read_agui_run(
-            page,
-            panel.get_by_role(
-                "button", name="Draft dashboard from dataset", exact=True
-            ),
-        )
+        events = read_agui_run(page, draft_button)
     evidence = verify_evidence(panel, events, dataset_id, f"{title}.csv")
     draft = next(
         event["value"]
@@ -269,43 +337,27 @@ def create_draft(
     assert float(data.json()["result"]["rows"][0][METRIC]) == TOTAL
     proposal = page.get_by_role("region", name="Dashboard proposal", exact=True)
     expect(proposal.locator("canvas").first).to_be_visible()
-    title_field = proposal.get_by_role("textbox", name="Dashboard title", exact=True)
-    title_field.fill(title)
-    widget_editor = proposal.get_by_role("article").first
-    widget_editor.locator("summary").filter(has_text="Edit widget").click()
-    widget_editor.get_by_role("textbox", name="Widget title", exact=True).fill(
-        PROPOSED_WIDGET_TITLE
-    )
-    widget_editor.locator("summary").filter(has_text="Edit widget").click()
-    proposal.get_by_role("button", name="Refresh previews", exact=True).click()
-    expect(
-        widget_editor.locator('[data-superset-widget="metric-tile"]').get_by_text(
-            PROPOSED_WIDGET_TITLE, exact=True
-        )
-    ).to_be_visible()
+    title_field = edit_proposal_titles(proposal, title)
     if artifact_dir is not None:
         evidence.scroll_into_view_if_needed()
         page.screenshot(path=artifact_dir / "copilot-evidence.png")
         title_field.scroll_into_view_if_needed()
         page.screenshot(path=artifact_dir / "copilot-proposal.png")
-    proposal.get_by_role("button", name="Review and save", exact=True).click()
-    with page.expect_response(
-        lambda response: matches(response, "POST", f"{COPILOT_API}/approve")
-    ) as approval:
-        proposal.get_by_role("button", name="Save dashboard", exact=True).click()
-    response = approval.value
-    assert response.status == 201, f"Copilot approval HTTP {response.status}"
-    result = response.json()
-    dashboard_id = result["id"]
-    assert result["url"] == f"/dashboard/v2/{dashboard_id}/"
+    dashboard_id, _ = approve_proposal(page, proposal, "v2")
+    dashboard_format.select_option("v1")
+    read_agui_run(page, draft_button)
+    expect(proposal.get_by_text("Classic (V1)", exact=True)).to_be_visible()
+    edit_proposal_titles(proposal, f"{title} Classic")
+    classic_id, classic_url = approve_proposal(page, proposal, "v1")
+    assert classic_id != dashboard_id
     page.get_by_role("button", name="Open dashboard", exact=True).click()
-    page.wait_for_url(f"{base}{result['url']}")
-    expect(page.locator('[data-test="header-title"]')).to_have_value(title)
+    page.wait_for_url(f"{base}{classic_url}")
     print(
-        f"PASS CSV dataset {dataset_id}, AG-UI draft, dashboard {dashboard_id}",
+        f"PASS CSV dataset {dataset_id}, AG-UI drafts, "
+        f"dashboards {dashboard_id} and {classic_id}",
         flush=True,
     )
-    return dashboard_id, dataset_id, table
+    return dashboard_id, classic_id, dataset_id, table
 
 
 def stored_dashboard(page: Page, url: str) -> dict[str, Any]:
@@ -313,6 +365,123 @@ def stored_dashboard(page: Page, url: str) -> dict[str, Any]:
     response = page.request.get(url)
     assert response.ok, f"Read Dashboard V2 HTTP {response.status}"
     return response.json()["result"]
+
+
+def classic_kpi_request(response: Response, chart_id: int) -> bool:
+    """Identify the native Chart Data request for this dashboard's saved KPI."""
+    if not matches(response, "POST", "/api/v1/chart/data"):
+        return False
+    declared = parse_qs(urlsplit(response.url).query).get("form_data", ["{}"])[0]
+    return json.loads(declared).get("slice_id") == chart_id
+
+
+def verify_saved_localizations(
+    page: Page,
+    base: str,
+    dashboard_id: int,
+    classic_id: int,
+    dataset_id: int,
+    title: str,
+    artifact_dir: Path | None = None,
+) -> None:
+    """Reload the same Classic and V2 dashboards in English and Arabic."""
+    v2_path = f"/dashboard/v2/{dashboard_id}/"
+    v2_api = f"{base}/api/v1/dashboard_v2/{dashboard_id}"
+    classic_path = f"/dashboard/{classic_id}/"
+    classic_api = f"{base}/api/v1/dashboard/{classic_id}"
+    v2 = stored_dashboard(page, v2_api)
+    nodes = v2["document"]["nodes"]
+    assert nodes["root"]["props"]["nxtbiLocalization"]["title"]["translations"][
+        "ar"
+    ] == (ARABIC_DASHBOARD_TITLE)
+    node_id = next(
+        node_id
+        for node_id, node in nodes.items()
+        if node["type"] == "metric-tile"
+        and node["props"]["dataBinding"]["datasetId"] == dataset_id
+        and METRIC in node["props"]["dataBinding"]["metrics"]
+    )
+    expect(page.locator("html")).to_have_attribute("dir", "ltr")
+    previous_chart: dict[str, Any] | None = None
+    for locale, direction in (("en", "ltr"), ("ar", "rtl")):
+        page.goto(f"{base}/lang/{locale}")
+        expected_v2 = title if locale == "en" else ARABIC_DASHBOARD_TITLE
+        expected_classic = (
+            f"{title} Classic" if locale == "en" else ARABIC_DASHBOARD_TITLE
+        )
+        expected_widget = (
+            PROPOSED_WIDGET_TITLE if locale == "en" else ARABIC_WIDGET_TITLE
+        )
+        dashboard = page.request.get(classic_api)
+        assert dashboard.ok, f"Read Classic dashboard HTTP {dashboard.status}"
+        classic = dashboard.json()["result"]
+        assert classic["id"] == classic_id
+        assert classic["dashboard_title"] == f"{title} Classic"
+        assert classic["localized_title"] == expected_classic
+        members = page.request.get(f"{classic_api}/charts")
+        assert members.ok, f"Read Classic dashboard charts HTTP {members.status}"
+        chart = next(
+            chart
+            for chart in members.json()["result"]
+            if chart["slice_name"] == PROPOSED_WIDGET_TITLE
+        )
+        binding = chart["form_data"]
+        assert chart["localized_name"] == expected_widget
+        assert binding["datasource"] == f"{dataset_id}__table"
+        assert binding["metric"] == METRIC
+        assert binding["viz_type"] == "big_number_total"
+        if previous_chart:
+            assert chart["id"] == previous_chart["id"]
+            assert binding == previous_chart["form_data"]
+        previous_chart = chart
+
+        with page.expect_response(
+            lambda response, chart_id=chart["id"]: classic_kpi_request(
+                response, chart_id
+            )
+        ) as data:
+            page.goto(f"{base}{classic_path}")
+        expect(page).to_have_url(f"{base}{classic_path}")
+        expect(page.locator("html")).to_have_attribute("dir", direction)
+        expect(
+            page.locator('[data-test="dashboard-header-container"]').get_by_text(
+                expected_classic, exact=True
+            )
+        ).to_be_visible()
+        chart_view = page.locator(f'[data-test-chart-id="{chart["id"]}"]')
+        expect(
+            chart_view.locator('[data-test="slice-header"]').get_by_text(
+                expected_widget, exact=True
+            )
+        ).to_be_visible()
+        native_data = data.value
+        assert native_data.ok, f"Read Classic revenue KPI HTTP {native_data.status}"
+        assert float(native_data.json()["result"][0]["data"][0][METRIC]) == TOTAL
+        if artifact_dir is not None:
+            page.screenshot(path=artifact_dir / f"classic-{locale}.png")
+
+        page.goto(f"{base}{v2_path}")
+        expect(page).to_have_url(f"{base}{v2_path}")
+        expect(page.locator("html")).to_have_attribute("dir", direction)
+        expect(page.locator('[data-test="header-title"]')).to_have_text(expected_v2)
+        expect(page.locator(f'[data-test="widget-title-{node_id}"]')).to_have_text(
+            expected_widget
+        )
+        expect(
+            page.locator(f'[data-test="widget-content-{node_id}"]').get_by_text(
+                str(TOTAL), exact=True
+            )
+        ).to_be_visible()
+        assert stored_dashboard(page, v2_api)["document"] == v2["document"]
+        if artifact_dir is not None:
+            page.screenshot(path=artifact_dir / f"v2-{locale}.png")
+
+    page.goto(f"{base}/lang/en")
+    page.goto(f"{base}{v2_path}")
+    print(
+        "PASS English and Arabic Classic and V2 titles, direction, and revenue",
+        flush=True,
+    )
 
 
 def save_dashboard(page: Page, api_path: str) -> None:
@@ -384,6 +553,7 @@ def edit_publish_and_save_widget(
     assert node_id, "The saved dashboard was missing the KPI for the imported revenue."
     tile = page.locator(f'[data-test="widget-content-{node_id}"]')
     expect(tile.get_by_text(str(TOTAL), exact=True)).to_be_visible()
+    page.locator('[data-test="header-toggle-edit"]').click()
     tile.click()
     page.locator(
         '[data-test="editor-panel"] [data-node-key="properties"] [role="tab"]'
@@ -684,8 +854,17 @@ def main() -> None:
             login(owner, base, args.username, password)
             active_page = owner
             title = f"Copilot lifecycle {uuid4().hex[:8]}"
-            dashboard_id, dataset_id, table = create_draft(
+            dashboard_id, classic_id, dataset_id, table = create_draft(
                 owner, base, title, args.artifact_dir
+            )
+            verify_saved_localizations(
+                owner,
+                base,
+                dashboard_id,
+                classic_id,
+                dataset_id,
+                title,
+                args.artifact_dir,
             )
             widget = edit_publish_and_save_widget(
                 owner,

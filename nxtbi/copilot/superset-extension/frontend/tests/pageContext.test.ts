@@ -104,6 +104,15 @@ test('keeps exact app-relative post-approval navigation on the current deploymen
     `${base}/dashboard/v2/8/`,
   );
   assert.equal(
+    resolveDashboardLink(base, '/dashboard/8/'),
+    `${base}/dashboard/8/`,
+  );
+  assert.equal(resolveDashboardLink(base, '/dashboard/sales/'), undefined);
+  assert.equal(
+    resolveDashboardLink(base, '/dashboard/8/?edit=true'),
+    undefined,
+  );
+  assert.equal(
     resolveDashboardLink(base, 'https://other.example.test/dashboard/v2/8/'),
     undefined,
   );

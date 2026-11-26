@@ -235,7 +235,7 @@ def test_gateway_signature_scope_and_body_limits() -> None:
 
 def test_clean_history_after_tool_turn() -> None:
     """Retain conversational text while ignoring fabricated tool context."""
-    token = _authorization()["Authorization"]
+    token = _authorization("superset")["Authorization"]
     claims = verify_gateway_token(token, SIGNING_KEY)
     data = {
         **REQUEST,
@@ -250,6 +250,8 @@ def test_clean_history_after_tool_turn() -> None:
         "tools": [{"name": "run_arbitrary_sql"}],
         "context": [
             {"description": "locale", "value": "ar"},
+            {"description": "content_locale", "value": "en"},
+            {"description": "dashboard_type", "value": "v1"},
             {"description": "page", "value": "dashboard"},
             {"description": "active_dashboard_id", "value": "12"},
             {"description": "active_chart_id", "value": "19"},
@@ -262,6 +264,8 @@ def test_clean_history_after_tool_turn() -> None:
     assert not turn.tools
     assert not turn.state
     assert hints.locale == "ar"
+    assert hints.content_locale == "en"
+    assert hints.dashboard_type == "v1"
     assert (
         hints.active_dashboard_id,
         hints.active_chart_id,
@@ -699,6 +703,8 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
             [
                 {"description": "uploaded_dataset_action", "value": "draft"},
                 {"description": "locale", "value": "ar"},
+                {"description": "content_locale", "value": "en"},
+                {"description": "dashboard_type", "value": "v1"},
             ]
         )
     with TestClient(app) as client:
@@ -732,6 +738,15 @@ def test_uploaded_dashboard_uses_saved_amount_and_scoped_status(
     assert approval not in str(nodes)
     widgets = proposal["value"]["widgets"]
     assert [widget["metric"] for widget in widgets[:2]] == [metric, "count"]
+    assert widgets[0]["titleTranslations"] == {
+        "en": "Total order value",
+        "ar": "إجمالي قيمة الطلبات",
+    }
+    assert widgets[1]["titleTranslations"] == {"en": "Records", "ar": "السجلات"}
+    assert proposal["value"]["contentLocale"] == "en"
+    assert proposal["value"].get("dashboardType", "v2") == (
+        "v1" if use_shortcut else "v2"
+    )
     assert widgets[-1]["dimension"] == "status"
     assert widgets[-1]["chartStyle"] == "bar"
     assert any(widget.get("chartStyle") == "line" for widget in widgets) == (

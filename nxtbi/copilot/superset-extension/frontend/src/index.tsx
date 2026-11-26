@@ -18,8 +18,8 @@
  */
 import { lazy, Suspense, useMemo, useSyncExternalStore } from 'react';
 import { chat, dashboard, navigation, sqlLab } from '@apache-superset/core';
-import { CopilotIcon, CopilotPanel } from '@nxtbi/copilot';
-import type { CopilotHost } from '@nxtbi/copilot';
+import { CopilotIcon, CopilotPanel, dashboardLocale } from '@nxtbi/copilot';
+import type { CopilotHost, DashboardType } from '@nxtbi/copilot';
 import '@nxtbi/copilot/styles.css';
 import {
   dashboardDestination,
@@ -37,12 +37,28 @@ const ProposalEditor = lazy(() => import('./ProposalEditor'));
 const base = deploymentBase(window.location.origin, __webpack_public_path__);
 const transport = createSessionTransport(base, language);
 
+function dashboardTypes(): readonly DashboardType[] {
+  const bootstrap = document
+    .getElementById('app')
+    ?.getAttribute('data-bootstrap');
+  try {
+    const featureFlags: {
+      common?: { feature_flags?: { DASHBOARD_V2?: boolean } };
+    } = JSON.parse(bootstrap ?? '{}');
+    if (featureFlags?.common?.feature_flags?.DASHBOARD_V2 === false)
+      return ['v1'];
+  } catch {
+    // Keep the existing V2 default if the host does not expose feature flags.
+  }
+  return ['v2', 'v1'];
+}
+
 function language(): string {
   return document.documentElement.lang || 'en';
 }
 
 function englishOrArabic(english: string, arabic: string): string {
-  return language().startsWith('ar') ? arabic : english;
+  return dashboardLocale(language()) === 'ar' ? arabic : english;
 }
 
 function subscribeOpen(onChange: () => void): () => void {
@@ -83,13 +99,14 @@ function Panel() {
       ? englishOrArabic('Float', 'عرض عائم')
       : englishOrArabic('Dock', 'تثبيت');
   const direction =
-    document.documentElement.dir === 'rtl' || locale.startsWith('ar')
+    document.documentElement.dir === 'rtl' || dashboardLocale(locale) === 'ar'
       ? 'rtl'
       : 'ltr';
   const host: CopilotHost = useMemo(
     () => ({
       locale,
       direction,
+      dashboardTypes: dashboardTypes(),
       context: () => {
         const page = navigation.getPage();
         const activeEntity = {
@@ -126,7 +143,7 @@ function Panel() {
         const destination = resolveDashboardLink(base, url);
         if (destination) window.location.assign(destination);
       },
-      renderProposal: (proposal, onChange) => (
+      renderProposal: (proposal, onChange, previewLocale) => (
         <Suspense
           fallback={
             <p role="status">
@@ -141,6 +158,7 @@ function Panel() {
             base={base}
             locale={locale}
             direction={direction}
+            previewLocale={previewLocale}
           />
         </Suspense>
       ),

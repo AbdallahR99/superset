@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from .captions import arabic_label, titles
 from .contracts import DashboardDraft, DatasetFilter, WidgetDraft
 
 
@@ -123,6 +124,9 @@ def make_draft(
             metric=metric,
             filter=scope,
             title=scoped_title(label(metric)),
+            title_translations=titles(
+                scoped_title(label(metric)), scoped_title(arabic_label(label(metric)))
+            ),
         )
         for metric in kpis
     ]
@@ -134,6 +138,10 @@ def make_draft(
             metric=headline,
             chartStyle="line",
             title=f"{label(headline)} over time"[:160],
+            title_translations=titles(
+                f"{label(headline)} over time",
+                f"{arabic_label(label(headline))} عبر الزمن",
+            ),
         )
     )
     for i, field in enumerate(breakdowns):
@@ -146,6 +154,13 @@ def make_draft(
                 metric=headline,
                 filter=scope,
                 title=scoped_title(f"{label(headline)} by {display_name}"),
+                title_translations=titles(
+                    scoped_title(f"{label(headline)} by {display_name}"),
+                    scoped_title(
+                        f"{arabic_label(label(headline))} حسب "
+                        f"{arabic_label(display_name)}"
+                    ),
+                ),
             )
         )
     return DashboardDraft(title=title, widgets=widgets)

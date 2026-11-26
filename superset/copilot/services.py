@@ -446,15 +446,23 @@ def _validate_widget_columns(widget: ProposalWidget, dataset: SqlaTable) -> None
         raise ValueError("Choose a temporal dataset column for a line chart.")
 
 
-def validate_dashboard_proposal(proposal: DashboardProposal) -> dict[str, Any]:
-    """Resolve existing data references and invoke the normal V2 authoring guard."""
+def validate_proposal_references(
+    proposal: DashboardProposal,
+) -> dict[tuple[int, str], int]:
+    """Verify persisted dataset references and return saved percentage precision."""
     if not security_manager.can_access("can_write", "Dashboard"):
         raise CopilotAccessError("The current user cannot create dashboards.")
+    if proposal.dashboard_type == "v1" and not security_manager.can_access(
+        "can_write", "Chart"
+    ):
+        raise CopilotAccessError("The current user cannot create charts.")
     if not user_can_view_data_model_metadata():
         raise CopilotAccessError("The requested dataset metadata is unavailable.")
     datasets: dict[int, SqlaTable] = {}
     percentages: dict[tuple[int, str], int] = {}
     for widget in proposal.widgets:
+        if proposal.dashboard_type == "v1" and len(widget.title or "") > 250:
+            raise ValueError("Classic chart titles must be at most 250 characters.")
         if widget.dataset_id not in datasets:
             dataset = db.session.get(SqlaTable, widget.dataset_id)
             if dataset is None or dataset.deleted_at is not None:
@@ -474,6 +482,12 @@ def validate_dashboard_proposal(proposal: DashboardProposal) -> dict[str, Any]:
         ):
             percentages[(widget.dataset_id, widget.metric)] = precision
         _validate_widget_columns(widget, dataset)
+    return percentages
+
+
+def validate_dashboard_proposal(proposal: DashboardProposal) -> dict[str, Any]:
+    """Compile validated references and invoke the normal V2 authoring guard."""
+    percentages = validate_proposal_references(proposal)
     document = normalize_and_validate(make_document(proposal, percentages))
     raise_for_document_authoring(document, None)
     return document

@@ -405,3 +405,39 @@ pinned mypy check targeting Linux passed for all nine changed Python paths.
 A synthetic GovAI streaming request timed out before receiving HTTP. This
 run verifies the one-click CSV workflow. Natural-language generation against
 GovAI and live Keycloak SSO remain outside this run's verified coverage.
+
+## Localized generated dashboards
+
+Choose **Dashboard format** and **Dashboard language** in Copilot before
+requesting a draft. Both **Classic (V1)** and **Dashboard (V2)** support English
+and Arabic. Use **Preview language** to review the dashboard title and each
+widget title in either language. Edit the captions if needed, refresh the
+preview, then approve the dashboard once. The dataset, metrics, dimensions,
+and filters are shared by both languages.
+
+Open the saved dashboard and choose English or Arabic in Superset's language
+menu. The same URL displays the translated dashboard and chart captions with
+LTR or RTL layout. In Dashboard V2, select **Edit dashboard** to work with
+canonical names and **Preview** to return to the translated viewer. After a
+canonical caption changes, its old translation falls back to the new source
+text. Translations apply to the dashboard's generated captions. Names and
+values originating from data remain as stored.
+
+Classic approval saves native charts and their dashboard in a single
+transaction. It requires permission to create both charts and dashboards.
+Dashboard V2 stores captions on the grid root by widget ID. The Classic viewer
+loads language-specific dashboard titles using ETags with the same entity
+version prefix, so switching the app language also refreshes the title.
+
+The disposable Chromium run used `nxtbi/superset-fork:copilot-localization-verified`
+and `nxtbi/copilot-agent:localization`. It approved both formats from one CSV,
+retried the Classic approval, and opened the same saved ID in each locale. Both
+formats showed the translated captions and the same revenue KPI of 550. V2
+edit history, publishing and scoped widget embedding passed again. Focused
+checks passed 38 agent tests, 51 backend tests, 18 SDK tests and 18 extension
+checks. Linux-target mypy passed for all 17 changed Python files.
+
+The browser run used the built-in CSV draft. The agent tests cover the
+model-assisted proposal path. The first localization scope is dashboard and
+widget captions. Classic copies that duplicate charts require new chart-caption
+mappings, and standalone chart titles and embeds use their own title settings.

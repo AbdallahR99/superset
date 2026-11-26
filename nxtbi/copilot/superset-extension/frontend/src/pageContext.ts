@@ -19,7 +19,7 @@
 import type { navigation } from '@apache-superset/core';
 
 const EXTENSION_PATH = '/api/v1/extensions/nxtbi/ai-copilot/';
-const APPROVED_DASHBOARD_PATH = /^\/dashboard\/v2\/[1-9]\d*\/$/;
+const APPROVED_DASHBOARD_PATH = /^\/dashboard\/(?:v2\/)?[1-9]\d*\/$/;
 
 type Page = navigation.Page;
 

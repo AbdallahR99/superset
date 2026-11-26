@@ -357,7 +357,16 @@
   background: var(--copilot-surface);
 }
 
-.nxtbi-copilot__proposal label {
+.nxtbi-copilot__draft-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding-inline: 0.875rem;
+  font-size: 0.85em;
+}
+
+.nxtbi-copilot__proposal label,
+.nxtbi-copilot__draft-options label {
   display: grid;
   gap: 0.35rem;
 }
@@ -456,6 +465,7 @@
 }
 
 .nxtbi-copilot__composer textarea,
+.nxtbi-copilot__draft-options select,
 .nxtbi-copilot__proposal input,
 .nxtbi-copilot__proposal select {
   inline-size: 100%;

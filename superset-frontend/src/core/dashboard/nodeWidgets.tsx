@@ -25,6 +25,7 @@ import {
 import { WidgetApplySourceContext } from '@apache-superset/widgets/deferredApply';
 import { getWidgetComponent } from '@apache-superset/widgets/registry';
 import { useDashboardRevision, useDashboardStore } from './store';
+import { useDashboardLocalizedText } from './localizedText';
 
 const EMPTY_PROPS: Record<string, unknown> = {};
 
@@ -41,6 +42,12 @@ export function createNodeWidget(
     useDashboardRevision(store);
     const node = store.getNode(nodeId);
     const WidgetComponent = getWidgetComponent(type);
+    const props = node?.props ?? EMPTY_PROPS;
+    const label = type === 'metric-tile' ? props.label : undefined;
+    const localizedLabel = useDashboardLocalizedText(
+      typeof label === 'string' ? label : '',
+      nodeId,
+    );
     if (!node || !WidgetComponent) return null;
 
     const parentId = store.getParentId(nodeId);
@@ -55,7 +62,11 @@ export function createNodeWidget(
           <WidgetApplySourceContext.Provider value={applySourceId}>
             <WidgetComponent
               instanceId={nodeId}
-              props={node.props ?? EMPTY_PROPS}
+              props={
+                typeof label === 'string' && localizedLabel !== label
+                  ? { ...props, label: localizedLabel }
+                  : props
+              }
             />
           </WidgetApplySourceContext.Provider>
         </WidgetDataClientContext.Provider>

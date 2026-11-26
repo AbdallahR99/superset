@@ -18,7 +18,12 @@
  */
 import { useEffect, useState } from "react";
 import { SupersetProvider, Widget } from "@apache-superset/widgets";
-import type { DashboardProposal } from "@nxtbi/copilot";
+import {
+  dashboardLocale,
+  dashboardTitleIn,
+  editDashboardTitle,
+} from "@nxtbi/copilot";
+import type { DashboardContentLocale, DashboardProposal } from "@nxtbi/copilot";
 import { widgetPreview } from "./widgetPreview";
 import type { ProposedWidget } from "./widgetPreview";
 import "./proposal.css";
@@ -29,6 +34,7 @@ interface ProposalEditorProps {
   base: string;
   locale: string;
   direction: "ltr" | "rtl";
+  previewLocale: DashboardContentLocale;
 }
 
 const widgetTypes: readonly ProposedWidget["type"][] = ["metric-tile", "ag-grid-table", "echarts"];
@@ -149,8 +155,11 @@ export default function ProposalEditor({
   base,
   locale,
   direction,
+  previewLocale,
 }: ProposalEditorProps) {
-  const text = locale.startsWith("ar") ? labels.ar : labels.en;
+  const text = labels[dashboardLocale(locale)];
+  const canonicalLocale = proposal.contentLocale ?? dashboardLocale(locale);
+  const previewDirection = previewLocale === "ar" ? "rtl" : "ltr";
   const [previewWidgets, setPreviewWidgets] = useState(proposal.widgets);
   const [page, setPage] = useState(0);
   const [retry, setRetry] = useState(0);
@@ -228,8 +237,8 @@ export default function ProposalEditor({
       </div>
       <SupersetProvider
         supersetDomain={base}
-        locale={locale}
-        direction={direction}
+        locale={previewLocale}
+        direction={previewDirection}
         extensionWidgets={false}
       >
         {catalog === null && <p role="status">{text.catalogError}</p>}
@@ -262,12 +271,17 @@ export default function ProposalEditor({
           const selectedMetric = metrics.find((item) => item.metric_name === widget.metric);
           const datasets = catalog?.result ?? [];
           const snapshot = previewWidgets[index];
-          const preview = snapshot === widget && widgetPreview(snapshot, selectedMetric?.d3format);
+          const translatedTitle = dashboardTitleIn(widget, canonicalLocale, previewLocale);
+          const title = translatedTitle || widget.title;
+          const titleLocale = translatedTitle ? previewLocale : canonicalLocale;
+          const preview =
+            snapshot === widget &&
+            widgetPreview({ ...widget, title }, selectedMetric?.d3format);
           return (
             <article className="nxtbi-proposal-widget" key={index}>
               <header className="nxtbi-proposal-widget__header">
                 <h4>
-                  <bdi>{widget.title || text[widget.type]}</bdi>
+                  <bdi lang={title ? titleLocale : locale}>{title || text[widget.type]}</bdi>
                 </h4>
                 {dataset && (
                   <p>
@@ -275,7 +289,11 @@ export default function ProposalEditor({
                   </p>
                 )}
               </header>
-              <div className="nxtbi-proposal-widget__preview">
+              <div
+                className="nxtbi-proposal-widget__preview"
+                lang={previewLocale}
+                dir={previewDirection}
+              >
                 {preview ? (
                   <Widget
                     type={preview.type}
@@ -378,12 +396,21 @@ export default function ProposalEditor({
                   <label>
                     {text.widgetTitle}{" "}
                     <input
-                      value={widget.title ?? ""}
-                      maxLength={160}
+                      value={translatedTitle ?? ""}
+                      placeholder={previewLocale !== canonicalLocale ? widget.title : undefined}
+                      lang={previewLocale}
+                      dir={previewDirection}
+                      maxLength={proposal.dashboardType === "v1" ? 250 : 256}
                       onChange={(event) =>
-                        updateWidget(index, {
-                          title: event.target.value || undefined,
-                        })
+                        updateWidget(
+                          index,
+                          editDashboardTitle(
+                            widget,
+                            canonicalLocale,
+                            previewLocale,
+                            event.target.value.trim() ? event.target.value : undefined,
+                          ),
+                        )
                       }
                     />
                   </label>

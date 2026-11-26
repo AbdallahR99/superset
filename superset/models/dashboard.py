@@ -26,6 +26,7 @@ import sqlalchemy as sqla
 from flask import current_app as app, has_request_context, url_for
 from flask_appbuilder import Model
 from flask_appbuilder.models.decorators import renders
+from flask_babel import get_locale
 from markupsafe import escape, Markup
 from sqlalchemy import (
     Boolean,
@@ -49,8 +50,9 @@ from superset.connectors.sqla.models import (
     BaseDatasource,
     SqlaTable,
 )
+from superset.copilot.localization import localized_caption, localized_document_title
 from superset.daos.datasource import Datasource, DatasourceDAO
-from superset.dashboard_v2.document import load_stored_document
+from superset.dashboard_v2.document import load_stored_document, V2_DOCUMENT_KEY
 from superset.models.helpers import (
     AuditMixinNullable,
     ImportExportMixin,
@@ -464,11 +466,20 @@ class Dashboard(CoreDashboard, SoftDeleteMixin, AuditMixinNullable, ImportExport
     def localized_title(self) -> str | None:
         """``dashboard_title`` resolved for the viewer's locale.
 
-        Returns the canonical ``dashboard_title`` unchanged unless
-        asset-metadata translation is enabled and a translation exists; see
-        ``superset.utils.i18n``. This is a read-only display value -- editing
-        flows continue to use ``dashboard_title``.
+        Uses an available dashboard translation before checking the deployment's
+        asset-metadata translation hook. Editing uses the canonical title.
         """
+        locale = get_locale()
+        if locale is not None:
+            try:
+                metadata = self.params_dict
+            except ValueError:
+                metadata = {}
+            if isinstance(metadata, dict):
+                if caption := localized_document_title(
+                    metadata.get(V2_DOCUMENT_KEY), self.dashboard_title, str(locale)
+                ) or localized_caption(metadata, self.dashboard_title, str(locale)):
+                    return caption
         return translate(
             self.dashboard_title,
             model_name="Dashboard",

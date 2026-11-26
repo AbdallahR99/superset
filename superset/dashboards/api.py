@@ -22,6 +22,7 @@ import tempfile
 import time
 import uuid
 from datetime import datetime
+from hashlib import sha256
 from io import BytesIO
 from typing import Any, Callable, cast, ClassVar
 from zipfile import is_zipfile, ZipFile
@@ -54,7 +55,7 @@ from flask_appbuilder.const import (
     API_ORDER_COLUMNS_RIS_KEY,
 )
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_babel import gettext, ngettext
+from flask_babel import get_locale, gettext, ngettext
 from marshmallow import ValidationError
 from werkzeug.wrappers import Response as WerkzeugResponse
 from werkzeug.wsgi import ClosingIterator, FileWrapper
@@ -113,6 +114,7 @@ from superset.commands.importers.v1.utils import (
 from superset.commands.purge import SoftDeleteBinding
 from superset.connectors.sqla.models import BaseDatasource
 from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
+from superset.copilot.localization import localized_caption
 from superset.daos.dashboard import DashboardDAO, EmbeddedDashboardDAO
 from superset.dashboards.excel_export.download_link import (
     download_path,
@@ -857,10 +859,19 @@ class DashboardRestApi(
         add_extra_log_payload(
             dashboard_id=dash.id, action=f"{self.__class__.__name__}.get"
         )
-        return set_version_etag(
-            self.response(200, result=result),
-            current_entity_etag_uuid(Dashboard, dash.id, dash.uuid),
-        )
+        response = self.response(200, result=result)
+        etag = current_entity_etag_uuid(Dashboard, dash.id, dash.uuid)
+        localized_title = result.get("localized_title")
+        if "localized_title" in result:
+            response.vary.update(["Cookie", "Accept-Language"])
+        if (
+            etag
+            and isinstance(localized_title, str)
+            and localized_title != dash.dashboard_title
+        ):
+            # Preserve the version UUID prefix that conditional writes compare.
+            etag = f"{etag}:title-{sha256(localized_title.encode()).hexdigest()}"
+        return set_version_etag(response, etag)
 
     @expose("/<id_or_slug>/datasets", methods=("GET",))
     @protect()
@@ -1066,8 +1077,9 @@ class DashboardRestApi(
         """
         try:
             charts = DashboardDAO.get_charts_for_dashboard(id_or_slug)
+            dashboard = DashboardDAO.get_by_id_or_slug(id_or_slug)
             dashboard_grant = security_manager.has_promiscuous_dashboard_access(
-                DashboardDAO.get_by_id_or_slug(id_or_slug)
+                dashboard
             )
             # This is the payload the dashboard actually renders from, so it is
             # where batching has to happen: resolve every chart name up front and
@@ -1083,6 +1095,13 @@ class DashboardRestApi(
                 self._serialize_dashboard_chart(chart, dashboard_grant=dashboard_grant)
                 for chart in charts
             ]
+            if (locale := get_locale()) is not None:
+                metadata = dashboard.params_dict
+                for chart, serialized in zip(charts, result, strict=True):
+                    if caption := localized_caption(
+                        metadata, chart.slice_name, str(locale), chart.id
+                    ):
+                        serialized["localized_name"] = caption
             return self.response(200, result=result)
         except DashboardAccessDeniedError:
             return self.response_403()

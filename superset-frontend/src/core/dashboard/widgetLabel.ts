@@ -91,6 +91,12 @@ const NAMED_BY: Record<string, (props: Props) => unknown> = {
  */
 const UNNAMED: ReadonlySet<string> = new Set(['markdown', 'carousel']);
 
+/** The widget's authored label before whitespace normalization and fallbacks. */
+export function authoredWidgetLabel(type: string, props: Props): string | null {
+  const own = NAMED_BY[type]?.(props);
+  return typeof own === 'string' && own.trim() ? own : null;
+}
+
 /**
  * What to call the widget of `type` holding `props`, or `''` for one that
  * goes unnamed (see `UNNAMED`) — callers skip the header's name entirely
@@ -108,8 +114,8 @@ const UNNAMED: ReadonlySet<string> = new Set(['markdown', 'carousel']);
  */
 export function widgetLabel(type: string, props: Props): string {
   if (UNNAMED.has(type)) return '';
-  const own = NAMED_BY[type]?.(props);
-  if (typeof own === 'string' && own.trim() !== '') {
+  const own = authoredWidgetLabel(type, props);
+  if (own !== null) {
     return own.trim().replace(/\s+/g, ' ');
   }
   const registered = views

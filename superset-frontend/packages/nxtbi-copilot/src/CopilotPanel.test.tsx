@@ -22,7 +22,11 @@ import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
 import { BASIC_A2UI_CATALOG_ID } from './a2ui';
 import { CopilotPanel } from './CopilotPanel';
-import type { CopilotHost, CopilotUploadedDataset } from './contracts';
+import type {
+  CopilotHost,
+  CopilotUploadedDataset,
+  DashboardProposal,
+} from './contracts';
 import { readAgUiEvents } from './stream';
 
 jest.mock('./stream', () => ({
@@ -313,6 +317,88 @@ test('restores the prompt and withholds a draft from an interrupted run', async 
   await userEvent.click(screen.getByRole('button', { name: 'Restore prompt' }));
   expect(composer).toHaveValue('Show the budget');
   expect(composer).toHaveFocus();
+});
+
+test('keeps proposal format, canonical titles, and bindings when previewing and editing Arabic', async () => {
+  const user = userEvent.setup();
+  const proposal: DashboardProposal = {
+    title: 'Review budget',
+    dashboardType: 'v1',
+    contentLocale: 'en',
+    titleTranslations: { ar: 'مراجعة الميزانية' },
+    approvalToken: 'test-token',
+    widgets: [
+      {
+        type: 'metric-tile',
+        datasetId: 1,
+        metric: 'total',
+        filter: { column: 'year', value: 2026 },
+        title: 'Total',
+        titleTranslations: { ar: 'المجموع' },
+      },
+    ],
+  };
+  jest.mocked(readAgUiEvents).mockImplementationOnce(async function* () {
+    yield { type: 'CUSTOM', name: 'nxtbi.dashboard-proposal', value: proposal };
+    yield { type: 'RUN_FINISHED' };
+  });
+  const run = jest.fn<
+    ReturnType<CopilotHost['run']>,
+    Parameters<CopilotHost['run']>
+  >(async () => new Response());
+  const approve = jest
+    .fn<
+      Promise<{ id: number; url: string }>,
+      [DashboardProposal, AbortSignal]
+    >()
+    .mockResolvedValue({ id: 8, url: '/dashboard/8/' });
+  render(
+    <CopilotPanel
+      host={{
+        locale: 'ar-AE',
+        context: () => ({}),
+        dashboardTypes: ['v2', 'v1'],
+        run,
+        approve,
+      }}
+    />,
+  );
+  await user.selectOptions(
+    screen.getByRole('combobox', { name: 'تنسيق لوحة المعلومات' }),
+    'v1',
+  );
+  await user.selectOptions(
+    screen.getByRole('combobox', { name: 'لغة لوحة المعلومات' }),
+    'en',
+  );
+  const composer = screen.getByRole('textbox', { name: 'اسأل المساعد' });
+  await user.type(composer, 'Draft a budget dashboard');
+  await user.click(screen.getByRole('button', { name: 'إرسال' }));
+  const preview = await screen.findByRole('combobox', { name: 'لغة المعاينة' });
+  expect(run.mock.calls[0][0].context).toEqual(
+    expect.arrayContaining([
+      { description: 'locale', value: 'ar' },
+      { description: 'dashboard_type', value: 'v1' },
+      { description: 'content_locale', value: 'en' },
+    ]),
+  );
+  const title = screen.getByRole('textbox', { name: 'عنوان لوحة المعلومات' });
+  expect(title).toHaveValue('Review budget');
+  expect(title).toHaveAttribute('dir', 'ltr');
+  await user.selectOptions(preview, 'ar');
+  expect(title).toHaveValue('مراجعة الميزانية');
+  expect(title).toHaveAttribute('dir', 'rtl');
+  await user.clear(title);
+  await user.type(title, 'تقرير الميزانية');
+  await user.selectOptions(preview, 'en');
+  expect(title).toHaveValue('Review budget');
+  await user.click(screen.getByRole('button', { name: 'مراجعة وحفظ' }));
+  expect(approve).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'حفظ لوحة المعلومات' }));
+  expect(approve).toHaveBeenCalledWith(
+    { ...proposal, titleTranslations: { ar: 'تقرير الميزانية' } },
+    expect.any(AbortSignal),
+  );
 });
 
 test('imports CSV files sequentially and drafts with the selected dataset', async () => {

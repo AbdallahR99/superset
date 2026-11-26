@@ -18,7 +18,7 @@ import re
 from typing import Any, Mapping, Union
 
 from marshmallow import fields, post_dump, post_load, pre_load, Schema
-from marshmallow.validate import Length, OneOf, ValidationError
+from marshmallow.validate import Length, OneOf, Regexp, ValidationError
 
 from superset import security_manager
 from superset.dashboard_v2.document import without_stored_document
@@ -213,7 +213,33 @@ def without_v2_document(json_metadata: Any) -> Any:
     return without_stored_document(json_metadata)
 
 
+class DashboardCaptionSchema(Schema):
+    """A bounded caption for the canonical text it was translated from."""
+
+    source = fields.String(required=True, validate=Length(1, 256))
+    translations = fields.Dict(
+        required=True,
+        keys=fields.String(validate=OneOf(["en", "ar"])),
+        values=fields.String(validate=Length(1, 256)),
+    )
+
+
+class DashboardContentLocalizationSchema(Schema):
+    """Presentation metadata retained during normal classic dashboard saves."""
+
+    source_locale = fields.String(
+        data_key="sourceLocale", required=True, validate=OneOf(["en", "ar"])
+    )
+    title = fields.Nested(DashboardCaptionSchema)
+    widgets = fields.Dict(
+        keys=fields.String(validate=Regexp(r"^[1-9][0-9]{0,9}$")),
+        values=fields.Nested(DashboardCaptionSchema),
+        validate=Length(max=8),
+    )
+
+
 class DashboardJSONMetadataSchema(Schema):
+    nxtbi_localization = fields.Nested(DashboardContentLocalizationSchema)
     # native_filter_configuration is for dashboard-native filters
     native_filter_configuration = fields.List(fields.Dict(), allow_none=True)
     # chart_configuration for now keeps data about cross-filter scoping for charts

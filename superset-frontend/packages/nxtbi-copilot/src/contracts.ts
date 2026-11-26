@@ -51,20 +51,67 @@ export interface AgUiRunInput {
   forwardedProps: { a2uiAction?: A2uiAction };
 }
 
-export interface DashboardWidget {
+export type DashboardType = 'v1' | 'v2';
+export type DashboardContentLocale = 'en' | 'ar';
+
+export interface DashboardTitles {
+  title?: string;
+  titleTranslations?: Partial<Record<DashboardContentLocale, string>>;
+}
+
+export function dashboardLocale(locale?: string): DashboardContentLocale {
+  return /^ar(?:$|[-_])/i.test(locale ?? '') ? 'ar' : 'en';
+}
+
+export function dashboardTitleIn(
+  titles: DashboardTitles,
+  canonicalLocale: DashboardContentLocale,
+  locale: DashboardContentLocale,
+): string | undefined {
+  return locale === canonicalLocale
+    ? titles.title
+    : titles.titleTranslations?.[locale];
+}
+
+export function editDashboardTitle<T extends DashboardTitles>(
+  titles: T,
+  canonicalLocale: DashboardContentLocale,
+  locale: DashboardContentLocale,
+  value: T['title'],
+): T {
+  const titleTranslations = { ...titles.titleTranslations };
+  if (
+    value?.trim() &&
+    (locale !== canonicalLocale || locale in titleTranslations)
+  ) {
+    titleTranslations[locale] = value;
+  } else {
+    delete titleTranslations[locale];
+  }
+  return {
+    ...titles,
+    ...(locale === canonicalLocale && { title: value }),
+    titleTranslations: Object.keys(titleTranslations).length
+      ? titleTranslations
+      : undefined,
+  };
+}
+
+export interface DashboardWidget extends DashboardTitles {
   type: 'metric-tile' | 'ag-grid-table' | 'echarts';
   datasetId: number;
   metric: string;
   dimension?: string;
-  title?: string;
   chartStyle?: 'bar' | 'line';
   filter?: { column: string; value: string | number | boolean };
 }
 
-export interface DashboardProposal {
+export interface DashboardProposal extends DashboardTitles {
   title: string;
   widgets: DashboardWidget[];
   approvalToken: string;
+  dashboardType?: DashboardType;
+  contentLocale?: DashboardContentLocale;
 }
 
 export interface CopilotUploadedDataset {
@@ -77,6 +124,8 @@ export interface CopilotHost {
   locale?: string;
   direction?: 'ltr' | 'rtl';
   context: () => Record<string, unknown>;
+  /** Available draft formats. The first is the default. */
+  dashboardTypes?: readonly DashboardType[];
   run: (input: AgUiRunInput, signal: AbortSignal) => Promise<Response>;
   uploadDataset?: (
     file: File,
@@ -94,7 +143,26 @@ export interface CopilotHost {
   renderProposal?: (
     proposal: DashboardProposal,
     onChange: (proposal: DashboardProposal) => void,
+    previewLocale: DashboardContentLocale,
   ) => ReactNode;
+}
+
+function validTranslations(
+  value: unknown,
+): value is DashboardTitles['titleTranslations'] {
+  if (value === undefined) return true;
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([locale, title]) =>
+        (locale === 'en' || locale === 'ar') &&
+        typeof title === 'string' &&
+        title.trim().length > 0 &&
+        title.length <= 256,
+    )
+  );
 }
 
 export function readProposal(value: unknown): DashboardProposal | undefined {
@@ -105,6 +173,13 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
     proposal.title.length > 256 ||
     typeof proposal.approvalToken !== 'string' ||
     proposal.approvalToken.length > 2048 ||
+    (proposal.dashboardType !== undefined &&
+      proposal.dashboardType !== 'v1' &&
+      proposal.dashboardType !== 'v2') ||
+    (proposal.contentLocale !== undefined &&
+      proposal.contentLocale !== 'en' &&
+      proposal.contentLocale !== 'ar') ||
+    !validTranslations(proposal.titleTranslations) ||
     !Array.isArray(proposal.widgets) ||
     !proposal.widgets.length ||
     proposal.widgets.length > 8 ||
@@ -121,6 +196,7 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
             text === undefined ||
             (typeof text === 'string' && text.length <= 256),
         ) &&
+        validTranslations(item.titleTranslations) &&
         (item.chartStyle === undefined ||
           (item.type === 'echarts' &&
             ['bar', 'line'].includes(item.chartStyle))) &&
@@ -142,13 +218,28 @@ export function readProposal(value: unknown): DashboardProposal | undefined {
   return {
     title: proposal.title,
     approvalToken: proposal.approvalToken,
+    dashboardType: proposal.dashboardType,
+    contentLocale: proposal.contentLocale,
+    titleTranslations: proposal.titleTranslations && {
+      ...proposal.titleTranslations,
+    },
     widgets: proposal.widgets.map(
-      ({ type, datasetId, metric, dimension, title, chartStyle, filter }) => ({
+      ({
         type,
         datasetId,
         metric,
         dimension,
         title,
+        chartStyle,
+        filter,
+        titleTranslations,
+      }) => ({
+        type,
+        datasetId,
+        metric,
+        dimension,
+        title,
+        titleTranslations: titleTranslations && { ...titleTranslations },
         chartStyle,
         filter: filter && { column: filter.column, value: filter.value },
       }),

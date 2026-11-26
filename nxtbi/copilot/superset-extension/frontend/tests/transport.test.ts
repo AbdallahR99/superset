@@ -64,13 +64,14 @@ test('the session transport obtains CSRF then passes through the streaming respo
   assert.deepEqual(JSON.parse(String(post.body)), input);
 });
 
-test('the session transport returns a protected approval reference', async ({
+test('the session transport returns protected classic and V2 approval references', async ({
   mock,
 }) => {
+  const urls = ['/dashboard/8/', '/dashboard/v2/8/'];
   mock.method(globalThis, 'fetch', async (url: string) =>
     url.endsWith('/csrf_token/')
       ? new Response(JSON.stringify({ result: 'fixture-csrf-token' }))
-      : new Response(JSON.stringify({ id: 8, url: '/dashboard/v2/8/' }), {
+      : new Response(JSON.stringify({ id: 8, url: urls.shift() }), {
           status: 201,
         }),
   );
@@ -80,13 +81,12 @@ test('the session transport returns a protected approval reference', async ({
     approvalToken: 'fixture-approval-token',
     widgets: [],
   };
-  assert.deepEqual(
-    await transport.approve(proposal, new AbortController().signal),
-    {
-      id: 8,
-      url: '/dashboard/v2/8/',
-    },
-  );
+  for (const url of [...urls]) {
+    assert.deepEqual(
+      await transport.approve(proposal, new AbortController().signal),
+      { id: 8, url },
+    );
+  }
 });
 
 test('Copilot history reads and writes transcripts through the authenticated Superset route', async ({
@@ -98,7 +98,7 @@ test('Copilot history reads and writes transcripts through the authenticated Sup
       { id: 'message-1', role: 'user' as const, content: 'Show sales' },
     ],
     updatedAt: '2026-11-18T09:00:00.000Z',
-    savedDashboard: { id: 8, url: '/dashboard/v2/8/' },
+    savedDashboard: { id: 8, url: '/dashboard/8/' },
   };
   const fetchMock = mock.method(
     globalThis,

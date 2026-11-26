@@ -39,13 +39,18 @@ import {
   type A2uiState,
 } from './a2ui';
 import {
+  dashboardLocale,
+  dashboardTitleIn,
+  editDashboardTitle,
   readProposal,
   type AgUiRunInput,
   type CopilotConversation,
   type CopilotHost,
   type CopilotTextMessage,
   type CopilotUploadedDataset,
+  type DashboardContentLocale,
   type DashboardProposal,
+  type DashboardType,
 } from './contracts';
 import { a2uiOperations, fitAgUiInput, readAgUiEvents } from './stream';
 import { CopilotIcon } from './CopilotIcon';
@@ -152,6 +157,11 @@ const english = {
   uiError: 'This interactive view could not be loaded.',
   proposal: 'Dashboard proposal',
   dashboardTitle: 'Dashboard title',
+  dashboardType: 'Dashboard format',
+  classic: 'Classic (V1)',
+  builder: 'Dashboard V2',
+  contentLocale: 'Dashboard language',
+  previewLocale: 'Preview language',
   review: 'Review and save',
   confirm: 'Save dashboard',
   cancel: 'Back',
@@ -217,6 +227,11 @@ const arabic: typeof english = {
   uiError: 'تعذّر تحميل هذه الواجهة التفاعلية.',
   proposal: 'اقتراح لوحة معلومات',
   dashboardTitle: 'عنوان لوحة المعلومات',
+  dashboardType: 'تنسيق لوحة المعلومات',
+  classic: 'كلاسيكي (الإصدار الأول)',
+  builder: 'لوحة المعلومات (الإصدار الثاني)',
+  contentLocale: 'لغة لوحة المعلومات',
+  previewLocale: 'لغة المعاينة',
   review: 'مراجعة وحفظ',
   confirm: 'حفظ لوحة المعلومات',
   cancel: 'رجوع',
@@ -323,6 +338,8 @@ function buildContext(
   host: CopilotHost,
   uploadedDatasetId?: number,
   uploadedDatasetAction?: 'draft',
+  dashboardType?: DashboardType,
+  contentLocale?: DashboardContentLocale,
 ): AgUiRunInput['context'] {
   const context = {
     ...host.context(),
@@ -330,7 +347,9 @@ function buildContext(
     uploaded_dataset_action: uploadedDatasetId
       ? uploadedDatasetAction
       : undefined,
-    locale: host.locale ?? 'en',
+    locale: dashboardLocale(host.locale),
+    dashboard_type: dashboardType,
+    content_locale: contentLocale,
   };
   return Object.entries(context)
     .filter(
@@ -343,6 +362,8 @@ function buildContext(
           'active_dataset_id',
           'uploaded_dataset_id',
           'uploaded_dataset_action',
+          'dashboard_type',
+          'content_locale',
         ].includes(description) &&
         (typeof value === 'string' || typeof value === 'number'),
     )
@@ -358,7 +379,8 @@ export function CopilotPanel({
   headerActions,
   renderActivities,
 }: CopilotPanelProps) {
-  const isArabic = host.locale?.startsWith('ar');
+  const shellLocale = dashboardLocale(host.locale);
+  const isArabic = shellLocale === 'ar';
   const copy = isArabic ? arabic : english;
   const direction = host.direction ?? (isArabic ? 'rtl' : 'ltr');
   const historyId = useId();
@@ -387,6 +409,10 @@ export function CopilotPanel({
   const [historyRequest, setHistoryRequest] = useState(0);
   const [results, setResults] = useState<Record<string, InteractiveResult>>({});
   const [proposal, setProposal] = useState<DashboardProposal>();
+  const [formatPreference, setFormatPreference] = useState<DashboardType>();
+  const [languagePreference, setLanguagePreference] =
+    useState<DashboardContentLocale>();
+  const [previewLocale, setPreviewLocale] = useState<DashboardContentLocale>();
   const [confirming, setConfirming] = useState(false);
   const connection = useRef<AbortController>();
   const mutation = useRef<AbortController>();
@@ -397,6 +423,14 @@ export function CopilotPanel({
   const catalogs = host.catalog ? [host.catalog] : undefined;
   const { history: archive } = host;
   const busy = streaming || saving || Boolean(uploadProgress);
+  const dashboardTypes = host.approve ? host.dashboardTypes : undefined;
+  const dashboardType =
+    formatPreference && dashboardTypes?.includes(formatPreference)
+      ? formatPreference
+      : dashboardTypes?.[0];
+  const contentLocale = languagePreference ?? shellLocale;
+  const canonicalLocale = proposal?.contentLocale ?? shellLocale;
+  const draftLocale = previewLocale ?? canonicalLocale;
   const pendingFiles = attachments.filter(item => 'file' in item);
   const hasImported = attachments.some(item => item.status === 'imported');
 
@@ -526,7 +560,13 @@ export function CopilotPanel({
           runId: crypto.randomUUID(),
           messages: wireHistory(history),
           tools: [],
-          context: buildContext(host, uploadedDatasetId, uploadedDatasetAction),
+          context: buildContext(
+            host,
+            uploadedDatasetId,
+            uploadedDatasetAction,
+            dashboardType,
+            dashboardTypes && contentLocale,
+          ),
           state: {},
           forwardedProps: action ? { a2uiAction: action } : {},
         }),
@@ -583,7 +623,10 @@ export function CopilotPanel({
         }));
         setMessages([...history, { ...reply }]);
       }
-      if (runProposal) setProposal(runProposal);
+      if (runProposal) {
+        setProposal(runProposal);
+        setPreviewLocale(undefined);
+      }
     } catch {
       complete = false;
       setProposal(undefined);
@@ -900,23 +943,74 @@ export function CopilotPanel({
                 aria-label={copy.proposal}
               >
                 <h3>{copy.proposal}</h3>
+                {proposal.dashboardType && (
+                  <span>
+                    {proposal.dashboardType === 'v1'
+                      ? copy.classic
+                      : copy.builder}
+                  </span>
+                )}
+                {proposal.contentLocale && (
+                  <label>
+                    {copy.previewLocale}
+                    <select
+                      value={draftLocale}
+                      disabled={busy}
+                      onChange={event => {
+                        setConfirming(false);
+                        setPreviewLocale(dashboardLocale(event.target.value));
+                      }}
+                    >
+                      <option value="en" lang="en">
+                        English
+                      </option>
+                      <option value="ar" lang="ar" dir="rtl">
+                        العربية
+                      </option>
+                    </select>
+                  </label>
+                )}
                 <label>
                   {copy.dashboardTitle}
                   <input
-                    value={proposal.title}
+                    value={
+                      dashboardTitleIn(
+                        proposal,
+                        canonicalLocale,
+                        draftLocale,
+                      ) ?? ''
+                    }
+                    placeholder={
+                      draftLocale !== canonicalLocale
+                        ? proposal.title
+                        : undefined
+                    }
+                    lang={draftLocale}
+                    dir={draftLocale === 'ar' ? 'rtl' : 'ltr'}
                     maxLength={256}
                     disabled={saving}
                     onChange={event => {
                       setConfirming(false);
-                      setProposal({ ...proposal, title: event.target.value });
+                      setProposal(
+                        editDashboardTitle(
+                          proposal,
+                          canonicalLocale,
+                          draftLocale,
+                          event.target.value,
+                        ),
+                      );
                     }}
                   />
                 </label>
-                {host.renderProposal?.(proposal, next => {
-                  if (saving) return;
-                  setConfirming(false);
-                  setProposal(next);
-                })}
+                {host.renderProposal?.(
+                  proposal,
+                  next => {
+                    if (saving) return;
+                    setConfirming(false);
+                    setProposal(next);
+                  },
+                  draftLocale,
+                )}
                 {confirming ? (
                   <div className="nxtbi-copilot__actions">
                     <button
@@ -1094,6 +1188,46 @@ export function CopilotPanel({
                 )}
               </div>
             </section>
+          )}
+          {dashboardType && (
+            <div className="nxtbi-copilot__draft-options">
+              <label>
+                {copy.dashboardType}
+                <select
+                  value={dashboardType}
+                  disabled={busy}
+                  onChange={event => {
+                    const format = dashboardTypes?.find(
+                      item => item === event.target.value,
+                    );
+                    if (format) setFormatPreference(format);
+                  }}
+                >
+                  {dashboardTypes?.map(format => (
+                    <option key={format} value={format}>
+                      {format === 'v1' ? copy.classic : copy.builder}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {copy.contentLocale}
+                <select
+                  value={contentLocale}
+                  disabled={busy}
+                  onChange={event =>
+                    setLanguagePreference(dashboardLocale(event.target.value))
+                  }
+                >
+                  <option value="en" lang="en">
+                    English
+                  </option>
+                  <option value="ar" lang="ar" dir="rtl">
+                    العربية
+                  </option>
+                </select>
+              </label>
+            </div>
           )}
           <form className="nxtbi-copilot__composer" onSubmit={submit}>
             {host.uploadDataset && (

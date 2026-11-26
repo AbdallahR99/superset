@@ -34,7 +34,7 @@ import { resolveView, useViews } from 'src/core/views';
 import { useDashboardStore, useDashboardRevision } from './store';
 import { isContainerType } from './DashboardProvider';
 import { DASHBOARD_WIDGETS_LOCATION } from './resolveWidgetView';
-import { widgetLabel } from './widgetLabel';
+import { authoredWidgetLabel, widgetLabel } from './widgetLabel';
 import { widgetHeaderControl } from './widgetHeaderControl';
 import RootGrid from './RootGrid';
 // eslint-disable-next-line import/no-cycle
@@ -43,6 +43,7 @@ import { useDashboardViewMode } from './viewMode';
 import EmbedWidgetModal from './EmbedWidgetModal';
 import { NodePathContext, isUnrenderable } from './nodePath';
 import { NodeErrorsContext } from './nodeErrors';
+import { useDashboardLocalizedText } from './localizedText';
 
 /**
  * A refused save's reason, drawn on the widget it was about. Logical
@@ -305,6 +306,12 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     const pathWithSelf = useMemo(() => [...path, nodeId], [path, nodeId]);
     const saveErrors = useContext(NodeErrorsContext)[nodeId];
     const node = store.getNode(nodeId);
+    const isRoot = nodeId === store.getRoot().id;
+    const label = useDashboardLocalizedText(
+      node && !isRoot ? widgetLabel(node.type, node.props) : '',
+      nodeId,
+      node && !isRoot ? authoredWidgetLabel(node.type, node.props) : null,
+    );
     if (!node) return null;
     // A node that is its own ancestor, or one nested past the depth a
     // document may have, is not rendered: see `NodePathContext`.
@@ -315,8 +322,7 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     // name of its own to show, and removing it is refused by the provider, so
     // a header there would be a label saying "Grid" over a button that only
     // ever raises an error.
-    const chrome = nodeId !== store.getRoot().id;
-    const isRoot = !chrome;
+    const chrome = !isRoot;
     const hasRegisteredView = widgetViews?.some(view => view.id === node.type);
     // The root's renderer is not looked up in the widget registry —
     // see this component's own doc comment — since the root was never
@@ -336,7 +342,6 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     const headerHeight = theme.controlHeightSM;
     // A type `widgetLabel` leaves unnamed (markdown, carousel) has nothing
     // to put in a header row, so it doesn't get one — see `OverlayControls`.
-    const label = chrome ? widgetLabel(node.type, node.props) : '';
     const hasTitle = Boolean(label);
 
     return (
@@ -579,6 +584,7 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
               <BlockHeader data-test={`widget-header-${nodeId}`}>
                 <Typography.Text
                   ellipsis
+                  dir="auto"
                   data-test={`widget-title-${nodeId}`}
                   style={{
                     flex: '1 1 auto',

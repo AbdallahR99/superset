@@ -26,7 +26,7 @@ import time
 from typing import Annotated, Literal
 
 from ag_ui.core import AssistantMessage, RunAgentInput, UserMessage
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, StringConstraints
 
 MAX_BODY_BYTES = 64_000
 MAX_MESSAGE_COUNT = 40
@@ -36,6 +36,11 @@ MAX_TOKEN_AGE = 300
 NONEMPTY_ID = Annotated[str, Field(min_length=1, max_length=200)]
 POSITIVE_ID = Annotated[int, Field(gt=0, le=2_147_483_647)]
 LABEL = Annotated[str, Field(min_length=1, max_length=160)]
+ContentLocale = Literal["en", "ar"]
+DashboardType = Literal["v1", "v2"]
+Caption = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)
+]
 
 
 class GatewayClaims(BaseModel):
@@ -60,6 +65,18 @@ class DatasetFilter(BaseModel):
     value: LABEL | int | float | bool
 
 
+class TitleTranslations(BaseModel):
+    """Author-facing captions with no data-binding or layout fields."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+    en: Caption | None = None
+    ar: Caption | None = None
+
+    def for_locale(self, locale: ContentLocale) -> str | None:
+        """Choose the requested caption when supplied."""
+        return self.ar if locale == "ar" else self.en
+
+
 class WidgetDraft(BaseModel):
     """A dashboard widget that can be proposed for a separate approval."""
 
@@ -74,6 +91,9 @@ class WidgetDraft(BaseModel):
     chart_style: Literal["bar", "line"] | None = Field(default=None, alias="chartStyle")
     filter: DatasetFilter | None = None
     title: LABEL | None = None
+    title_translations: TitleTranslations | None = Field(
+        default=None, alias="titleTranslations"
+    )
 
     @model_validator(mode="after")
     def validate_chart_style(self) -> WidgetDraft:
@@ -86,10 +106,14 @@ class WidgetDraft(BaseModel):
 class DashboardDraft(BaseModel):
     """Only this bounded shape can be sent to the proposal gateway."""
 
-    model_config = ConfigDict(extra="forbid")
-
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
     title: LABEL
     widgets: Annotated[list[WidgetDraft], Field(min_length=1, max_length=8)]
+    title_translations: TitleTranslations | None = Field(
+        default=None, alias="titleTranslations"
+    )
+    content_locale: ContentLocale | None = Field(default=None, alias="contentLocale")
+    dashboard_type: DashboardType | None = Field(default=None, alias="dashboardType")
 
 
 class DashboardProposal(DashboardDraft):
@@ -103,7 +127,9 @@ class DashboardProposal(DashboardDraft):
 class RunHints(BaseModel):
     """Untrusted page hints used for presentation and tool selection."""
 
-    locale: Literal["ar", "en"] = "en"
+    locale: ContentLocale = "en"
+    content_locale: ContentLocale | None = None
+    dashboard_type: DashboardType | None = None
     page: str | None = None
     active_dashboard_id: int | None = None
     active_chart_id: int | None = None
@@ -200,12 +226,22 @@ def _parse_form_values(forwarded: object) -> dict[str, str] | None:
     return action.context
 
 
+def _parse_draft_hint(hints: RunHints, key: object, value: str) -> None:
+    """Accept only the supported Superset draft preferences."""
+    if key == "content_locale" and value in ("ar", "en"):
+        hints.content_locale = "ar" if value == "ar" else "en"
+    elif key == "dashboard_type" and value in ("v1", "v2"):
+        hints.dashboard_type = "v1" if value == "v1" else "v2"
+    elif key == "uploaded_dataset_action" and value == "draft":
+        hints.uploaded_dataset_action = "draft"
+
+
 def _parse_hints(
     raw: object, forwarded: object, host: Literal["superset", "standalone"]
 ) -> RunHints:
     hints = RunHints()
     if isinstance(raw, list):
-        for item in raw[:8]:
+        for item in raw[:16]:
             if not isinstance(item, dict) or not isinstance(
                 value := item.get("value"), str
             ):
@@ -215,12 +251,6 @@ def _parse_hints(
                 hints.locale = "ar" if value == "ar" else "en"
             elif key == "page" and len(value) <= 120:
                 hints.page = value
-            elif (
-                host == "superset"
-                and key == "uploaded_dataset_action"
-                and value == "draft"
-            ):
-                hints.uploaded_dataset_action = "draft"
             elif (
                 key
                 in (
@@ -234,6 +264,8 @@ def _parse_hints(
                 and int(value) <= 2_147_483_647
             ):
                 setattr(hints, key, int(value))
+            elif host == "superset":
+                _parse_draft_hint(hints, key, value)
     if hints.uploaded_dataset_action and hints.uploaded_dataset_id is None:
         raise ValueError("Select a dataset before staging an upload draft")
     hints.form_values = _parse_form_values(forwarded)
