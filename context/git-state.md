@@ -1,7 +1,34 @@
-# Git state (2026-11-18)
+# Git state (2026-11-26)
 
 Remotes: `origin` = `https://github.com/AbdallahR99/superset.git` (the fork), `upstream` =
 `https://github.com/apache/superset.git`.
+
+## November 26 upstream sync
+
+Apache Superset master was fetched at `2c58859901008793230c541e7d309642e516c577`.
+The previous common upstream base was `6e54f477a0`. The 278 upstream commits
+were merged into the Copilot polish tip `bd321bce92` on
+`codex/upstream-sync-2c58859901`. The polish tip includes all 12 local
+Copilot, Widget SDK, and Dashboard V2 commits carried beyond the existing
+fork master, `e381689b86`.
+
+| Commit | Purpose |
+|---|---|
+| `8bcbd67337` | Two-parent upstream merge and compatibility work |
+| `16aede256c` | Copilot test typing, optional standalone peer type-check scope, and Dashboard V2 type cleanup |
+| `abfa2645d8` | Dashboard history regression test waits for the expanded details |
+| `4d0edafc64` | Direct Authlib dependency restores MCP startup and Keycloak support in the packaged runtime |
+| `1cf9ceeee6` | Scoped Dashboard V2 test fixture for direct command calls |
+
+Alembic revision `9fefac24f1cc` joins the earlier installed NxtBI widget
+revision `3c9e1a7b5d2f` with upstream head `7b9d2f8a6c31`. Both parent
+histories are preserved. The Copilot Docker overlay defaults to the synced
+base tag `nxtbi/superset-fork:upstream-sync-2c58859901` and keeps the existing
+override. The NxtBI Keycloak configuration preserves the branded login
+screen while stock Superset retains its single-provider redirect.
+
+Inspect the published tip with `git ls-remote origin refs/heads/master`.
+The prior deployment verification below is historical.
 
 ## master
 

@@ -2,6 +2,45 @@
 
 Host scripts need Python 3.11+ and `PYTHONIOENCODING=utf-8` on Windows.
 
+## November 26 upstream sync
+
+The merge targets Apache Superset `2c58859901`. The frontend verification
+image was built from `8bcbd67337` with the merged lockfile. Re-run the
+canonical bases with the repository Dockerfile and distinct local tags.
+
+```bash
+docker build --target superset --build-arg BUILD_TRANSLATIONS=true -t nxtbi/superset-fork:upstream-sync-2c58859901 .
+docker build -f nxtbi/copilot/superset.Dockerfile -t nxtbi/superset-fork:copilot-upstream-sync-2c58859901 .
+```
+
+The corrected verification artifacts are
+
+- Superset `nxtbi/superset-fork:upstream-sync-2c58859901`
+  (`sha256:57820ea7eaa34a79a85c610418ec76af9699da4f5aa9df94bc4a042fa0fd2b10`).
+  This layers Authlib 1.9.10, refreshed project metadata, and the Dashboard V2
+  type-check correction onto the merge build. FastMCP Slim 4.2.6 stopped
+  installing Authlib, which the host JWT verifier imports directly. The
+  declared dependency supplies it in future canonical builds.
+- Copilot web overlay `nxtbi/superset-fork:copilot-upstream-sync-2c58859901`
+  (`sha256:41f86d01ab808dcfe1d0513978c1fc949904b1ad6460dbad20bf29932acafb3e`).
+  Its base layers match the corrected Superset artifact and Authlib imports
+  successfully in the packaged overlay.
+
+| Area | Check and result |
+|---|---|
+| Frontend | Focused Jest passed all 52 suites, 680 tests, and three snapshots in one run on the fresh frontend image with the corrected history and Copilot test files mounted read-only. |
+| Types and formatting | Host TypeScript project build passed with Node 24.22.3 after correcting Copilot test declarations and scoping its optional peer adapter to the standalone host. The 54 merged frontend paths passed `oxfmt` after one formatting fix. Scoped `oxlint` exited successfully with four warnings. Linux-target mypy passed all six selected Python paths. |
+| Copilot packaging | The Superset extension passed 18 tests, TypeScript, webpack, and package verification. The standalone Vite build passed TypeScript and included the CopilotKit adapter. Both builds reported vendor chunk sizes. |
+| Arabic catalog | The Arabic gettext catalog and template parsed without duplicates. The Arabic catalog compiled and retained the fork-only UI strings. The repository translation token check and the generated feature-flag map passed. |
+| Migration cycle | The first disposable PostgreSQL 17 run used the merged source mounted over the previous packaged Python runtime. It passed fresh upgrade to `9fefac24f1cc`, downgrade to `b8f3a2c91d64`, and re-upgrade. |
+| Backend | All 783 focused pytest cases passed in the corrected image. The selection covers Copilot CSV, Dashboard V2, Widgets, dashboard access, OAuth login, and native MCP. The original 32 Dashboard V2 fixture failures matched the previous image. The scoped editor fixture supplies the expected permission for direct command calls and retains real permission checks for HTTP requests. |
+| Packaged PostgreSQL, MCP, and browser | The corrected image passed all 14 smoke assertions. It upgraded from the installed `3c9e1a7b5d2f` revision and preserved a saved widget, loaded all 88 MCP host tools, and passed Chromium sign-in, Dashboard V2 persistence and rendering, classic URL compatibility, Widgets, Copilot history, and Arabic RTL and English LTR. The isolated database and network were removed. |
+
+The browser verification used local database authentication. The Keycloak
+authorization and logout logic was checked without connecting to a live
+identity provider. Copilot history and packaging were verified without an
+external model invocation. The existing demo stack was outside this verification.
+
 ## Upstream sync verification
 
 November 18, 2026. The repository Dockerfile's `superset` target built with

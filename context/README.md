@@ -1,8 +1,10 @@
 # Project context (start here)
 
 This repository is the NxtBI fork of Apache Superset (`AbdallahR99/superset`).
-The upstream sync at `1908387364` incorporated Apache Superset `6e54f477a0`
-and preserved three pieces of NxtBI work.
+The November 26 sync integrated Apache Superset `2c58859901` and carried forward
+the NxtBI Copilot polish and CSV upload work. See [Git state](git-state.md#november-26-upstream-sync)
+for the merged references and [testing](testing.md#november-26-upstream-sync) for verification.
+The fork includes three NxtBI foundations alongside Copilot.
 
 1. **NxtBI demo stack** in `nxtbi/`: Docker Compose, Keycloak single sign-on, tenant isolation, demo
    dashboards, theme, scripts. No upstream file is changed by it.
@@ -10,11 +12,8 @@ and preserved three pieces of NxtBI work.
 3. **Dashboard V2 and embeddable widgets**, adopted from upstream PR apache/superset#44471 and repaired.
    Behind the feature flag `DASHBOARD_V2`, off by default.
 
-See the [upstream sync verification](testing.md#upstream-sync-verification)
-for the current development baseline.
-
-Stabilization merged at `82b2dcd1c4` and is live on the main demo with Dashboard
-V2 disabled. After rollout, all 34 smoke checks and both Arabic and English
+Stabilization merged at `82b2dcd1c4` and was deployed to the main demo with
+Dashboard V2 disabled. After rollout, all 34 smoke checks and both Arabic and English
 touch checks passed. See the [running image and rollback](configuration-and-docker.md#images),
 [verification results](testing.md), and [Git state](git-state.md).
 

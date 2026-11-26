@@ -16,7 +16,9 @@ External, not managed here: Keycloak `ld-shared-keycloak-1` (port 8180, realm `n
 |---|---|
 | `nxtbi/superset-fork:local` | Main demo Compose tag. Points to the verified stabilization image. |
 | `nxtbi/superset-fork:stabilization-final`, `nxtbi/superset-fork:stabilization-release` | Verified release image, ID `sha256:e8c6d3e617875c5b9eacd15c88ef2588129301457906bbc0d787bd6604eec270`. |
-| `nxtbi/superset-fork:upstream-sync-6e54f477a0` | Development baseline built from `1908387364` for isolated verification. See [upstream sync verification](testing.md#upstream-sync-verification). |
+| `nxtbi/superset-fork:upstream-sync-2c58859901` | Current upstream-sync base. PostgreSQL and browser verification used the corrected artifact. See the [November 26 checks](testing.md#november-26-upstream-sync). |
+| `nxtbi/superset-fork:copilot-upstream-sync-2c58859901` | Verification Copilot web overlay built on the corrected upstream-sync base. |
+| `nxtbi/superset-fork:upstream-sync-6e54f477a0` | Previous baseline built from `1908387364` for isolated verification. See [upstream sync verification](testing.md#upstream-sync-verification). |
 | `nxtbi/superset-fork:main-demo-pre-stabilization` | Immediate main demo rollback, ID `sha256:03ab240d8c365b6aa2281707335860451d40a41d14b907a3df305b66b77d07bc`. |
 | `nxtbi/superset-fork:widgets` | Image for the existing widgets stack. Shares the pre-stabilization image ID. |
 | `nxtbi/superset-fork:rtl-only` | Older RTL-branch image retained locally. |
