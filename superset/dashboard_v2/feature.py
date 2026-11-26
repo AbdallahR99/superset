@@ -69,7 +69,7 @@ def register_dashboard_v2_gate(app: Flask, views: Iterable[type[BaseView]]) -> N
             return None
         if blueprint in apis:
             return jsonify({"message": "Not found"}), 404
-        abort(404)
+        return abort(404)
 
     # Flask runs the app's ``before_request`` hooks in the order they were
     # registered, and CSRF protection, session validation and the security

@@ -111,6 +111,8 @@
     "plugins/**/lib/**/*",
     "plugins/**/esm/**/*",
     // A standalone Vite app with its own tsconfig, toolchain and node_modules.
-    "./packages/superset-widgets/example"
+    "./packages/superset-widgets/example",
+    // The standalone Copilot example checks this optional peer integration.
+    "./packages/nxtbi-copilot/src/copilotkit.tsx"
   ]
 }

@@ -147,12 +147,15 @@ test('imports CSV files sequentially and drafts with the selected dataset', asyn
   const first = new Promise<CopilotUploadedDataset>(resolve => {
     finishFirst = resolve;
   });
+  type UploadDataset = NonNullable<CopilotHost['uploadDataset']>;
   const uploadDataset = jest
-    .fn<NonNullable<CopilotHost['uploadDataset']>>()
+    .fn<ReturnType<UploadDataset>, Parameters<UploadDataset>>()
     .mockReturnValueOnce(first)
     .mockRejectedValueOnce(new Error('Internal transport detail'))
     .mockResolvedValueOnce({ id: 39, name: 'Expenses' });
-  const run = jest.fn<CopilotHost['run']>().mockResolvedValue(new Response());
+  const run = jest
+    .fn<ReturnType<CopilotHost['run']>, Parameters<CopilotHost['run']>>()
+    .mockResolvedValue(new Response());
   const completedRun = async function* () {
     yield { type: 'RUN_FINISHED' };
   };

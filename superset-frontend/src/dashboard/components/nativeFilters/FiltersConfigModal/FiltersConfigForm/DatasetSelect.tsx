@@ -71,9 +71,7 @@ export const fromCompositeValue = (compositeValue: string | number): number => {
 };
 
 /** Derives the `kind` value from a composite string prefix. */
-export const kindFromComposite = (
-  compositeValue: string,
-): string | undefined =>
+export const kindFromComposite = (compositeValue: string): string | undefined =>
   compositeValue.startsWith('sv:') ? 'semantic_view' : undefined;
 
 const isExcludedDatasource = (
