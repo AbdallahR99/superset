@@ -27,7 +27,7 @@ from flask import current_app as app, has_request_context, url_for
 from flask_appbuilder import Model
 from flask_appbuilder.models.decorators import renders
 from flask_babel import get_locale
-from markupsafe import escape, Markup
+from markupsafe import Markup
 from sqlalchemy import (
     Boolean,
     Column,
@@ -469,8 +469,7 @@ class Dashboard(CoreDashboard, SoftDeleteMixin, AuditMixinNullable, ImportExport
         Uses an available dashboard translation before checking the deployment's
         asset-metadata translation hook. Editing uses the canonical title.
         """
-        locale = get_locale()
-        if locale is not None:
+        if (locale := get_locale()) is not None:
             try:
                 metadata = self.params_dict
             except ValueError:
@@ -527,17 +526,14 @@ class Dashboard(CoreDashboard, SoftDeleteMixin, AuditMixinNullable, ImportExport
 
     @renders("dashboard_title")
     def dashboard_link(self) -> Markup:
-        title = escape(self.dashboard_title or "<empty>")
         # FAB list view renders this raw HTML; use url_for so Flask prepends
         # SCRIPT_NAME (the application_root) and the row link works under
         # subdirectory deployments. `Dashboard.url` itself stays router-
         # relative so frontend callers can apply ensureAppRoot exactly once.
-        # url_for percent-encodes the user-controlled slug path param; escape
-        # the result before Markup-marking for HTML attribute defence-in-depth.
-        href = escape(
-            url_for("Superset.dashboard", dashboard_id_or_slug=self.slug or self.id)
+        href = url_for("Superset.dashboard", dashboard_id_or_slug=self.slug or self.id)
+        return Markup('<a href="{}">{}</a>').format(
+            href, self.dashboard_title or "<empty>"
         )
-        return Markup(f'<a href="{href}">{title}</a>')
 
     @property
     def digest(self) -> str | None:
