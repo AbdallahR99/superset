@@ -441,3 +441,25 @@ The browser run used the built-in CSV draft. The agent tests cover the
 model-assisted proposal path. The first localization scope is dashboard and
 widget captions. Classic copies that duplicate charts require new chart-caption
 mappings, and standalone chart titles and embeds use their own title settings.
+
+### Copilot translation suggestions
+
+While reviewing a Classic or V2 draft, select **Suggest translations in
+Arabic** or **Suggest translations in English**. Copilot proposes captions for
+the other language. Compare current and suggested captions, then apply or
+dismiss the suggestions. Applying opens the translated preview. Review and save
+the dashboard as usual.
+
+The request sends the source dashboard and widget captions to a tool-free
+translation agent. The draft remains available while suggestions are pending.
+You can cancel the request or edit the draft to discard stale suggestions.
+When a model cannot provide a translation, the agent suggests captions covered
+by its English and Arabic glossary. Unrecognized captions stay editable.
+
+The disposable Docker lifecycle used the compiled Copilot extension and
+`nxtbi/copilot-agent:localization-assist`. Chromium applied suggestions to both
+dashboard formats, confirmed the same revenue value of 550, and verified the
+accepted Arabic widget captions after save and reopen. All 20 SDK tests and 51
+agent tests passed. The browser run used the glossary fallback. A test model
+covered structured translations because the GovAI endpoint timed out during
+the connectivity check.

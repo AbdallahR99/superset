@@ -371,6 +371,35 @@
   gap: 0.35rem;
 }
 
+.nxtbi-copilot__translation-list {
+  display: grid;
+  gap: 0.625rem;
+  padding-inline-start: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.nxtbi-copilot__translation-list dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.125rem 0.5rem;
+  margin: 0.25rem 0 0;
+  font-size: 0.85em;
+}
+
+.nxtbi-copilot__translation-list dd {
+  margin: 0;
+}
+
+.nxtbi-copilot__translation-announcement {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  margin: 0;
+}
+
 .nxtbi-copilot__composer,
 .nxtbi-copilot__actions {
   display: flex;
@@ -496,7 +525,7 @@
   font: inherit;
 }
 
-.nxtbi-copilot :where(button):not(:disabled):hover,
+.nxtbi-copilot :where(button):not(:disabled, [aria-disabled='true']):hover,
 .nxtbi-copilot__toolbar button[aria-expanded='true'] {
   background: var(--copilot-tint);
 }
@@ -525,7 +554,8 @@
   outline-offset: 2px;
 }
 
-.nxtbi-copilot button:disabled {
+.nxtbi-copilot button:disabled,
+.nxtbi-copilot button[aria-disabled='true'] {
   opacity: 0.55;
   cursor: default;
 }

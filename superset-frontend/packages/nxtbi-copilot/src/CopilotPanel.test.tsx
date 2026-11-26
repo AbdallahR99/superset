@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
 import { BASIC_A2UI_CATALOG_ID } from './a2ui';
@@ -399,6 +399,211 @@ test('keeps proposal format, canonical titles, and bindings when previewing and 
     { ...proposal, titleTranslations: { ar: 'تقرير الميزانية' } },
     expect.any(AbortSignal),
   );
+});
+
+test('reviews caption-only suggestions before applying them to an existing draft', async () => {
+  const user = userEvent.setup();
+  let release = () => {};
+  const pending = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const original = {
+    title: 'Sales overview',
+    contentLocale: 'en',
+    dashboardType: 'v2',
+    approvalToken: 'pending-approval',
+    titleTranslations: { ar: 'المبيعات' },
+    widgets: [
+      {
+        type: 'metric-tile',
+        datasetId: 8,
+        metric: 'revenue',
+        title: 'Revenue',
+        filter: { column: 'year', value: 2026 },
+      },
+      { type: 'metric-tile', datasetId: 8, metric: 'orders' },
+    ],
+  };
+  jest
+    .mocked(readAgUiEvents)
+    .mockImplementationOnce(async function* () {
+      yield {
+        type: 'CUSTOM',
+        name: 'nxtbi.dashboard-proposal',
+        value: original,
+      };
+      yield { type: 'RUN_FINISHED' };
+    })
+    .mockImplementation(async function* () {
+      await pending;
+      yield {
+        type: 'CUSTOM',
+        name: 'nxtbi.dashboard-caption-suggestions',
+        value: {
+          targetLocale: 'ar',
+          captions: ['موجز المبيعات', 'الإيرادات', null],
+        },
+      };
+      yield { type: 'RUN_FINISHED' };
+    });
+  const run = jest.fn<
+    ReturnType<CopilotHost['run']>,
+    Parameters<CopilotHost['run']>
+  >(async () => new Response());
+  const approve = jest
+    .fn()
+    .mockResolvedValue({ id: 8, url: '/dashboard/v2/8/' });
+  render(
+    <CopilotPanel
+      host={{ context: () => ({ active_dashboard_id: 45 }), run, approve }}
+    />,
+  );
+  await user.type(
+    screen.getByRole('textbox', { name: 'Ask Copilot' }),
+    'Draft sales',
+  );
+  await user.click(screen.getByRole('button', { name: 'Send' }));
+  const suggest = await screen.findByRole('button', {
+    name: 'Suggest translations in Arabic',
+  });
+  await user.click(suggest);
+  expect(suggest).toHaveFocus();
+  expect(suggest).toHaveAttribute('aria-disabled', 'true');
+  const title = screen.getByRole('textbox', { name: 'Dashboard title' });
+  const request = run.mock.calls[1][0];
+  expect(request).toMatchObject({
+    messages: [
+      {
+        id: expect.any(String),
+        role: 'user',
+        content: 'Suggest dashboard captions',
+      },
+    ],
+    context: [],
+    state: {},
+    forwardedProps: {
+      dashboardLocalization: {
+        sourceLocale: 'en',
+        targetLocale: 'ar',
+        captions: ['Sales overview', 'Revenue', null],
+      },
+    },
+  });
+  expect(JSON.stringify(request)).not.toMatch(
+    /pending-approval|datasetId|revenue|Draft sales/,
+  );
+  await user.click(title);
+  await act(async () => release());
+  expect(title).toHaveFocus();
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Translations are ready to review.',
+  );
+  const summary = await screen.findByRole('region', {
+    name: 'Suggested translations',
+  });
+  expect(within(summary).getByText('المبيعات')).toBeInTheDocument();
+  expect(within(summary).getByText('موجز المبيعات')).toHaveAttribute(
+    'lang',
+    'ar',
+  );
+  expect(screen.getByRole('textbox', { name: 'Dashboard title' })).toHaveValue(
+    'Sales overview',
+  );
+  expect(approve).not.toHaveBeenCalled();
+  await user.click(
+    within(summary).getByRole('button', { name: 'Dismiss suggestions' }),
+  );
+  expect(suggest).toHaveFocus();
+  await user.click(suggest);
+  await user.click(
+    await screen.findByRole('button', { name: 'Apply translations' }),
+  );
+  await waitFor(() => expect(title).toHaveFocus());
+  expect(screen.getByRole('textbox', { name: 'Dashboard title' })).toHaveValue(
+    'موجز المبيعات',
+  );
+  await user.click(screen.getByRole('button', { name: 'Review and save' }));
+  await user.click(screen.getByRole('button', { name: 'Save dashboard' }));
+  expect(approve).toHaveBeenCalledWith(
+    {
+      ...original,
+      titleTranslations: { ar: 'موجز المبيعات' },
+      widgets: [
+        { ...original.widgets[0], titleTranslations: { ar: 'الإيرادات' } },
+        original.widgets[1],
+      ],
+    },
+    expect.any(AbortSignal),
+  );
+});
+
+test('discards stale Classic caption suggestions after a draft edit', async () => {
+  const user = userEvent.setup();
+  let release = () => {};
+  const pending = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  jest
+    .mocked(readAgUiEvents)
+    .mockImplementationOnce(async function* () {
+      yield {
+        type: 'CUSTOM',
+        name: 'nxtbi.dashboard-proposal',
+        value: {
+          title: 'المبيعات',
+          contentLocale: 'ar',
+          dashboardType: 'v1',
+          approvalToken: 'classic-approval',
+          widgets: [{ type: 'metric-tile', datasetId: 2, metric: 'total' }],
+        },
+      };
+      yield { type: 'RUN_FINISHED' };
+    })
+    .mockImplementation(async function* () {
+      await pending;
+      yield {
+        type: 'CUSTOM',
+        name: 'nxtbi.dashboard-caption-suggestions',
+        value: { targetLocale: 'en', captions: ['Sales', null] },
+      };
+      yield { type: 'RUN_FINISHED' };
+    });
+  const run = jest.fn<
+    ReturnType<CopilotHost['run']>,
+    Parameters<CopilotHost['run']>
+  >(async () => new Response());
+  render(
+    <CopilotPanel host={{ context: () => ({}), run, approve: jest.fn() }} />,
+  );
+  await user.type(
+    screen.getByRole('textbox', { name: 'Ask Copilot' }),
+    'Draft sales',
+  );
+  await user.click(screen.getByRole('button', { name: 'Send' }));
+  const suggest = await screen.findByRole('button', {
+    name: 'Suggest translations in English',
+  });
+  await user.click(suggest);
+  await user.keyboard('{Enter}');
+  expect(run).toHaveBeenCalledTimes(2);
+  await user.tab();
+  expect(
+    screen.getByRole('button', { name: 'Cancel translation request' }),
+  ).toHaveFocus();
+  await user.keyboard('{Enter}');
+  expect(run.mock.calls[1][1].aborted).toBe(true);
+  expect(suggest).toHaveFocus();
+  await user.keyboard('{Enter}');
+  const title = screen.getByRole('textbox', { name: 'Dashboard title' });
+  await user.clear(title);
+  await user.type(title, 'إجمالي المبيعات');
+  expect(run.mock.calls[2][1].aborted).toBe(true);
+  await act(async () => release());
+  expect(
+    screen.queryByRole('region', { name: 'Suggested translations' }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(title).toHaveValue('إجمالي المبيعات');
 });
 
 test('imports CSV files sequentially and drafts with the selected dataset', async () => {

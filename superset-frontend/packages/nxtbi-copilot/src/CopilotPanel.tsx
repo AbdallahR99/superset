@@ -42,6 +42,7 @@ import {
   dashboardLocale,
   dashboardTitleIn,
   editDashboardTitle,
+  readCaptionSuggestions,
   readProposal,
   type AgUiRunInput,
   type CopilotConversation,
@@ -49,6 +50,7 @@ import {
   type CopilotTextMessage,
   type CopilotUploadedDataset,
   type DashboardContentLocale,
+  type DashboardLocalizationRequest,
   type DashboardProposal,
   type DashboardType,
 } from './contracts';
@@ -162,6 +164,18 @@ const english = {
   builder: 'Dashboard V2',
   contentLocale: 'Dashboard language',
   previewLocale: 'Preview language',
+  suggestArabic: 'Suggest translations in Arabic',
+  suggestEnglish: 'Suggest translations in English',
+  suggestingTranslations: 'Suggesting translations…',
+  translationReviewReady: 'Translations are ready to review.',
+  cancelSuggestions: 'Cancel translation request',
+  translationError: 'Could not suggest translations. Try again.',
+  noSuggestions: 'Copilot returned no new captions.',
+  suggestedTranslations: 'Suggested translations',
+  currentTranslation: 'Current',
+  suggestedTranslation: 'Suggested',
+  applyTranslations: 'Apply translations',
+  dismissSuggestions: 'Dismiss suggestions',
   review: 'Review and save',
   confirm: 'Save dashboard',
   cancel: 'Back',
@@ -232,6 +246,18 @@ const arabic: typeof english = {
   builder: 'لوحة المعلومات (الإصدار الثاني)',
   contentLocale: 'لغة لوحة المعلومات',
   previewLocale: 'لغة المعاينة',
+  suggestArabic: 'اقتراح ترجمات إلى العربية',
+  suggestEnglish: 'اقتراح ترجمات إلى الإنجليزية',
+  suggestingTranslations: 'جارٍ اقتراح الترجمات…',
+  translationReviewReady: 'الترجمات جاهزة للمراجعة.',
+  cancelSuggestions: 'إلغاء طلب الترجمة',
+  translationError: 'تعذّر اقتراح الترجمات. حاول مجددًا.',
+  noSuggestions: 'لم يقترح المساعد عناوين جديدة.',
+  suggestedTranslations: 'الترجمات المقترحة',
+  currentTranslation: 'الحالي',
+  suggestedTranslation: 'المقترح',
+  applyTranslations: 'تطبيق الترجمات',
+  dismissSuggestions: 'رفض الاقتراحات',
   review: 'مراجعة وحفظ',
   confirm: 'حفظ لوحة المعلومات',
   cancel: 'رجوع',
@@ -272,6 +298,7 @@ const MAX_PROMPT = 3000;
 const MAX_ANSWER = 24000;
 const MAX_ACTIVITY_BATCHES = 13;
 const HISTORY_TIMEOUT = 8000;
+const CAPTION_TIMEOUT = 30_000;
 const SCROLL_MARGIN = 32;
 const MAX_CSV_SIZE = 10 * 1024 * 1024;
 
@@ -319,6 +346,19 @@ function CopilotMark() {
       ✦
     </span>
   );
+}
+
+const dashboardLanguages = [
+  { locale: 'en', direction: 'ltr', label: 'English' },
+  { locale: 'ar', direction: 'rtl', label: 'العربية' },
+] as const;
+
+function DashboardLanguageOptions() {
+  return dashboardLanguages.map(({ locale, direction, label }) => (
+    <option key={locale} value={locale} lang={locale} dir={direction}>
+      {label}
+    </option>
+  ));
 }
 
 function wireHistory(history: CopilotTextMessage[]): CopilotTextMessage[] {
@@ -384,6 +424,7 @@ export function CopilotPanel({
   const copy = isArabic ? arabic : english;
   const direction = host.direction ?? (isArabic ? 'rtl' : 'ltr');
   const historyId = useId();
+  const translationsId = useId();
   const datasetSelectionName = useId();
   const [threadId, setThreadId] = useState<string>(() => crypto.randomUUID());
   const [messages, setMessages] = useState<CopilotTextMessage[]>([]);
@@ -414,12 +455,18 @@ export function CopilotPanel({
     useState<DashboardContentLocale>();
   const [previewLocale, setPreviewLocale] = useState<DashboardContentLocale>();
   const [confirming, setConfirming] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<(string | null)[]>();
+  const [suggestionError, setSuggestionError] = useState(false);
   const connection = useRef<AbortController>();
   const mutation = useRef<AbortController>();
+  const captionRequest = useRef<AbortController>();
   const filePicker = useRef<HTMLInputElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const followLatest = useRef(true);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const suggestButton = useRef<HTMLButtonElement>(null);
+  const dashboardTitleInput = useRef<HTMLInputElement>(null);
   const catalogs = host.catalog ? [host.catalog] : undefined;
   const { history: archive } = host;
   const busy = streaming || saving || Boolean(uploadProgress);
@@ -431,6 +478,8 @@ export function CopilotPanel({
   const contentLocale = languagePreference ?? shellLocale;
   const canonicalLocale = proposal?.contentLocale ?? shellLocale;
   const draftLocale = previewLocale ?? canonicalLocale;
+  const targetLocale = canonicalLocale === 'ar' ? 'en' : 'ar';
+  const hasSuggestions = suggestions?.some(Boolean);
   const pendingFiles = attachments.filter(item => 'file' in item);
   const hasImported = attachments.some(item => item.status === 'imported');
 
@@ -438,6 +487,7 @@ export function CopilotPanel({
     () => () => {
       connection.current?.abort();
       mutation.current?.abort();
+      captionRequest.current?.abort();
     },
     [],
   );
@@ -490,13 +540,31 @@ export function CopilotPanel({
     }
   }
 
+  function dismissTranslations() {
+    captionRequest.current?.abort();
+    captionRequest.current = undefined;
+    setSuggesting(false);
+    setSuggestions(undefined);
+    setSuggestionError(false);
+  }
+
+  function returnToTranslationTrigger() {
+    dismissTranslations();
+    suggestButton.current?.focus();
+  }
+
+  function replaceProposal(next: DashboardProposal | undefined) {
+    dismissTranslations();
+    setProposal(next);
+  }
+
   function switchConversation(conversation?: CopilotConversation) {
     followLatest.current = true;
     setThreadId(conversation?.threadId ?? crypto.randomUUID());
     setMessages(conversation?.messages ?? []);
     setSavedDashboard(conversation?.savedDashboard);
     setResults({});
-    setProposal(undefined);
+    replaceProposal(undefined);
     setConfirming(false);
     setDraft('');
     setAttachments([]);
@@ -506,6 +574,122 @@ export function CopilotPanel({
     setHistorySaveFailed(false);
     setHistoryOpen(false);
     window.requestAnimationFrame(() => composer.current?.focus());
+  }
+
+  async function suggestTranslations() {
+    if (
+      !proposal?.contentLocale ||
+      !proposal.title.trim() ||
+      proposal.widgets.length > 8 ||
+      connection.current ||
+      mutation.current ||
+      captionRequest.current
+    ) {
+      return;
+    }
+    const request: DashboardLocalizationRequest = {
+      sourceLocale: proposal.contentLocale,
+      targetLocale,
+      captions: [
+        proposal.title.trim(),
+        ...proposal.widgets.map(widget => widget.title?.trim() || null),
+      ],
+    };
+    if (request.captions.some(caption => caption && caption.length > 256)) {
+      setSuggestionError(true);
+      return;
+    }
+    const controller = new AbortController();
+    captionRequest.current = controller;
+    setConfirming(false);
+    setSuggesting(true);
+    setSuggestions(undefined);
+    setSuggestionError(false);
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(CAPTION_TIMEOUT),
+    ]);
+    try {
+      const response = await host.run(
+        {
+          threadId,
+          runId: crypto.randomUUID(),
+          messages: [
+            {
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: 'Suggest dashboard captions',
+            },
+          ],
+          tools: [],
+          state: {},
+          context: [],
+          forwardedProps: { dashboardLocalization: request },
+        },
+        signal,
+      );
+      let complete = false;
+      let captions: (string | null)[] | undefined;
+      for await (const event of readAgUiEvents(response)) {
+        if (signal.aborted) break;
+        if (event.type === 'RUN_ERROR')
+          throw new Error('Caption request failed');
+        if (event.type === 'RUN_FINISHED') {
+          complete = true;
+          break;
+        }
+        if (
+          event.type === 'CUSTOM' &&
+          event.name === 'nxtbi.dashboard-caption-suggestions'
+        ) {
+          captions = readCaptionSuggestions(event.value, request);
+        }
+      }
+      if (!complete || !captions || signal.aborted)
+        throw new Error('Incomplete caption suggestions');
+      if (captionRequest.current === controller) {
+        const titles = [proposal, ...proposal.widgets];
+        setSuggestions(
+          captions.map((caption, index) =>
+            caption === titles[index].titleTranslations?.[targetLocale]
+              ? null
+              : caption,
+          ),
+        );
+      }
+    } catch {
+      if (captionRequest.current === controller && !controller.signal.aborted)
+        setSuggestionError(true);
+    } finally {
+      if (captionRequest.current === controller) {
+        captionRequest.current = undefined;
+        setSuggesting(false);
+      }
+    }
+  }
+
+  function applyTranslations() {
+    if (!proposal || !suggestions) return;
+    const [title, ...widgetTitles] = suggestions;
+    replaceProposal({
+      ...(title
+        ? editDashboardTitle(proposal, canonicalLocale, targetLocale, title)
+        : proposal),
+      widgets: proposal.widgets.map((widget, index) => {
+        const translated = widgetTitles[index];
+        return translated
+          ? editDashboardTitle(
+              widget,
+              canonicalLocale,
+              targetLocale,
+              translated,
+            )
+          : widget;
+      }),
+    });
+    setConfirming(false);
+    setPreviewLocale(targetLocale);
+    window.requestAnimationFrame(() => dashboardTitleInput.current?.focus());
   }
 
   async function send(
@@ -549,7 +733,7 @@ export function CopilotPanel({
     setError('');
     setFailedPrompt('');
     if (!action && !uploadedDatasetAction) setDraft('');
-    setProposal(undefined);
+    replaceProposal(undefined);
     setConfirming(false);
 
     const promptSaved = remember(history);
@@ -624,12 +808,12 @@ export function CopilotPanel({
         setMessages([...history, { ...reply }]);
       }
       if (runProposal) {
-        setProposal(runProposal);
+        replaceProposal(runProposal);
         setPreviewLocale(undefined);
       }
     } catch {
       complete = false;
-      setProposal(undefined);
+      replaceProposal(undefined);
       if (!controller.signal.aborted) {
         setFailedPrompt(text);
         setError(copy.streamError);
@@ -727,12 +911,13 @@ export function CopilotPanel({
       return;
     const controller = new AbortController();
     mutation.current = controller;
+    dismissTranslations();
     setSaving(true);
     setError('');
     try {
       const result = await host.approve(proposal, controller.signal);
       if (controller.signal.aborted) return;
-      setProposal(undefined);
+      replaceProposal(undefined);
       setConfirming(false);
       setSavedDashboard(result);
       await remember(messages, result);
@@ -961,18 +1146,14 @@ export function CopilotPanel({
                         setPreviewLocale(dashboardLocale(event.target.value));
                       }}
                     >
-                      <option value="en" lang="en">
-                        English
-                      </option>
-                      <option value="ar" lang="ar" dir="rtl">
-                        العربية
-                      </option>
+                      <DashboardLanguageOptions />
                     </select>
                   </label>
                 )}
                 <label>
                   {copy.dashboardTitle}
                   <input
+                    ref={dashboardTitleInput}
                     value={
                       dashboardTitleIn(
                         proposal,
@@ -991,7 +1172,7 @@ export function CopilotPanel({
                     disabled={saving}
                     onChange={event => {
                       setConfirming(false);
-                      setProposal(
+                      replaceProposal(
                         editDashboardTitle(
                           proposal,
                           canonicalLocale,
@@ -1007,9 +1188,97 @@ export function CopilotPanel({
                   next => {
                     if (saving) return;
                     setConfirming(false);
-                    setProposal(next);
+                    replaceProposal(next);
                   },
                   draftLocale,
+                )}
+                {proposal.contentLocale && (
+                  <div className="nxtbi-copilot__actions">
+                    <button
+                      ref={suggestButton}
+                      type="button"
+                      disabled={busy || !proposal.title.trim()}
+                      aria-disabled={suggesting || undefined}
+                      onClick={suggestTranslations}
+                    >
+                      {targetLocale === 'ar'
+                        ? copy.suggestArabic
+                        : copy.suggestEnglish}
+                    </button>
+                    {suggesting && (
+                      <button
+                        type="button"
+                        onClick={returnToTranslationTrigger}
+                      >
+                        {copy.cancelSuggestions}
+                      </button>
+                    )}
+                  </div>
+                )}
+                <output
+                  className={
+                    hasSuggestions || (!suggesting && !suggestions)
+                      ? 'nxtbi-copilot__translation-announcement'
+                      : undefined
+                  }
+                >
+                  {suggesting
+                    ? copy.suggestingTranslations
+                    : hasSuggestions
+                      ? copy.translationReviewReady
+                      : suggestions
+                        ? copy.noSuggestions
+                        : null}
+                </output>
+                {suggestionError && (
+                  <p className="nxtbi-copilot__error" role="alert">
+                    {copy.translationError}
+                  </p>
+                )}
+                {suggestions && hasSuggestions && (
+                  <section aria-labelledby={translationsId}>
+                    <h4 id={translationsId}>{copy.suggestedTranslations}</h4>
+                    <ul className="nxtbi-copilot__translation-list">
+                      {[proposal, ...proposal.widgets].map((item, index) => {
+                        const suggested = suggestions[index];
+                        if (!suggested) return null;
+                        return (
+                          <li key={index}>
+                            <bdi lang={canonicalLocale}>{item.title}</bdi>
+                            <dl>
+                              <dt>{copy.currentTranslation}</dt>
+                              <dd>
+                                <bdi lang={targetLocale}>
+                                  {item.titleTranslations?.[targetLocale] ??
+                                    '—'}
+                                </bdi>
+                              </dd>
+                              <dt>{copy.suggestedTranslation}</dt>
+                              <dd>
+                                <bdi lang={targetLocale}>{suggested}</bdi>
+                              </dd>
+                            </dl>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <div className="nxtbi-copilot__actions">
+                      <button
+                        type="button"
+                        className="nxtbi-copilot__primary"
+                        disabled={busy}
+                        onClick={applyTranslations}
+                      >
+                        {copy.applyTranslations}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={returnToTranslationTrigger}
+                      >
+                        {copy.dismissSuggestions}
+                      </button>
+                    </div>
+                  </section>
                 )}
                 {confirming ? (
                   <div className="nxtbi-copilot__actions">
@@ -1219,12 +1488,7 @@ export function CopilotPanel({
                     setLanguagePreference(dashboardLocale(event.target.value))
                   }
                 >
-                  <option value="en" lang="en">
-                    English
-                  </option>
-                  <option value="ar" lang="ar" dir="rtl">
-                    العربية
-                  </option>
+                  <DashboardLanguageOptions />
                 </select>
               </label>
             </div>

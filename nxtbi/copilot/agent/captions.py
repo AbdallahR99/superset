@@ -36,6 +36,7 @@ _ARABIC = {
     "status": "الحالة",
     "total order value": "إجمالي قيمة الطلبات",
 }
+_ENGLISH = {arabic: english.capitalize() for english, arabic in _ARABIC.items()}
 
 
 def arabic_label(value: str) -> str:
@@ -44,6 +45,22 @@ def arabic_label(value: str) -> str:
     if label.startswith("sum of ") and (term := _ARABIC.get(label[7:])):
         return f"مجموع {term}"
     return _ARABIC.get(label, value)
+
+
+def suggest_caption(value: str | None, target: ContentLocale) -> str | None:
+    """Suggest a known translation while leaving unfamiliar captions to the user."""
+    if value is None:
+        return None
+    caption = value.strip()
+    if target == "ar":
+        arabic = arabic_label(caption)
+        return arabic if arabic != caption else None
+    prefix = "مجموع "
+    if caption.startswith(prefix) and (
+        term := _ENGLISH.get(caption.removeprefix(prefix))
+    ):
+        return f"Sum of {term.lower()}"
+    return _ENGLISH.get(caption)
 
 
 def titles(english: str, arabic: str) -> TitleTranslations:

@@ -60,7 +60,7 @@ TOTAL = 550
 NORTH_TOTAL = 250
 PROPOSED_WIDGET_TITLE = "Revenue total for review"
 ARABIC_DASHBOARD_TITLE = "لوحة مراجعة المبيعات"
-ARABIC_WIDGET_TITLE = "إجمالي الإيرادات للمراجعة"
+ARABIC_LETTER = re.compile(r"[\u0621-\u063a\u0641-\u064a]")
 
 
 @dataclass(frozen=True)
@@ -226,7 +226,72 @@ def is_kpi_preview(response: Response, dataset_id: int) -> bool:
     )
 
 
-def edit_proposal_titles(proposal: Locator, title: str) -> Locator:
+def suggest_proposal_translations(
+    page: Page,
+    proposal: Locator,
+    dataset_id: int,
+    dashboard_type: Literal["v1", "v2"],
+) -> str:
+    """Apply Arabic suggestions without changing the proposal's query."""
+    languages = proposal.get_by_role("combobox", name="Preview language", exact=True)
+    title = proposal.get_by_role("textbox", name="Dashboard title", exact=True)
+    widget = proposal.get_by_role("article").first
+    settings = widget.locator("summary").filter(has_text="Edit widget")
+    widget_title = widget.get_by_role("textbox", name="Widget title", exact=True)
+    settings.click()
+    languages.select_option("ar")
+    expect(widget_title).to_have_attribute("maxlength", "256")
+    title.fill("")
+    widget_title.fill("")
+    languages.select_option("en")
+    expect(widget_title).to_have_attribute(
+        "maxlength", "250" if dashboard_type == "v1" else "256"
+    )
+    title.fill("Sales")
+    widget_title.fill("Revenue")
+
+    events = read_agui_run(
+        page,
+        proposal.get_by_role(
+            "button", name="Suggest translations in Arabic", exact=True
+        ),
+    )
+    suggestions = next(
+        event["value"]
+        for event in events
+        if event.get("type") == "CUSTOM"
+        and event.get("name") == "nxtbi.dashboard-caption-suggestions"
+    )
+    assert suggestions["targetLocale"] == "ar"
+    title_caption, widget_caption, *_ = suggestions["captions"]
+    for caption in (title_caption, widget_caption):
+        assert isinstance(caption, str)
+        assert ARABIC_LETTER.search(caption)
+    title_caption, widget_caption = title_caption.strip(), widget_caption.strip()
+    review = proposal.get_by_role("region", name="Suggested translations", exact=True)
+    expect(review.get_by_text(title_caption, exact=True).first).to_be_visible()
+    expect(review.get_by_text(widget_caption, exact=True).first).to_be_visible()
+    expect(title).to_have_value("Sales")
+
+    with page.expect_response(
+        lambda response: is_kpi_preview(response, dataset_id)
+    ) as preview:
+        review.get_by_role("button", name="Apply translations", exact=True).click()
+        expect(languages).to_have_value("ar")
+        proposal.get_by_role("button", name="Refresh previews", exact=True).click()
+    expect(title).to_have_value(title_caption)
+    expect(widget_title).to_have_value(widget_caption)
+    data = preview.value
+    assert data.ok, f"Translated KPI preview HTTP {data.status}"
+    assert float(data.json()["result"]["rows"][0][METRIC]) == TOTAL
+    languages.select_option("en")
+    expect(title).to_have_value("Sales")
+    expect(widget_title).to_have_value("Revenue")
+    settings.click()
+    return widget_caption
+
+
+def edit_proposal_titles(proposal: Locator, title: str, widget_caption: str) -> Locator:
     """Edit English and Arabic display text on one dashboard proposal."""
     languages = proposal.get_by_role("combobox", name="Preview language", exact=True)
     title_field = proposal.get_by_role("textbox", name="Dashboard title", exact=True)
@@ -240,11 +305,11 @@ def edit_proposal_titles(proposal: Locator, title: str) -> Locator:
     languages.select_option("ar")
     expect(title_field).to_have_attribute("dir", "rtl")
     title_field.fill(ARABIC_DASHBOARD_TITLE)
-    widget_title.fill(ARABIC_WIDGET_TITLE)
+    expect(widget_title).to_have_value(widget_caption)
     preview = widget.locator(".nxtbi-proposal-widget__preview")
     expect(preview).to_have_attribute("dir", "rtl")
     proposal.get_by_role("button", name="Refresh previews", exact=True).click()
-    expect(preview.get_by_text(ARABIC_WIDGET_TITLE, exact=True)).to_be_visible()
+    expect(preview.get_by_text(widget_caption, exact=True)).to_be_visible()
     expect(preview.get_by_text(str(TOTAL), exact=True)).to_be_visible()
     languages.select_option("en")
     expect(title_field).to_have_value(title)
@@ -255,7 +320,10 @@ def edit_proposal_titles(proposal: Locator, title: str) -> Locator:
 
 
 def approve_proposal(
-    page: Page, proposal: Locator, dashboard_type: Literal["v1", "v2"]
+    page: Page,
+    proposal: Locator,
+    dashboard_type: Literal["v1", "v2"],
+    widget_caption: str,
 ) -> tuple[int, str]:
     """Approve the selected format through the normal browser confirmation."""
     proposal.get_by_role("button", name="Review and save", exact=True).click()
@@ -270,7 +338,7 @@ def approve_proposal(
     body = response.request.post_data_json
     assert body["dashboardType"] == dashboard_type
     assert body["titleTranslations"]["ar"] == ARABIC_DASHBOARD_TITLE
-    assert body["widgets"][0]["titleTranslations"]["ar"] == ARABIC_WIDGET_TITLE
+    assert body["widgets"][0]["titleTranslations"]["ar"] == widget_caption
     result = response.json()
     dashboard_id = result["id"]
     prefix = "/dashboard/v2/" if dashboard_type == "v2" else "/dashboard/"
@@ -289,7 +357,7 @@ def approve_proposal(
 
 def create_draft(
     page: Page, base: str, title: str, artifact_dir: Path | None
-) -> tuple[int, int, int, str]:
+) -> tuple[int, int, int, str, dict[int, str]]:
     """Import one fixture and approve a dashboard in each format."""
     panel = open_chat(page)
     panel.locator('input[type="file"][accept*=".csv"]').set_input_files(
@@ -337,18 +405,20 @@ def create_draft(
     assert float(data.json()["result"]["rows"][0][METRIC]) == TOTAL
     proposal = page.get_by_role("region", name="Dashboard proposal", exact=True)
     expect(proposal.locator("canvas").first).to_be_visible()
-    title_field = edit_proposal_titles(proposal, title)
+    v2_caption = suggest_proposal_translations(page, proposal, dataset_id, "v2")
+    title_field = edit_proposal_titles(proposal, title, v2_caption)
     if artifact_dir is not None:
         evidence.scroll_into_view_if_needed()
         page.screenshot(path=artifact_dir / "copilot-evidence.png")
         title_field.scroll_into_view_if_needed()
         page.screenshot(path=artifact_dir / "copilot-proposal.png")
-    dashboard_id, _ = approve_proposal(page, proposal, "v2")
+    dashboard_id, _ = approve_proposal(page, proposal, "v2", v2_caption)
     dashboard_format.select_option("v1")
     read_agui_run(page, draft_button)
     expect(proposal.get_by_text("Classic (V1)", exact=True)).to_be_visible()
-    edit_proposal_titles(proposal, f"{title} Classic")
-    classic_id, classic_url = approve_proposal(page, proposal, "v1")
+    classic_caption = suggest_proposal_translations(page, proposal, dataset_id, "v1")
+    edit_proposal_titles(proposal, f"{title} Classic", classic_caption)
+    classic_id, classic_url = approve_proposal(page, proposal, "v1", classic_caption)
     assert classic_id != dashboard_id
     page.get_by_role("button", name="Open dashboard", exact=True).click()
     page.wait_for_url(f"{base}{classic_url}")
@@ -357,7 +427,13 @@ def create_draft(
         f"dashboards {dashboard_id} and {classic_id}",
         flush=True,
     )
-    return dashboard_id, classic_id, dataset_id, table
+    return (
+        dashboard_id,
+        classic_id,
+        dataset_id,
+        table,
+        {dashboard_id: v2_caption, classic_id: classic_caption},
+    )
 
 
 def stored_dashboard(page: Page, url: str) -> dict[str, Any]:
@@ -382,6 +458,7 @@ def verify_saved_localizations(
     classic_id: int,
     dataset_id: int,
     title: str,
+    widget_captions: dict[int, str],
     artifact_dir: Path | None = None,
 ) -> None:
     """Reload the same Classic and V2 dashboards in English and Arabic."""
@@ -391,15 +468,18 @@ def verify_saved_localizations(
     classic_api = f"{base}/api/v1/dashboard/{classic_id}"
     v2 = stored_dashboard(page, v2_api)
     nodes = v2["document"]["nodes"]
-    assert nodes["root"]["props"]["nxtbiLocalization"]["title"]["translations"][
-        "ar"
-    ] == (ARABIC_DASHBOARD_TITLE)
+    localization = nodes["root"]["props"]["nxtbiLocalization"]
+    assert localization["title"]["translations"]["ar"] == ARABIC_DASHBOARD_TITLE
     node_id = next(
         node_id
         for node_id, node in nodes.items()
         if node["type"] == "metric-tile"
         and node["props"]["dataBinding"]["datasetId"] == dataset_id
         and METRIC in node["props"]["dataBinding"]["metrics"]
+    )
+    assert (
+        localization["widgets"][node_id]["translations"]["ar"]
+        == (widget_captions[dashboard_id])
     )
     expect(page.locator("html")).to_have_attribute("dir", "ltr")
     previous_chart: dict[str, Any] | None = None
@@ -409,8 +489,11 @@ def verify_saved_localizations(
         expected_classic = (
             f"{title} Classic" if locale == "en" else ARABIC_DASHBOARD_TITLE
         )
-        expected_widget = (
-            PROPOSED_WIDGET_TITLE if locale == "en" else ARABIC_WIDGET_TITLE
+        expected_classic_widget = (
+            PROPOSED_WIDGET_TITLE if locale == "en" else widget_captions[classic_id]
+        )
+        expected_v2_widget = (
+            PROPOSED_WIDGET_TITLE if locale == "en" else widget_captions[dashboard_id]
         )
         dashboard = page.request.get(classic_api)
         assert dashboard.ok, f"Read Classic dashboard HTTP {dashboard.status}"
@@ -426,7 +509,7 @@ def verify_saved_localizations(
             if chart["slice_name"] == PROPOSED_WIDGET_TITLE
         )
         binding = chart["form_data"]
-        assert chart["localized_name"] == expected_widget
+        assert chart["localized_name"] == expected_classic_widget
         assert binding["datasource"] == f"{dataset_id}__table"
         assert binding["metric"] == METRIC
         assert binding["viz_type"] == "big_number_total"
@@ -451,7 +534,7 @@ def verify_saved_localizations(
         chart_view = page.locator(f'[data-test-chart-id="{chart["id"]}"]')
         expect(
             chart_view.locator('[data-test="slice-header"]').get_by_text(
-                expected_widget, exact=True
+                expected_classic_widget, exact=True
             )
         ).to_be_visible()
         native_data = data.value
@@ -465,7 +548,7 @@ def verify_saved_localizations(
         expect(page.locator("html")).to_have_attribute("dir", direction)
         expect(page.locator('[data-test="header-title"]')).to_have_text(expected_v2)
         expect(page.locator(f'[data-test="widget-title-{node_id}"]')).to_have_text(
-            expected_widget
+            expected_v2_widget
         )
         expect(
             page.locator(f'[data-test="widget-content-{node_id}"]').get_by_text(
@@ -854,7 +937,7 @@ def main() -> None:
             login(owner, base, args.username, password)
             active_page = owner
             title = f"Copilot lifecycle {uuid4().hex[:8]}"
-            dashboard_id, classic_id, dataset_id, table = create_draft(
+            dashboard_id, classic_id, dataset_id, table, widget_captions = create_draft(
                 owner, base, title, args.artifact_dir
             )
             verify_saved_localizations(
@@ -864,6 +947,7 @@ def main() -> None:
                 classic_id,
                 dataset_id,
                 title,
+                widget_captions,
                 args.artifact_dir,
             )
             widget = edit_publish_and_save_widget(

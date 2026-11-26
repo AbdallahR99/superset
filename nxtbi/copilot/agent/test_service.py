@@ -27,7 +27,13 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
-from pydantic_ai.messages import ModelMessage, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.models.test import TestModel as PydanticTestModel
 
@@ -73,6 +79,157 @@ def _events(response: httpx.Response) -> list[dict[str, Any]]:
     assert data[0]["type"] == "RUN_STARTED"
     assert data[-1]["type"] == "RUN_FINISHED", data
     return data
+
+
+def test_caption_suggestions_use_only_captions_and_no_function_tools() -> None:
+    request = {
+        "sourceLocale": "en",
+        "targetLocale": "ar",
+        "captions": ["Sales", None, "Revenue", "Keep this abbreviation"],
+    }
+
+    def translate(messages: Sequence[ModelMessage], info: AgentInfo) -> ModelResponse:
+        assert not info.function_tools
+        (output,) = info.output_tools
+        prompts = [
+            part.content
+            for message in messages
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        ]
+        (prompt,) = prompts
+        assert isinstance(prompt, str)
+        assert json.loads(prompt) == request
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    output.name,
+                    {
+                        "captions": [
+                            "المبيعات",
+                            "لا عنوان",
+                            "إجمالي الإيرادات",
+                            "Keep this abbreviation",
+                        ]
+                    },
+                )
+            ]
+        )
+
+    client = TestClient(
+        create_app(
+            Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+            model=FunctionModel(function=translate),
+        )
+    )
+    result = _events(
+        client.post(
+            "/ag-ui",
+            headers=_authorization("superset"),
+            json={
+                **REQUEST,
+                "context": [{"description": "page", "value": "A private page"}],
+                "forwardedProps": {"dashboardLocalization": request},
+            },
+        )
+    )
+
+    assert [event["type"] for event in result] == [
+        "RUN_STARTED",
+        "CUSTOM",
+        "RUN_FINISHED",
+    ]
+    assert result[1]["name"] == "nxtbi.dashboard-caption-suggestions"
+    assert result[1]["value"] == {
+        "targetLocale": "ar",
+        "captions": ["المبيعات", None, "إجمالي الإيرادات", None],
+    }
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "supplied", "expected"),
+    [
+        (
+            "en",
+            "ar",
+            ["Sales", "Unknown Name", "Revenue"],
+            ["المبيعات", None, "الإيرادات"],
+        ),
+        ("ar", "en", ["المبيعات", None, "الإيرادات"], ["Sales", None, "Revenue"]),
+    ],
+)
+def test_caption_suggestions_have_a_known_word_fallback(
+    source: str, target: str, supplied: list[str | None], expected: list[str | None]
+) -> None:
+    client = TestClient(create_app(Settings(shared_secret=SIGNING_KEY)))
+    events = _events(
+        client.post(
+            "/ag-ui",
+            headers=_authorization("superset"),
+            json={
+                **REQUEST,
+                "forwardedProps": {
+                    "dashboardLocalization": {
+                        "sourceLocale": source,
+                        "targetLocale": target,
+                        "captions": supplied,
+                    }
+                },
+            },
+        )
+    )
+    assert events[1]["value"] == {"targetLocale": target, "captions": expected}
+
+
+@pytest.mark.parametrize(
+    ("host", "extra", "context", "forwarded"),
+    [
+        ("standalone", {}, [], {}),
+        ("superset", {"targetLocale": "en"}, [], {}),
+        ("superset", {"targetLocale": "fr"}, [], {}),
+        ("superset", {"captions": [" "]}, [], {}),
+        ("superset", {"captions": ["Sales", True]}, [], {}),
+        ("superset", {"captions": ["Sales", "x" * 257]}, [], {}),
+        ("superset", {"captions": ["Sales"] * 10}, [], {}),
+        ("superset", {"datasetId": 8}, [], {}),
+        ("superset", {}, [], {"a2uiAction": None}),
+        (
+            "superset",
+            {},
+            [
+                {"description": "uploaded_dataset_id", "value": "7"},
+                {"description": "uploaded_dataset_action", "value": "draft"},
+            ],
+            {},
+        ),
+    ],
+)
+def test_caption_suggestions_reject_invalid_or_mixed_intent(
+    host: Literal["superset", "standalone"],
+    extra: dict[str, object],
+    context: list[dict[str, str]],
+    forwarded: dict[str, object],
+) -> None:
+    forwarded_props: dict[str, object] = {
+        "dashboardLocalization": {
+            "sourceLocale": "en",
+            "targetLocale": "ar",
+            "captions": ["Sales"],
+            **extra,
+        },
+        **forwarded,
+    }
+    client = TestClient(create_app(Settings(shared_secret=SIGNING_KEY)))
+    response = client.post(
+        "/ag-ui",
+        headers=_authorization(host),
+        json={
+            **REQUEST,
+            "context": context,
+            "forwardedProps": forwarded_props,
+        },
+    )
+    assert response.status_code == 422
 
 
 def _evidence_nodes(events: list[dict[str, Any]]) -> dict[str, Any]:

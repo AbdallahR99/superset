@@ -41,6 +41,8 @@ DashboardType = Literal["v1", "v2"]
 Caption = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)
 ]
+CaptionText = Annotated[str, StringConstraints(max_length=256)]
+CaptionList = Annotated[list[CaptionText | None], Field(min_length=1, max_length=9)]
 
 
 class GatewayClaims(BaseModel):
@@ -124,6 +126,34 @@ class DashboardProposal(DashboardDraft):
     ]
 
 
+class DashboardLocalization(BaseModel):
+    """Request translated captions for the current draft only."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    source_locale: ContentLocale = Field(alias="sourceLocale")
+    target_locale: ContentLocale = Field(alias="targetLocale")
+    captions: CaptionList
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> DashboardLocalization:
+        """Require a real dashboard caption and a distinct target language."""
+        if (
+            self.source_locale == self.target_locale
+            or not (self.captions[0] or "").strip()
+        ):
+            raise ValueError("A title and distinct target language are required")
+        return self
+
+
+class CaptionSuggestions(BaseModel):
+    """A bounded list of model suggestions in the original caption order."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    captions: CaptionList
+
+
 class RunHints(BaseModel):
     """Untrusted page hints used for presentation and tool selection."""
 
@@ -137,6 +167,7 @@ class RunHints(BaseModel):
     uploaded_dataset_id: int | None = None
     uploaded_dataset_action: Literal["draft"] | None = None
     form_values: dict[str, str] | None = None
+    dashboard_localization: DashboardLocalization | None = None
 
 
 class FormAction(BaseModel):
@@ -236,6 +267,17 @@ def _parse_draft_hint(hints: RunHints, key: object, value: str) -> None:
         hints.uploaded_dataset_action = "draft"
 
 
+def _parse_dashboard_localization(
+    forwarded: object, host: Literal["superset", "standalone"], upload_draft: bool
+) -> DashboardLocalization | None:
+    """Parse this explicit Superset action only when it is the sole intent."""
+    if not isinstance(forwarded, dict) or "dashboardLocalization" not in forwarded:
+        return None
+    if host != "superset" or upload_draft or "a2uiAction" in forwarded:
+        raise ValueError("Dashboard localization requires a separate draft request")
+    return DashboardLocalization.model_validate(forwarded["dashboardLocalization"])
+
+
 def _parse_hints(
     raw: object, forwarded: object, host: Literal["superset", "standalone"]
 ) -> RunHints:
@@ -268,7 +310,11 @@ def _parse_hints(
                 _parse_draft_hint(hints, key, value)
     if hints.uploaded_dataset_action and hints.uploaded_dataset_id is None:
         raise ValueError("Select a dataset before staging an upload draft")
-    hints.form_values = _parse_form_values(forwarded)
+    hints.dashboard_localization = _parse_dashboard_localization(
+        forwarded, host, hints.uploaded_dataset_action is not None
+    )
+    if hints.dashboard_localization is None:
+        hints.form_values = _parse_form_values(forwarded)
     return hints
 
 

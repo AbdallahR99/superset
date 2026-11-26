@@ -160,6 +160,8 @@ export default function ProposalEditor({
   const text = labels[dashboardLocale(locale)];
   const canonicalLocale = proposal.contentLocale ?? dashboardLocale(locale);
   const previewDirection = previewLocale === "ar" ? "rtl" : "ltr";
+  const widgetTitleMaxLength =
+    proposal.dashboardType === "v1" && previewLocale === canonicalLocale ? 250 : 256;
   const [previewWidgets, setPreviewWidgets] = useState(proposal.widgets);
   const [page, setPage] = useState(0);
   const [retry, setRetry] = useState(0);
@@ -400,7 +402,7 @@ export default function ProposalEditor({
                       placeholder={previewLocale !== canonicalLocale ? widget.title : undefined}
                       lang={previewLocale}
                       dir={previewDirection}
-                      maxLength={proposal.dashboardType === "v1" ? 250 : 256}
+                      maxLength={widgetTitleMaxLength}
                       onChange={(event) =>
                         updateWidget(
                           index,

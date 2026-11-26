@@ -48,11 +48,48 @@ export interface AgUiRunInput {
   tools: [];
   state: Record<string, unknown>;
   context: Array<{ description: string; value: string }>;
-  forwardedProps: { a2uiAction?: A2uiAction };
+  forwardedProps: {
+    a2uiAction?: A2uiAction;
+    dashboardLocalization?: DashboardLocalizationRequest;
+  };
 }
 
 export type DashboardType = 'v1' | 'v2';
 export type DashboardContentLocale = 'en' | 'ar';
+
+export interface DashboardLocalizationRequest {
+  sourceLocale: DashboardContentLocale;
+  targetLocale: DashboardContentLocale;
+  captions: (string | null)[];
+}
+
+export function readCaptionSuggestions(
+  value: unknown,
+  request: DashboardLocalizationRequest,
+): (string | null)[] | undefined {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('targetLocale' in value) ||
+    value.targetLocale !== request.targetLocale ||
+    !('captions' in value) ||
+    !Array.isArray(value.captions) ||
+    value.captions.length !== request.captions.length ||
+    !value.captions.every(
+      (caption, index) =>
+        caption === null ||
+        (request.captions[index] !== null &&
+          typeof caption === 'string' &&
+          caption.trim().length > 0 &&
+          caption.length <= 256),
+    )
+  ) {
+    return undefined;
+  }
+  return value.captions.map(caption =>
+    typeof caption === 'string' ? caption.trim() : null,
+  );
+}
 
 export interface DashboardTitles {
   title?: string;
