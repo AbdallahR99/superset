@@ -74,3 +74,36 @@ test.each(['ltr', 'rtl'] as const)(
     expect(provider.getDocumentVersion()).toBe(version);
   },
 );
+
+test('compact rows pair adjacent metric tiles and leave isolated tiles full width', () => {
+  const root = provider.getRoot().id;
+  const first = provider.addWidget(root, 0, {
+    type: 'metric-tile',
+    props: { label: 'Repeated title' },
+  });
+  const second = provider.addWidget(root, 1, { type: 'metric-tile' });
+  const third = provider.addWidget(root, 2, { type: 'metric-tile' });
+  provider.addWidget(root, 3, { type: 'markdown' });
+  const fourth = provider.addWidget(root, 4, { type: 'metric-tile' });
+
+  render(
+    <DashboardViewModeContext.Provider value="view">
+      <WidgetView nodeId={root} />
+    </DashboardViewModeContext.Provider>,
+  );
+
+  const cards = Array.from(screen.getByTestId('static-grid').children);
+  expect(
+    cards
+      .filter(card => card.hasAttribute('data-dashboard-paired-tile'))
+      .map(card => card.getAttribute('data-node-id')),
+  ).toEqual([first, second]);
+  expect(screen.getByTestId(`widget-content-${first}`)).toHaveAttribute(
+    'data-dashboard-duplicate-metric-label',
+  );
+  for (const id of [second, third, fourth]) {
+    expect(screen.getByTestId(`widget-content-${id}`)).not.toHaveAttribute(
+      'data-dashboard-duplicate-metric-label',
+    );
+  }
+});

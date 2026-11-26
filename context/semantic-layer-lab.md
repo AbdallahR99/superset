@@ -681,11 +681,22 @@ Browser rechecks matched 62 native values over seven queries, plus 33
 values from the model's tool calls. Both 390px touch views stacked three
 332px chart canvases with no horizontal overflow or uncaught page errors.
 The fixture tested the Arabic shell, RTL layout, and localized captions.
-The source narrative is English. The draft is private until a named
-analyst approves the exact reviewed revision. The benchmark used one
-lab identity. Warehouse viewer parity and assistive-technology checks
+The source narrative is English. At the user's direction, Codex performed
+the independent benchmark review and published revision 2 in the synthetic
+lab with the reviewed document digest. Opus 5.5 scored the published
+analytical result 9/12 and Fable 5.2 scored it 8/12. This is a delegated
+lab review record. The benchmark used one lab identity. Warehouse viewer
+parity, human sign-off for production and assistive-technology checks
 remain outside its verified scope.
 
 The lab worktree kept the artifacts under
 `nxtbi/out/semantic-lab/government-readiness/`. Final scoped verification
 included 742 backend tests, 84 agent tests, and 37 extension tests.
+
+The mobile density regression rechecked the published revision at 390×844
+in English and Arabic. All three loaded KPIs fit in the initial viewport.
+After one scroll, two complete chart cards fit together in each language.
+They are 366px wide and 288px tall, with an 8px gap. The previous 512px card
+heights prevented this. The test waited for actual numerical values and
+native canvases before capturing screenshots. The published document and
+data were preserved. All 57 focused grid and reader tests passed.

@@ -162,6 +162,11 @@ const WidgetContent = styled.div<{ $hasTitle: boolean }>`
       block-size: auto;
       min-block-size: 0;
       flex: 1 1 auto;
+
+      /* The built-in metric tile renders its authored label after the value. */
+      &[data-dashboard-duplicate-metric-label] h2 + span {
+        display: none;
+      }
     }
   `}
 `;
@@ -331,10 +336,12 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     const saveErrors = useContext(NodeErrorsContext)[nodeId];
     const node = store.getNode(nodeId);
     const isRoot = nodeId === store.getRoot().id;
+    const authoredLabel =
+      node && !isRoot ? authoredWidgetLabel(node.type, node.props) : null;
     const label = useDashboardLocalizedText(
       node && !isRoot ? widgetLabel(node.type, node.props) : '',
       nodeId,
-      node && !isRoot ? authoredWidgetLabel(node.type, node.props) : null,
+      authoredLabel,
     );
     if (!node) return null;
     // A node that is its own ancestor, or one nested past the depth a
@@ -430,6 +437,7 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
                 @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
                   display: flex;
                   flex-direction: column;
+                  --dashboard-widget-padding: ${theme.paddingSM}px;
                 }
               `)
         }
@@ -486,7 +494,9 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
           // element (a chart resizes to what's left after this is
           // subtracted) instead of adding to it. The root gets none: it is
           // not a card, and RootGrid already fills it exactly.
-          padding: isRoot ? undefined : theme.padding,
+          padding: isRoot
+            ? undefined
+            : `var(--dashboard-widget-padding, ${theme.padding}px)`,
           boxSizing: 'border-box',
           // Drawn over the widget rather than around it: an outline takes no
           // space, so nothing on screen shifts when a selection moves.
@@ -648,6 +658,12 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
             the remaining height with flex. */}
         <WidgetContent
           data-test={`widget-content-${nodeId}`}
+          data-dashboard-duplicate-metric-label={
+            (!editable &&
+              node.type === 'metric-tile' &&
+              authoredLabel !== null) ||
+            undefined
+          }
           $hasTitle={hasTitle}
         >
           <ErrorBoundary>

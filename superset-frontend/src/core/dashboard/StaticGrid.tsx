@@ -47,11 +47,23 @@ const Layout = styled.div<{ $metrics: GridMetrics }>`
     }
 
     @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
-      display: flex;
-      flex-direction: column;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-rows: auto;
+      gap: min(${$metrics.gap}px, ${theme.sizeUnit * 2}px);
 
       > [data-dashboard-grid-item] {
+        grid-column: 1 / -1;
+        grid-row: auto;
         block-size: var(--dashboard-grid-block-size);
+      }
+
+      > [data-dashboard-grid-item='metric-tile'] {
+        block-size: auto;
+        min-block-size: 7.25rem;
+      }
+
+      > [data-dashboard-grid-item='echarts'] {
+        block-size: clamp(16rem, var(--dashboard-grid-block-size), 18rem);
       }
 
       > [data-dashboard-grid-item='markdown'] {
@@ -59,12 +71,19 @@ const Layout = styled.div<{ $metrics: GridMetrics }>`
         overflow-wrap: anywhere;
       }
     }
+
+    @container ${DASHBOARD_VIEW_CONTAINER} (320px <= inline-size <= ${theme.screenSMMax}px) {
+      > [data-dashboard-paired-tile] {
+        grid-column: auto;
+      }
+    }
   `}
 `;
 
 /**
  * Read-only counterpart to `RootGrid`: the same packing (so a viewer sees the
- * layout the author arranged), with a single column when space is limited.
+ * layout the author arranged), with compact tiles and full-width charts
+ * when space is limited.
  */
 export default function StaticGrid({
   nodeId,
@@ -82,9 +101,19 @@ export default function StaticGrid({
   const packed = packChildLayout(children, metrics.columns, store.getNode);
   // Keep keyboard and mobile reading order aligned with the desktop grid.
   // Packed x starts at the inline edge in both directions.
-  const items = Object.entries(packed).sort(
-    ([, a], [, b]) => a.y - b.y || a.x - b.x,
-  );
+  const items = Object.entries(packed)
+    .sort(([, a], [, b]) => a.y - b.y || a.x - b.x)
+    .map(([id, rect]) => ({ id, rect, type: store.getNode(id)?.type ?? '' }));
+  const pairedTiles = new Set<string>();
+  for (let index = 1; index < items.length; index += 1) {
+    const first = items[index - 1];
+    const second = items[index];
+    if (first.type === 'metric-tile' && second.type === 'metric-tile') {
+      pairedTiles.add(first.id);
+      pairedTiles.add(second.id);
+      index += 1;
+    }
+  }
 
   return (
     <Surface>
@@ -93,11 +122,12 @@ export default function StaticGrid({
         data-container-id={nodeId}
         $metrics={metrics}
       >
-        {items.map(([childId, rect]) => (
+        {items.map(({ id, rect, type }) => (
           <WidgetView
-            key={childId}
-            nodeId={childId}
-            data-dashboard-grid-item={store.getNode(childId)?.type ?? ''}
+            key={id}
+            nodeId={id}
+            data-dashboard-grid-item={type}
+            data-dashboard-paired-tile={pairedTiles.has(id) || undefined}
             style={
               {
                 '--dashboard-grid-column': `${rect.x + 1} / span ${rect.w}`,
