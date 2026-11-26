@@ -50,6 +50,7 @@ from .contracts import (
     DashboardDraft,
     MAX_BODY_BYTES,
     parse_run,
+    RateComparison,
     sign_context,
     verify_gateway_token,
     WidgetDraft,
@@ -846,6 +847,12 @@ def test_rate_comparison_uses_scoped_baseline_and_preserves_observed_ties() -> N
                         ],
                         "tied_count": 1,
                     }
+                    assert (
+                        compared["highest_supported_rate"]
+                        == compared["highest_observed_workload"]
+                    )
+                    assert compared["minimum_sample_size"] == 120
+                    assert compared["groups_below_minimum"] == 3
                     assert compared["truncated"] is True
                     assert compared["verified_groups"] == 4
                     assert compared["unverified_groups"] == 1
@@ -921,10 +928,12 @@ def test_open_rate_dashboard_requires_live_support_for_both_groupings(
         "filter": scope_filter,
     }
     incomplete_summary = (
-        "Scoped district workload leads; Scoped channel workload 30 is nearby."
+        "Scoped district workload leads; Scoped channel workload 30 is nearby. "
+        "Inspect decision records at Scoped district workload."
     )
     reviewed_summary = (
-        "تصدّر SCOPED\u00a0DISTRICT workload وشارك مكتب الساحل في الصدارة."
+        "تصدّر SCOPED\u00a0DISTRICT workload وشارك مكتب الساحل في الصدارة. "
+        "افحص سجلات الحالات في مكتب الساحل قبل تعديل الإجراء."
     )
 
     def grouped_table(dimension: str, filters: dict[str, str]) -> dict[str, object]:
@@ -1088,11 +1097,21 @@ def test_open_rate_dashboard_requires_live_support_for_both_groupings(
             client.post("/ag-ui", headers=_authorization("superset"), json=REQUEST)
         )
     assert len(gateway_proposals) == 1
-    assert gateway_proposals[0]["widgets"] == (
+    expected_widgets = (
         incomplete_widgets
         if preserve_requested_layout or not channel_complete
         else complete_widgets
     )
+    measured_dimensions = {"district", "channel"} if channel_complete else {"district"}
+    assert gateway_proposals[0]["widgets"] == [
+        {
+            **widget,
+            "rateCutoff": {"denominatorMetric": "served", "minimumSampleSize": 120},
+        }
+        if widget.get("dimension") in measured_dimensions
+        else widget
+        for widget in expected_widgets
+    ]
     expected_summary = (
         reviewed_summary
         if mode == "summary" and channel_complete and not preserve_requested_layout
@@ -1100,6 +1119,131 @@ def test_open_rate_dashboard_requires_live_support_for_both_groupings(
     )
     assert gateway_proposals[0].get("summary") == expected_summary
     assert events[-1]["outcome"]["type"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("clause", "expected_error"),
+    [
+        (
+            "Monthly rates were broadly stable. Sample records at South District.",
+            "descriptive",
+        ),
+        ("ظلت المعدلات مستقرة. افحص سجلات الحالات في South District.", "descriptive"),
+        ("Review South District.", "concrete scoped follow-up"),
+        ("Audit decision records at Other District.", "concrete scoped follow-up"),
+        (
+            "Rates ranged from 10% to 12.5%. Sample records at South District.",
+            None,
+        ),
+        ("افحص سجلات الحالات في South District وقارن شروط المراجعة.", None),
+    ],
+)
+def test_rate_brief_requires_scoped_follow_up_and_descriptive_trends(
+    clause: str,
+    expected_error: str | None,
+) -> None:
+    """Allow scoped analytical follow-up in both supported languages."""
+    auth = _authorization("superset")["Authorization"]
+    claims = verify_gateway_token(auth, SIGNING_KEY)
+    _, hints = parse_run(json.dumps(REQUEST).encode(), claims)
+    chart = {"type": "echarts", "datasetId": 47, "metric": "late_rate"}
+    widgets = [
+        service.ModelWidgetDraft.model_validate(
+            {**chart, "dimension": dimension, "chartStyle": style}
+        )
+        for dimension, style in (("district", "ranked-bar"), ("month", "line"))
+    ]
+
+    async def review() -> dict[str, object] | None:
+        async with httpx.AsyncClient() as client:
+            deps = service.RunDeps(claims, auth, hints, TOOL_URL, client)
+            deps.verified_rate_scopes[(47, "district", "late_rate", None)] = (
+                service.VerifiedRateScope(
+                    RateComparison(
+                        numerator="late", denominator="served", rate="late_rate"
+                    ),
+                    ("North District",),
+                    1,
+                    ("South District",),
+                )
+            )
+            deps.remember_chronology(
+                {
+                    "metric": "late_rate",
+                    "truncated": False,
+                    "rows": [
+                        {"group": "2026-01-01", "value": 0.1},
+                        {"group": "2026-02-01", "value": 0.125},
+                    ],
+                },
+                47,
+                "month",
+                ["late_rate"],
+                None,
+            )
+            return service._rate_summary_error(
+                widgets, "North District led in count. " + clause, deps
+            )
+
+    result = asyncio.run(review())
+    if expected_error is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert expected_error in str(result["error"])
+        if expected_error == "descriptive":
+            assert result["observed_rate_ranges"] == [
+                {"dimension": "month", "minimum_percent": 10.0, "maximum_percent": 12.5}
+            ]
+
+
+def test_verified_rate_cutoff_discards_model_cutoff_and_uses_same_scope() -> None:
+    """Bind a requested floor to the saved denominator of the exact chart query."""
+    auth = _authorization("superset")["Authorization"]
+    claims = verify_gateway_token(auth, SIGNING_KEY)
+    _, hints = parse_run(json.dumps(REQUEST).encode(), claims)
+    input_widget = {
+        "type": "echarts",
+        "datasetId": 47,
+        "dimension": "district",
+        "metric": "late_rate",
+        "chartStyle": "ranked-bar",
+        "rateCutoff": {"denominatorMetric": "unverified", "minimumSampleSize": 1},
+    }
+    exact = service.ModelWidgetDraft.model_validate(input_widget)
+    different = service.ModelWidgetDraft.model_validate(
+        {**input_widget, "filter": {"column": "period", "value": "other"}}
+    )
+
+    async def cutoffs() -> list[dict[str, object]]:
+        async with httpx.AsyncClient() as client:
+            deps = service.RunDeps(claims, auth, hints, TOOL_URL, client)
+            deps.verified_rate_scopes[(47, "district", "late_rate", None)] = (
+                service.VerifiedRateScope(
+                    RateComparison(
+                        numerator="late",
+                        denominator="served",
+                        rate="late_rate",
+                        minimum_sample_size=73,
+                    ),
+                    (),
+                    0,
+                    (),
+                )
+            )
+            return [
+                service._with_verified_rate_cutoff(w, deps).model_dump(
+                    by_alias=True, exclude_none=True
+                )
+                for w in (exact, different)
+            ]
+
+    matched, unmatched = asyncio.run(cutoffs())
+    assert matched["rateCutoff"] == {
+        "denominatorMetric": "served",
+        "minimumSampleSize": 73,
+    }
+    assert "rateCutoff" not in unmatched
 
 
 def test_truncated_chronology_blocks_line_until_matching_scope_is_complete() -> None:

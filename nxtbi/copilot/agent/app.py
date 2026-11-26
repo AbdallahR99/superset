@@ -27,7 +27,7 @@ import unicodedata
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Annotated, cast, Literal
 from uuid import uuid4
 
@@ -89,6 +89,7 @@ from .contracts import (
     parse_run,
     POSITIVE_ID,
     RateComparison,
+    RateCutoff,
     RunHints,
     TitleTranslations,
     verify_gateway_token,
@@ -148,46 +149,46 @@ verbose_name) and groupable_columns (column names). Use a metrics array with 1�
 distinct identifiers and a dimensions array with 0–4 distinct identifiers. Use []
 for ungrouped totals. Omit the scalar metric and dimension in that widget. Preserve
 the requested tables and field order. Keep each table's fields in one widget.
-For this draft, resolve a named dataset with list_datasets only if its ID is
-unknown, then call get_dataset once. If the requested summary needs measured facts,
-call aggregate_dataset only for those facts, once per needed scope, and preserve
-the observed scope and values. The draft preview runs its own queries, so skip
-unrelated exploration and call propose_dashboard promptly. Provide a requested
-dashboard summary in the optional top-level summary field as one or two plain-text
-sentences, up to 768 characters. Grouped tables and summaries require Dashboard V2.
-For a dashboard requested to compare results, find insights, or support a decision,
-use this plan even for a selected upload or stock/snapshot source. Preserve the
-explicitly requested widget count, chart or table types, fields, filters, and order.
-For an open analytical brief, resolve the dataset once and use get_dataset to
-read measure definitions and choose the decision to support. When the saved
-measures support a rate, use one aggregate_dataset call with rate_comparison to
-measure the numerator, eligible denominator, and rate together by a useful group
-and across the same filtered scope. Compare the highest workload (denominator)
-and the highest rate, even when their leaders differ. Distinguish both from the
-highest affected count (numerator). Use the actual scope rate as the baseline,
-never an average of group percentages. Report the compared rates as numerator /
-denominator plus percentage and include the baseline with its denominator. State
-ties and flag thin samples before recommending an action. Use the counts to triage
-workload and the rates to select groups for investigation. Check a second relevant
-grouping when available. For each ranked comparison, explicitly name a verified
-highest affected-count group and distinguish it from the rate leader. Retain the
-exact source label in either dashboard language and explain it in that language.
-For a tie, identify a tied leader without implying it leads alone. Say when a
-decision-relevant segment was not measured.
-Reuse complete grouped results for their count, rate, and baseline. Once the
-decision-driving comparisons are verified, stage the dashboard before optional
-exploration. The native widgets will query their selected fields on review.
-Choose the charts that best support those findings. In each verified grouping for
-the selected rate, include the workload, affected count and rate as viewer-queried
-charts or a grouped detail table of the same scope. Set preserve_requested_layout
-only if the user's explicit widget requirements exclude these supporting views.
-If an ordered period chart would be
-more useful, profile the temporal field then use aggregate_dataset with
-order=dimension_asc and a limit covering the checked periods. If truncated, retry
-with limit=48. If coverage remains incomplete, omit the period chart. Verify the
-latest observed date and its period boundary before calling any period final or
-partial. Never infer them from truncated or unverified evidence. Disclose missing
-groups, filters, and material differences in measure eligibility.
+For a specified layout, preserve widget count, types, fields, filters, and order.
+Resolve an unknown dataset ID with list_datasets, then call get_dataset once. Query
+only the facts needed for a requested summary. Grouped tables and summaries need
+Dashboard V2. The optional summary is plain text, up to 768 characters.
+For an open analytical dashboard, including uploads, follow this compact sequence:
+1. Read get_dataset once. Use its saved measures and dimensions. If more scope
+   information is needed, call profile_dataset once with all relevant columns.
+2. For a rate, pick the two categorical groupings most relevant to the decision
+   (one if only one fits). Batch one aggregate_dataset with rate_comparison and
+   limit=48 per grouping. Query other groupings only when the user asks. The
+   result computes workload, affected-count, raw/supported rate leaders, and the
+   same-scope baseline regardless of row order. Reuse each complete result for
+   charts and prose. Never refetch it to reorder, recalculate a rate, or get its
+   baseline. Use the weighted baseline, never an average of grouped percentages.
+3. If a trend matters, use at most one aggregate_dataset call with
+   order=dimension_asc and limit=48 for the period dimension. Omit the line if
+   coverage is incomplete. Verify latest dates and period boundaries before
+   describing a partial period. Report observed percentage ranges and missing
+   groups, filters, or differing eligibility. Descriptive data do not establish
+   statistical stability, process control, or significant change.
+4. Call propose_dashboard once the decision evidence is ready. Skip further
+   exploration and progress narration. Preview widgets query live data themselves.
+   For each decision-driving categorical rate comparison, include a ranked-bar
+   rate chart on that grouping. Put the rate charts next to each other, with
+   same-scope workload (denominator) and affected count (numerator) in nearby
+   detail tables or charts. An open layout needs both the rate charts and the
+   count context.
+   Use preserve_requested_layout only for explicit widget requirements.
+
+In an open rate summary, explicitly name a verified highest affected-count group
+and distinguish it from the rate leader for each ranked grouping. Keep exact
+source names in either language, acknowledge ties, and give each decision-driving
+rate and baseline as numerator/denominator and percentage. The default operational
+screen uses 120 eligible cases per group; change minimum_sample_size only on
+explicit request. State the floor. Describe any higher raw rate below the floor as
+preliminary and identify the highest supported rate separately. A screening floor
+does not establish statistical significance. Chart cutoff metadata is server-set.
+Suggest one concrete follow-up: name a supported-rate or affected-count leader and
+say which records, case reasons, requirements, queue, or workflow steps to inspect,
+compare, sample, or audit. Disclose material limitations.
 Use fewer charts if only one valid comparison exists. Add a KPI only for a distinct
 headline, and do not invent a rate or a denominator when the source lacks them.
 Use chartStyle ranked-bar for a ranked horizontal V2 comparison of up to 12 groups.
@@ -285,6 +286,7 @@ class VerifiedRateScope:
     comparison: RateComparison
     affected_leaders: tuple[str, ...]
     affected_ties: int
+    supported_rate_leaders: tuple[str, ...]
 
 
 def _evidence_scope(
@@ -379,6 +381,9 @@ class RunDeps:
         default_factory=dict
     )
     temporal_dimensions: dict[int, set[str]] = field(default_factory=dict)
+    observed_rate_ranges: dict[EvidenceScope, tuple[float, float]] = field(
+        default_factory=dict
+    )
 
     def remember_chronology(
         self,
@@ -397,8 +402,13 @@ class RunDeps:
         }
         if result.get("truncated") is True:
             self.truncated_chronology.update(scopes)
+            for scope in scopes:
+                self.observed_rate_ranges.pop(scope, None)
         elif result.get("truncated") is False and result.get("rows"):
             self.truncated_chronology.difference_update(scopes)
+            for scope in scopes:
+                self.observed_rate_ranges.pop(scope, None)
+            self.observed_rate_ranges.update(_period_rate_ranges(result, scopes))
 
     def has_truncated_line(self, widgets: list[WidgetDraft]) -> bool:
         """Find proposed lines whose matching evidence is known to be truncated."""
@@ -430,9 +440,12 @@ class RunDeps:
             and details.get("verified_groups", 0) >= 2
         ):
             scope = _evidence_scope(dataset_id, dimension, comparison.rate, filters)
-            leaders, ties = _affected_leader_labels(result.get("rows"), comparison)
+            leaders, ties = _rate_leader_labels(
+                result.get("rows"), comparison, "numerator"
+            )
+            supported, _ = _rate_leader_labels(result.get("rows"), comparison, "rate")
             self.verified_rate_scopes[scope] = VerifiedRateScope(
-                comparison, leaders, ties
+                comparison, leaders, ties, supported
             )
 
     @property
@@ -651,6 +664,36 @@ def _rate_triplet(
     return {"numerator": int(numerator), "denominator": int(denominator), "rate": rate}
 
 
+def _period_rate_ranges(
+    result: dict[str, object], scopes: set[EvidenceScope]
+) -> dict[EvidenceScope, tuple[float, float]]:
+    """Keep descriptive bounds only when every period has a proportional value."""
+    rows = result.get("rows")
+    if not isinstance(rows, list) or len(rows) < 2:
+        return {}
+    ranges = {}
+    for scope in scopes:
+        metric = scope[2]
+        values = [
+            row["values"].get(metric)
+            if isinstance(row.get("values"), dict)
+            else row.get("value")
+            if metric == result.get("metric")
+            else None
+            for row in rows
+            if isinstance(row, dict)
+        ]
+        if len(values) == len(rows) and all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 0 <= value <= 1
+            for value in values
+        ):
+            proportions = cast(list[int | float], values)
+            ranges[scope] = (float(min(proportions)), float(max(proportions)))
+    return ranges
+
+
 def _rate_comparison(result: object, comparison: RateComparison) -> object:
     """Identify measured volume and rate leaders, including ties in the result scope."""
     if not isinstance(result, dict) or not isinstance(result.get("rows"), list):
@@ -662,13 +705,16 @@ def _rate_comparison(result: object, comparison: RateComparison) -> object:
             if values is not None:
                 measured.append((row.get("group"), values))
 
-    def leaders(key: Literal["numerator", "denominator", "rate"]) -> dict[str, object]:
-        if not measured:
+    def leaders(
+        key: Literal["numerator", "denominator", "rate"],
+        included: list[tuple[object, dict[str, int | float]]],
+    ) -> dict[str, object]:
+        if not included:
             return {"groups": [], "tied_count": 0}
-        highest = max(values[key] for _, values in measured)
+        highest = max(values[key] for _, values in included)
         matches = [
             {"group": group, **values}
-            for group, values in measured
+            for group, values in included
             if values[key] == highest
         ]
         return {"groups": matches[:4], "tied_count": len(matches)}
@@ -676,13 +722,21 @@ def _rate_comparison(result: object, comparison: RateComparison) -> object:
     baseline = _rate_triplet(result.get("baseline"), comparison)
     truncated = result.get("truncated") is not False
     unverified = len(result["rows"]) - len(measured)
+    supported = [
+        pair
+        for pair in measured
+        if pair[1]["denominator"] >= comparison.minimum_sample_size
+    ]
     return {
         **result,
         "rate_comparison": {
             "baseline": baseline,
-            "highest_observed_volume": leaders("numerator"),
-            "highest_observed_workload": leaders("denominator"),
-            "highest_observed_rate": leaders("rate"),
+            "highest_observed_volume": leaders("numerator", measured),
+            "highest_observed_workload": leaders("denominator", measured),
+            "highest_observed_rate": leaders("rate", measured),
+            "highest_supported_rate": leaders("rate", supported),
+            "minimum_sample_size": comparison.minimum_sample_size,
+            "groups_below_minimum": len(measured) - len(supported),
             "truncated": truncated,
             "complete": not truncated and baseline is not None and unverified == 0,
             "verified_groups": len(measured),
@@ -691,10 +745,10 @@ def _rate_comparison(result: object, comparison: RateComparison) -> object:
     }
 
 
-def _affected_leader_labels(
-    rows: object, comparison: RateComparison
+def _rate_leader_labels(
+    rows: object, comparison: RateComparison, key: Literal["numerator", "rate"]
 ) -> tuple[tuple[str, ...], int]:
-    """Retain every top affected-count tie, including when only some have text names."""
+    """Keep all affected-count leaders or supported-rate leaders for an exact scope."""
     if not isinstance(rows, list):
         return (), 0
     counted = []
@@ -702,7 +756,11 @@ def _affected_leader_labels(
         if isinstance(row, dict) and (
             triplet := _rate_triplet(row.get("values"), comparison)
         ):
-            counted.append((row.get("group"), triplet["numerator"]))
+            if (
+                key == "numerator"
+                or triplet["denominator"] >= comparison.minimum_sample_size
+            ):
+                counted.append((row.get("group"), triplet[key]))
     if not counted:
         return (), 0
     highest = max(count for _, count in counted)
@@ -757,43 +815,58 @@ def _normalized_label(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def _missing_affected_leaders(
-    widgets: list[ModelWidgetDraft], summary: str, deps: RunDeps
-) -> list[dict[str, object]]:
-    """Find complete ranked groupings whose affected-count leaders aren't named."""
+def _chart_evidence_scope(widget: WidgetDraft) -> EvidenceScope | None:
+    """Use only a chart's own saved measure, dimension, dataset, and filter."""
+    if widget.type != "echarts" or widget.dimension is None or widget.metric is None:
+        return None
+    return _evidence_scope(
+        widget.dataset_id, widget.dimension, widget.metric, widget.filter
+    )
+
+
+def _selected_ranked_comparisons(
+    widgets: list[ModelWidgetDraft], deps: RunDeps
+) -> dict[EvidenceScope, VerifiedRateScope]:
+    """Find verified categorical comparisons used by this draft's ranked charts."""
     ranked = {
-        _evidence_scope(
-            widget.dataset_id, widget.dimension, widget.metric, widget.filter
-        )
+        scope
         for widget in widgets
         if widget.chart_style == "ranked-bar"
-        and widget.dimension is not None
-        and widget.metric is not None
+        and (scope := _chart_evidence_scope(widget)) is not None
     }
-    missing: list[dict[str, object]] = []
-    text = _normalized_label(summary)
-    for (
-        dataset,
-        dimension,
-        rate,
-        scope_filter,
-    ), verified in deps.verified_rate_scopes.items():
-        if (
-            dimension in deps.temporal_dimensions.get(dataset, set())
-            or not verified.affected_leaders
-        ):
+    selected = {}
+    for scope, verified in deps.verified_rate_scopes.items():
+        dataset, dimension, rate, scope_filter = scope
+        if dimension in deps.temporal_dimensions.get(dataset, set()):
             continue
         measures = (
             rate,
             verified.comparison.numerator,
             verified.comparison.denominator,
         )
-        if not any(
+        if any(
             (dataset, dimension, metric, scope_filter) in ranked for metric in measures
         ):
+            selected[scope] = verified
+    return selected
+
+
+def _source_label_pattern(label: str) -> re.Pattern[str]:
+    """Match a normalized source label without accepting a longer category name."""
+    return re.compile(rf"(?<!\w){re.escape(_normalized_label(label))}(?!\w)")
+
+
+def _missing_affected_leaders(
+    summary: str, selected: dict[EvidenceScope, VerifiedRateScope]
+) -> list[dict[str, object]]:
+    """Find complete ranked groupings whose affected-count leaders aren't named."""
+    missing = []
+    text = _normalized_label(summary)
+    for (dataset, dimension, _, _), verified in selected.items():
+        if not verified.affected_leaders:
             continue
         if not any(
-            re.search(rf"(?<!\w){re.escape(_normalized_label(label))}(?!\w)", text)
+            _source_label_pattern(label).search(text)
             for label in verified.affected_leaders
         ):
             missing.append(
@@ -805,6 +878,131 @@ def _missing_affected_leaders(
                 }
             )
     return missing
+
+
+_INFERENCE_CLAIM = re.compile(
+    r"\b(?:(?:is|are|was|were|stayed|remained|appears?)\s+(?:\w+\s+){0,3}"
+    r"(?:stable|unstable|in control|out of control)|(?:stable|unstable)\s+"
+    r"(?:rates?|trends?|series|process|performance)|(?:rates?|trends?|series)\s+"
+    r"(?:broadly\s+)?(?:stable|unstable)|statistically significant|"
+    r"(?:common|special)[ -]cause variation)\b"
+    r"|(?:مستقر(?:ة|ا|ين)?|غير\s+مستقر(?:ة)?|استقر(?:ت)?\s+المعدلات|"
+    r"(?:تحت|خارج)\s+السيطرة|ذات\s+دلالة\s+إحصائية)"
+)
+_REVIEW_ACTION = re.compile(
+    r"\b(?:audit|check|compare|examine|inspect|review|sample|trace|validate|verify)\b"
+    r"|(?:راجع|افحص|قارن|دقق|تحقق|راجعوا|افحصوا|تدقيق|فحص|مراجعة|تحققوا)"
+)
+_REVIEW_MATERIAL = re.compile(
+    r"\b(?:cases?|files?|records?|applications?|notes?|reasons?|inputs?|steps?|"
+    r"documents?|criteria|requirements?|queues?|staffing|capacity|decisions?|"
+    r"handoffs?|logs?|forms?|rejections?|corrections?)\b"
+    r"|(?:حالات|سجلات|ملفات|طلبات|أسباب|اسباب|وثائق|مستندات|"
+    r"معايير|متطلبات|خطوات|طوابير|قرارات|نماذج)"
+)
+_ARABIC_DIACRITICS = re.compile(r"[\u064b-\u065f\u0670]")
+
+
+def _has_scoped_follow_up(summary: str, labels: set[str]) -> bool:
+    """Require a review action, an evidence object, and a named eligible scope."""
+    if not labels:
+        return True
+    for clause in re.split(r"[\n!?؛؟;]|\.(?=\s|$)", summary):
+        text = _normalized_label(clause)
+        for label in labels:
+            remainder, occurrences = _source_label_pattern(label).subn(" ", text)
+            wording = _ARABIC_DIACRITICS.sub("", remainder)
+            if (
+                occurrences
+                and _REVIEW_ACTION.search(wording)
+                and _REVIEW_MATERIAL.search(wording)
+            ):
+                return True
+    return False
+
+
+def _observed_ranges_for_lines(
+    widgets: list[ModelWidgetDraft],
+    deps: RunDeps,
+    selected: dict[EvidenceScope, VerifiedRateScope],
+) -> list[dict[str, object]]:
+    """Supply only complete descriptive rates for exact plotted line scopes."""
+    rates = {
+        (dataset, rate, scope_filter) for dataset, _, rate, scope_filter in selected
+    }
+    result = []
+    for widget in widgets:
+        scope = _chart_evidence_scope(widget)
+        if (
+            widget.chart_style != "line"
+            or scope is None
+            or scope not in deps.observed_rate_ranges
+        ):
+            continue
+        dataset, dimension, metric, scope_filter = scope
+        if (dataset, metric, scope_filter) in rates:
+            low, high = deps.observed_rate_ranges[scope]
+            result.append(
+                {
+                    "dimension": dimension,
+                    "minimum_percent": round(100 * low, 2),
+                    "maximum_percent": round(100 * high, 2),
+                }
+            )
+    return result
+
+
+def _rate_summary_error(
+    widgets: list[ModelWidgetDraft], summary: str, deps: RunDeps
+) -> dict[str, object] | None:
+    """Gate open rate briefs on observed scope and a practical follow-up."""
+    selected = _selected_ranked_comparisons(widgets, deps)
+    if not selected:
+        return None
+    if leaders := _missing_affected_leaders(summary, selected):
+        return {
+            "error": "Name a highest affected-count group from each listed scope "
+            "in the summary using its exact source label. Distinguish workload "
+            "from rate leaders and acknowledge any tie.",
+            "missing_affected_count_leaders": leaders,
+        }
+    if _INFERENCE_CLAIM.search(_ARABIC_DIACRITICS.sub("", _normalized_label(summary))):
+        return {
+            "error": "Use descriptive observations. Remove untested stability, "
+            "control, or significance claims. If discussing time, report the "
+            "measured numeric range and period scope.",
+            "observed_rate_ranges": _observed_ranges_for_lines(widgets, deps, selected),
+        }
+    labels = {
+        label
+        for scope in selected.values()
+        for label in (*scope.affected_leaders, *scope.supported_rate_leaders)
+    }
+    if not _has_scoped_follow_up(summary, labels):
+        return {
+            "error": "Add a concrete scoped follow-up. Name a verified affected-count "
+            "or supported-rate leader and specify which records, case reasons, "
+            "requirements or workflow steps to review, sample or compare."
+        }
+    return None
+
+
+def _with_verified_rate_cutoff(
+    widget: ModelWidgetDraft, deps: RunDeps
+) -> ModelWidgetDraft:
+    """Use a measured ranked rate's exact denominator and chosen operational floor."""
+    cutoff = None
+    if widget.chart_style == "ranked-bar" and deps.hints.dashboard_type != "v1":
+        scope = _chart_evidence_scope(widget)
+        if (
+            scope is not None
+            and (verified := deps.verified_rate_scopes.get(scope)) is not None
+        ):
+            cutoff = RateCutoff(
+                denominator_metric=verified.comparison.denominator,
+                minimum_sample_size=verified.comparison.minimum_sample_size,
+            )
+    return widget.model_copy(update={"rate_cutoff": cutoff})
 
 
 def _additional_aggregate_metrics(
@@ -857,7 +1055,7 @@ def _register_dataset_tools(agent: Agent[RunDeps, str]) -> None:
         id: POSITIVE_ID,
         columns: Annotated[list[LABEL], Field(max_length=3)] | None = None,
     ) -> object:
-        """Count visible rows and non-null, null and distinct values by column."""
+        """Inspect row counts and up to three relevant columns in one call."""
         arguments: dict[str, object] = {"id": id}
         if columns:
             if len(columns) != len(set(columns)):
@@ -885,10 +1083,11 @@ def _register_aggregate_tool(agent: Agent[RunDeps, str]) -> None:
     ) -> object:
         """Read saved measures as totals or grouped observations in one scope.
 
-        For a decision-driving rate, supply rate_comparison with the saved numerator,
-        eligible denominator, and proportional rate names. Their group values and
-        whole-scope baseline are queried together. Use dimension_asc for time and a
-        sufficient limit. A truncated result can only establish observed leaders.
+        For a decision-driving rate, select up to 48 groups and provide
+        rate_comparison with the saved numerator, denominator, and proportion.
+        This returns the same-scope baseline and leaders regardless of row order.
+        Use dimension_asc for time. A truncated result can only establish observed
+        leaders. Never repeat a complete comparison solely to sort it differently.
         """
         arguments: dict[str, object] = {"id": id, "metric": metric}
         if dimension is not None:
@@ -1240,20 +1439,15 @@ def _register_superset_tools(agent: Agent[RunDeps, str]) -> None:
                     "the same exact filter and cite both leaders in each grouping.",
                     "missing_rate_views": missing,
                 }
-            if summary and (
-                leaders := _missing_affected_leaders(widgets, summary, ctx.deps)
-            ):
-                return {
-                    "error": "Name a highest affected-count group from each listed "
-                    "scope in the summary using its exact source label. Distinguish "
-                    "workload from rate leaders and acknowledge any tie.",
-                    "missing_affected_count_leaders": leaders,
-                }
+            if summary and (error := _rate_summary_error(widgets, summary, ctx.deps)):
+                return error
         return await _stage_proposal(
             ctx.deps,
             DashboardDraft(
                 title=title,
-                widgets=widgets,
+                widgets=[
+                    _with_verified_rate_cutoff(widget, ctx.deps) for widget in widgets
+                ],
                 title_translations=title_translations,
                 summary=summary,
             ),
@@ -1491,7 +1685,9 @@ async def _stream_events(
         try:
             stream = adapter.run_stream(
                 deps=deps,
-                usage_limits=RUN_LIMITS,
+                usage_limits=replace(RUN_LIMITS, output_tokens_limit=14_000)
+                if deps.has_superset_tools
+                else RUN_LIMITS,
                 timeout=MODEL_TIMEOUT,
             )
             proposal_finished = False

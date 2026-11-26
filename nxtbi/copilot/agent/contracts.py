@@ -33,6 +33,7 @@ MAX_MESSAGE_COUNT = 40
 MAX_MESSAGE_LENGTH = 8_000
 MAX_HISTORY_LENGTH = 32_000
 MAX_TOKEN_AGE = 300
+DEFAULT_RATE_MINIMUM_SAMPLE_SIZE = 120
 NONEMPTY_ID = Annotated[str, Field(min_length=1, max_length=200)]
 POSITIVE_ID = Annotated[int, Field(gt=0, le=2_147_483_647)]
 LABEL = Annotated[str, Field(min_length=1, max_length=160)]
@@ -81,6 +82,20 @@ class RateComparison(BaseModel):
     numerator: DatasetFieldId
     denominator: DatasetFieldId
     rate: DatasetFieldId
+    minimum_sample_size: POSITIVE_ID = Field(
+        default=DEFAULT_RATE_MINIMUM_SAMPLE_SIZE,
+        description="Operational screening floor for the eligible denominator. "
+        "Use a nondefault value only when explicitly requested.",
+    )
+
+
+class RateCutoff(BaseModel):
+    """A display-only sample floor for a live chart's verified saved rate."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", populate_by_name=True)
+
+    denominator_metric: DatasetFieldId = Field(alias="denominatorMetric")
+    minimum_sample_size: POSITIVE_ID = Field(alias="minimumSampleSize")
 
 
 class TitleTranslations(BaseModel):
@@ -113,6 +128,7 @@ class WidgetDraft(BaseModel):
     chart_style: Literal["bar", "ranked-bar", "line"] | None = Field(
         default=None, alias="chartStyle"
     )
+    rate_cutoff: RateCutoff | None = Field(default=None, alias="rateCutoff")
     filter: DatasetFilter | None = None
     title: LABEL | None = None
     title_translations: TitleTranslations | None = Field(
@@ -126,6 +142,14 @@ class WidgetDraft(BaseModel):
             raise ValueError("chartStyle requires an echarts widget.")
         if self.chart_style == "ranked-bar" and self.dimension is None:
             raise ValueError("A ranked bar requires a grouping column.")
+        if self.rate_cutoff is not None and (
+            self.type != "echarts"
+            or self.dimension is None
+            or self.rate_cutoff.denominator_metric in (self.metric, self.dimension)
+        ):
+            raise ValueError(
+                "A rate cutoff requires a grouped rate chart and denominator."
+            )
         if not ({"metrics", "dimensions"} & self.model_fields_set):
             if self.metric is None:
                 raise ValueError("A widget requires a saved metric.")
@@ -163,7 +187,10 @@ class DashboardDraft(BaseModel):
     def requires_dashboard_v2(self) -> bool:
         """Identify draft features available only in Dashboard V2."""
         return self.summary is not None or any(
-            w.metrics is not None or w.chart_style == "ranked-bar" for w in self.widgets
+            w.metrics is not None
+            or w.chart_style == "ranked-bar"
+            or w.rate_cutoff is not None
+            for w in self.widgets
         )
 
 
