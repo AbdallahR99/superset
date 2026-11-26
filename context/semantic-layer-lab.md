@@ -130,7 +130,79 @@ queries, asynchronous jobs, exports, MCP and proposed embeddings.
 [Classic host test](../superset-frontend/playwright/tests/semantic-view/semantic-view-dashboard.spec.ts) ·
 [Existing zero-code workflow](zero-code-bi.md)
 
+## Property-market lab
+
+The backend-only `nxtbi.property-market-lab` extension exposes
+`property_transactions` through Superset’s native semantic-layer registry.
+The bundled SQLite fixture uses transaction grain, a composite property
+lookup, and a left join that preserves unmatched transactions. Its data
+contains a reused property ID in a comparison market, one orphan, a missing
+area, and independent sale and registration dates.
+
+| Approved metric | All transactions |
+|---|---:|
+| Transaction count | 6 |
+| Distinct properties, including the unmatched ID | 4 |
+| Average transaction price | AED 400,000 |
+| Weighted price per square meter | AED 3,737.70 per m² |
+
+The weighted measure divides AED 2,280,000 by 610 m². Both components
+use the same five transactions with positive area. The average transaction
+price uses all six. The approved labels, definitions and aliases are bilingual.
+The lab resolver returns both interpretations for **average property price**
+or **متوسط سعر العقار** and a single stable metric for an explicit match.
+
+The lab uses a fixed catalog and parameterized filters. It supports the
+pinned SDK’s OR/NULL filters, day and month grouping for each date role,
+complete dimension values, and exact counts of the requested result window.
+
+[Provider](../nxtbi/semantic_lab/property_market/dist/backend/src/nxtbi_property_market/__init__.py) ·
+[Approved model](../nxtbi/semantic_lab/property_market/dist/backend/src/nxtbi_property_market/model.py) ·
+[Bilingual catalog lookup](../nxtbi/semantic_lab/property_market/dist/backend/src/nxtbi_property_market/metric_search.py)
+
+Run the proof from the repository root with Docker, a local pinned Superset
+image, and Playwright Chromium installed. Use `--image` to select a
+matching fork image if the default tag is unavailable.
+
+~~~bash
+python -m pip install playwright
+python -m playwright install chromium
+python -X utf8 -u nxtbi/semantic_lab/host/run.py --mcp
+~~~
+
+The runner creates a fresh metadata database and loopback server, registers
+the extension, saves the chart and dashboard, verifies the native filter,
+runs the optional MCP check, and removes its container. The logs and
+screenshot go under `nxtbi/out/semantic-lab/`.
+
+For an interactive preview, set `NXTBI_SEMANTIC_LAB_PASSWORD` in the
+current shell and run `python -X utf8 -u nxtbi/semantic_lab/host/run.py --serve`.
+The runner provisions the same dashboard, prints its loopback dashboard
+list, and waits. Sign in as `lab_admin` using the chosen password.
+Ctrl+C disposes of the preview.
+
+The proof exercises Superset’s authenticated browser/API path and native
+MCP using FastMCP’s in-process transport under the disposable lab principal.
+Live Dremio driver and identity delegation, remote MCP authentication, and
+connection of the bilingual resolver to Copilot remain separate lab work.
+The provider is scoped to local synthetic data.
+
 ## Evidence from this lab
+
+The integrated browser run passed on
+`nxtbi/superset-fork:copilot-localization-verified`
+(`sha256:402562bbe1be6bdb317a5ec953f1ca89359fbfa794818eed0432ffcc1323d732`).
+It registered the extension through `LOCAL_EXTENSIONS`, rendered three
+property types in Explore, and persisted and reopened a published Classic
+dashboard. The Villa filter returned two transactions, one distinct property,
+AED 570,000 average transaction price, and AED 2,714.29 per m².
+The view did not appear in the ungranted Gamma viewer’s datasource list.
+Native in-process MCP found the same view, its four metrics and all four
+compatible dimension names, and returned the exact full-model aggregates.
+
+The combined suite passed **240 tests** with four SDK capability skips,
+including **25 new lab tests**. The browser run saved its screenshot and
+logs under `nxtbi/out/semantic-lab/nxtbi-semantic-lab-8da8509c6b05/`.
 
 The pinned SDK suite under `superset-core/tests/semantic_layers` passed
 **215 tests**, with four skips for a query shape or capabilities the stub

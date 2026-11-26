@@ -1,0 +1,11 @@
+{
+  "publisher": "nxtbi",
+  "name": "property-market-lab",
+  "displayName": "NxtBI Property Market Lab",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Backend-only semantic provider for the synthetic property-market lab.",
+  "backend": {
+    "entrypoint": "nxtbi_property_market"
+  }
+}
