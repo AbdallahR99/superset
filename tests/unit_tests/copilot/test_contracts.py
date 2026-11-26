@@ -126,8 +126,15 @@ def test_proposal_rejects_undeclared_fields() -> None:
         )
 
 
-def test_compound_proposal_preserves_native_bindings_and_summary() -> None:
-    summary = "April had **2 sales** across the three observed months."
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "April had **2 sales** across the three observed months.",
+        "Both comparisons include the eligible denominator and baseline. " * 9
+        + "Review the individual groups before acting.",
+    ],
+)
+def test_compound_proposal_preserves_native_bindings_and_summary(summary: str) -> None:
     payload = {
         "title": "Sales",
         "summary": summary,
@@ -261,7 +268,7 @@ def test_summary_and_compound_table_are_v2_only() -> None:
                 {"type": "metric-tile", "datasetId": 23, "metric": "count_sales"}
             ],
         },
-        {"summary": "x" * 513},
+        {"summary": "x" * 769},
         {"summary": "  "},
         {
             "widgets": [
@@ -378,6 +385,7 @@ def test_analytical_dashboard_pairs_ranked_charts_in_proposal_order() -> None:
     assert props["crossFilter"] is True
     options = props["echartsOptions"]
     assert echarts_option_problem(options) is None
+    assert options["title"]["text"] == "Weighted price by property type · Top 12"
     assert options["xAxis"]["type"] == "value"
     assert options["xAxis"]["minInterval"] == 0.01
     assert options["yAxis"]["type"] == "category"
@@ -390,6 +398,63 @@ def test_analytical_dashboard_pairs_ranked_charts_in_proposal_order() -> None:
     assert options["series"][0]["data"] == {
         "$bind": {"source": "metric", "alias": "weighted_price"}
     }
+
+
+def test_ranked_rate_and_numeric_table_formats_follow_saved_metadata() -> None:
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "طلبات الخدمة",
+            "contentLocale": "ar",
+            "widgets": [
+                {
+                    "type": "echarts",
+                    "datasetId": 23,
+                    "metric": "rate",
+                    "dimension": "service",
+                    "chartStyle": "ranked-bar",
+                    "title": "نسبة الطلبات حسب الخدمة",
+                    "titleTranslations": {"en": "Request rate by service"},
+                },
+                {
+                    "type": "ag-grid-table",
+                    "datasetId": 23,
+                    "metrics": ["rate", "amount", "count", "unknown"],
+                    "dimensions": ["service"],
+                },
+            ],
+        }
+    )
+    metadata = ProposalMetadata(
+        metric_formats={
+            (23, "rate"): ".1%",
+            (23, "amount"): ",.2f",
+            (23, "count"): ",d",
+            (23, "unknown"): ".99%",
+        }
+    )
+
+    nodes = make_document(proposal, metadata)["nodes"]
+    options = nodes["widget_1"]["props"]["echartsOptions"]
+    assert echarts_option_problem(options) is None
+    assert options["title"]["text"] == "نسبة الطلبات حسب الخدمة · أعلى ١٢"
+    assert options["xAxis"]["axisLabel"]["formatter"] == "{value}٪"
+    assert options["tooltip"]["formatter"] == "{b0}: {c0}٪"
+    assert options["series"][0]["data"]["$bind"]["format"] == "percent"
+    translations = nodes["root"]["props"]["nxtbiLocalization"]["widgets"]["widget_1"]
+    assert translations["source"] == options["title"]["text"]
+    assert translations["translations"]["en"] == "Request rate by service · Top 12"
+
+    columns = nodes["widget_2"]["props"]["columnDefs"]
+    assert column_defs_problem(columns) is None
+    assert [(c.get("valueFormat"), c.get("valueFormatPrecision")) for c in columns] == [
+        (None, None),
+        ("percent", 1),
+        ("decimal", 2),
+        ("decimal", 0),
+        (None, None),
+    ]
+    assert column_defs_problem([{**columns[1], "valueFormatPrecision": 1.5}])
+    assert column_defs_problem([{**columns[1], "valueFormatPrecision": 11}])
 
 
 def test_chart_layout_keeps_separated_charts_and_legacy_bar_behavior() -> None:
@@ -426,6 +491,7 @@ def test_chart_layout_keeps_separated_charts_and_legacy_bar_behavior() -> None:
     props = nodes["widget_1"]["props"]
     assert props["dataBinding"]["rowLimit"] == 100
     assert "orderByMetric" not in props["dataBinding"]
+    assert props["echartsOptions"]["yAxis"] == {"type": "value"}
 
     classic = {"title": "Property prices", "dashboardType": "v1", "widgets": [chart]}
     assert DashboardProposal.model_validate(classic).widgets[0].chart_style == "bar"
@@ -433,6 +499,42 @@ def test_chart_layout_keeps_separated_charts_and_legacy_bar_behavior() -> None:
         DashboardProposal.model_validate(
             {**classic, "widgets": [{**chart, "chartStyle": "ranked-bar"}]}
         )
+
+
+@pytest.mark.parametrize(("locale", "percent_sign"), [("en", "%"), ("ar", "٪")])
+def test_vertical_bar_formats_saved_rates(locale: str, percent_sign: str) -> None:
+    proposal = DashboardProposal.model_validate(
+        {
+            "title": "Service rates",
+            "contentLocale": locale,
+            "widgets": [
+                {
+                    "type": "echarts",
+                    "datasetId": 23,
+                    "metric": "delay_rate",
+                    "dimension": "service",
+                    "chartStyle": "bar",
+                    "title": "Delay rate by service",
+                }
+            ],
+        }
+    )
+    metadata = ProposalMetadata(metric_formats={(23, "delay_rate"): ".1%"})
+
+    props = make_document(proposal, metadata)["nodes"]["widget_1"]["props"]
+    assert props["dataBinding"]["rowLimit"] == 100
+    assert "orderByMetric" not in props["dataBinding"]
+    options = props["echartsOptions"]
+    assert echarts_option_problem(options) is None
+    assert options["title"]["text"] == "Delay rate by service"
+    assert options["xAxis"]["type"] == "category"
+    assert options["yAxis"] == {
+        "type": "value",
+        "axisLabel": {"formatter": f"{{value}}{percent_sign}"},
+        "minInterval": 0.1,
+    }
+    assert options["tooltip"]["formatter"] == f"{{b0}}: {{c0}}{percent_sign}"
+    assert options["series"][0]["data"]["$bind"]["format"] == "percent"
 
 
 def test_mcp_delegation_is_read_only_and_user_scoped() -> None:

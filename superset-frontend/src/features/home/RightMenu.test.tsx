@@ -615,9 +615,13 @@ describe('mobile consumption mode', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
     const hamburger = await screen.findByRole('button', { name: 'Menu' });
+    expect(hamburger).toHaveAttribute('aria-expanded', 'false');
     await userEvent.click(hamburger);
 
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('dialog', { name: 'Menu' }),
+    ).toBeInTheDocument();
+    expect(hamburger).toHaveAttribute('aria-expanded', 'true');
   });
 });
 

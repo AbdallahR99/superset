@@ -30,6 +30,7 @@ import {
 } from '@superset-ui/core/components';
 import { useParams } from 'react-router-dom';
 import { useToasts } from 'src/components/MessageToasts/withToasts';
+import { useIsMobile } from 'src/hooks/useIsMobile';
 import { useUnsavedChangesPrompt } from 'src/hooks/useUnsavedChangesPrompt';
 import { dashboard, useDashboardRevision } from 'src/core/dashboard';
 import { provider } from 'src/core/dashboard/store';
@@ -129,6 +130,7 @@ const Canvas = styled.div`
   ${({ theme }) => css`
     flex: 1;
     min-height: 0;
+    min-inline-size: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: ${theme.paddingLG}px;
@@ -261,6 +263,7 @@ export default function DashboardBuilderV2() {
   const theme = useTheme();
   const isRtl = useIsRtl();
   const { dashboardId } = useParams<{ dashboardId?: string }>();
+  const mobileViewing = useIsMobile() && Boolean(dashboardId);
   const { addWarningToast } = useToasts();
   const session = useDashboardSession();
   const save = useSaveDashboard();
@@ -271,8 +274,9 @@ export default function DashboardBuilderV2() {
     session.dashboardId !== undefined &&
     Boolean(readDashboardLocalization(root.props?.nxtbiLocalization));
   const viewing =
-    localized &&
-    (!session.canEdit || editingDashboardId !== session.dashboardId);
+    mobileViewing ||
+    (localized &&
+      (!session.canEdit || editingDashboardId !== session.dashboardId));
 
   // The route decides which dashboard this is. Deliberately without a
   // cleanup: going from a dashboard that was just created to the route that
@@ -416,11 +420,12 @@ export default function DashboardBuilderV2() {
 
   return (
     <DashboardViewModeContext.Provider value={viewing ? 'view' : 'edit'}>
-      <Global styles={viewportBoundPageCss} />
+      {!mobileViewing && <Global styles={viewportBoundPageCss} />}
       <PageContainer vertical dir={isRtl ? 'rtl' : 'ltr'}>
         <DashboardHeader
+          compact={mobileViewing}
           onToggleEdit={
-            localized && session.canEdit
+            !mobileViewing && localized && session.canEdit
               ? () =>
                   setEditingDashboardId(
                     viewing ? session.dashboardId : undefined,
@@ -461,6 +466,13 @@ export default function DashboardBuilderV2() {
             {!viewing && <EditorPanel onAdd={addBlock} />}
             <Canvas
               data-test="canvas"
+              css={
+                mobileViewing &&
+                css`
+                  overflow: visible;
+                  padding: ${theme.paddingSM}px;
+                `
+              }
               onClick={event => {
                 // A click that reached the canvas itself passed every widget on
                 // the way, so it is the one gesture that unambiguously means

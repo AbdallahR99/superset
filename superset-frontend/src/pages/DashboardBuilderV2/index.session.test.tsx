@@ -19,6 +19,8 @@
 import fetchMock from 'fetch-mock';
 import { MemoryRouter, Route, Switch, useHistory } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
+import { FeatureFlag } from '@superset-ui/core';
+import { mockMobileMatchMedia } from 'spec/helpers/mobileTestUtils';
 import { act, render, screen, waitFor } from 'spec/helpers/testing-library';
 import DashboardProvider from 'src/core/dashboard/DashboardProvider';
 import type { DocumentNode } from 'src/core/dashboard/DashboardProvider';
@@ -184,6 +186,55 @@ test('a localized dashboard shows translated names in view and canonical names i
   expect(screen.queryByText('صافي الإيرادات')).not.toBeInTheDocument();
   expect(requestsTo('PUT')).toBe(0);
 });
+
+test.each([
+  ['en', 'ltr', 'Dashboard 5'],
+  ['ar', 'rtl', 'المبيعات'],
+] as const)(
+  'a saved Dashboard V2 can be read on a narrow %s viewport',
+  async (language, direction, expectedTitle) => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = {
+      ...previousFlags,
+      [FeatureFlag.MobileConsumptionMode]: true,
+    };
+    const restoreMatchMedia = mockMobileMatchMedia(390);
+    document.documentElement.lang = language;
+    const nodes = documentOf('observations');
+    nodes.root.props = {
+      nxtbiLocalization: {
+        sourceLocale: 'en',
+        title: { source: 'Dashboard 5', translations: { ar: 'المبيعات' } },
+      },
+    };
+    fetchMock.get('glob:*/api/v1/dashboard_v2/5', {
+      result: { ...row(5, 2, nodes), can_edit: true, can_publish: true },
+    });
+
+    try {
+      renderAt(pathOf(5), direction);
+      expect(await screen.findByTestId('static-grid')).toBeInTheDocument();
+      expect(screen.getByTestId('canvas').closest('[dir]')).toHaveAttribute(
+        'dir',
+        direction,
+      );
+      expect(
+        screen.getByRole('heading', { name: expectedTitle }),
+      ).toBeVisible();
+      expect(screen.getByTestId('header-published')).toBeVisible();
+      expect(
+        screen.queryByTestId('header-toggle-edit'),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByTestId('header-save')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('header-publish')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('editor-panel')).not.toBeInTheDocument();
+      expect(requestsTo('PUT')).toBe(0);
+    } finally {
+      restoreMatchMedia();
+      window.featureFlags = previousFlags;
+    }
+  },
+);
 
 test('a saved dashboard shows a spinner, not an editable canvas, until it has loaded', async () => {
   let respond: (value: unknown) => void = () => {};

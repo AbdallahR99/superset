@@ -72,7 +72,8 @@ export const COLUMN_SETTINGS: Readonly<Record<string, ColumnRule>> = {
   headerTooltip: 'string',
   type: ['numericColumn', 'rightAligned'],
   cellDataType: ['text', 'number', 'boolean', 'date', 'dateString', 'object'],
-  valueFormat: ['date'],
+  valueFormat: ['date', 'decimal', 'percent'],
+  valueFormatPrecision: 'number',
   sort: ['asc', 'desc'],
   pinned: ['left', 'right'],
   width: 'number',
@@ -127,7 +128,10 @@ function formatDateCell({ value }: { value?: unknown }): string {
 }
 
 /** Build grid columns from the allowed settings in authored definitions. */
-export function sanitizeColumnDefs(columnDefs: unknown): ColDef[] {
+export function sanitizeColumnDefs(
+  columnDefs: unknown,
+  locale?: string,
+): ColDef[] {
   if (!Array.isArray(columnDefs)) return [];
   return columnDefs.slice(0, MAX_COLUMNS).flatMap(entry => {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
@@ -144,10 +148,33 @@ export function sanitizeColumnDefs(columnDefs: unknown): ColDef[] {
     // such empty entries.
     if (typeof column.field !== 'string' || column.field === '') return [];
 
-    const { valueFormat, ...gridColumn } = column;
+    const { valueFormat, valueFormatPrecision, ...gridColumn } = column;
     // AG Grid still sorts by the raw field.
     if (valueFormat === 'date') {
       return [{ ...gridColumn, valueFormatter: formatDateCell } as ColDef];
+    }
+    if (valueFormat === 'decimal' || valueFormat === 'percent') {
+      const precision =
+        typeof valueFormatPrecision === 'number' &&
+        Number.isInteger(valueFormatPrecision) &&
+        valueFormatPrecision >= 0 &&
+        valueFormatPrecision <= 10
+          ? valueFormatPrecision
+          : 0;
+      const formatter = new Intl.NumberFormat(locale, {
+        style: valueFormat,
+        minimumFractionDigits: precision,
+        maximumFractionDigits: precision,
+      });
+      const valueFormatter = ({ value }: { value?: unknown }): string => {
+        const number =
+          typeof value === 'number' ||
+          (typeof value === 'string' && value.trim())
+            ? Number(value)
+            : NaN;
+        return Number.isFinite(number) ? formatter.format(number) : '';
+      };
+      return [{ ...gridColumn, valueFormatter } as ColDef];
     }
     return [gridColumn as ColDef];
   });
@@ -171,14 +198,16 @@ export default function AgGridTableWidget(widgetProps: WidgetProps) {
   );
 
   const authoredKey = JSON.stringify(props.columnDefs ?? null);
+  const locale =
+    globalThis.document?.documentElement.lang.replaceAll('_', '-') || undefined;
   const columnDefs = useMemo(() => {
-    const authored = sanitizeColumnDefs(props.columnDefs);
+    const authored = sanitizeColumnDefs(props.columnDefs, locale);
     if (authored.length > 0) return authored;
     return result ? deriveColumnDefs(result.columns) : undefined;
     // `authoredKey` is the value of `props.columnDefs`, which is a new array
     // on every render of an inline widget.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authoredKey, result]);
+  }, [authoredKey, result, locale]);
 
   return (
     <div

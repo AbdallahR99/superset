@@ -268,7 +268,11 @@ export const routes: Routes = [
   ...(isFeatureEnabled(FeatureFlag.DashboardV2)
     ? [
         { path: RoutePaths.DASHBOARD_V2_NEW, Component: DashboardBuilderV2 },
-        { path: RoutePaths.DASHBOARD_V2, Component: DashboardBuilderV2 },
+        {
+          path: RoutePaths.DASHBOARD_V2,
+          Component: DashboardBuilderV2,
+          mobileSupported: true,
+        },
       ]
     : []),
   { path: RoutePaths.DASHBOARD, Component: Dashboard, mobileSupported: true },

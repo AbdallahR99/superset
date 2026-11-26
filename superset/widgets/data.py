@@ -435,8 +435,11 @@ def build_widget_query(
         and dimensions
         and metrics
         and isinstance(metrics[0], str)
+        and metrics[0].strip()
     ):
-        query["orderby"] = [(metrics[0], False)]
+        query["orderby"] = [(metrics[0], False)] + [
+            (dimension, True) for dimension in dimensions if dimension != metrics[0]
+        ]
     return dataset_id, query, form_data
 
 

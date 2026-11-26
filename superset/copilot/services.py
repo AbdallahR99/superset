@@ -276,7 +276,10 @@ def _evidence_rows(
     """Execute one widget query under the active user's chart-data access and RLS."""
     dataset_id, query, form = build_widget_query({"dataBinding": binding}, filters)
     if ordered:
-        query["orderby"] = [[binding["metrics"][0], False]]
+        query["orderby"] = [
+            (binding["metrics"][0], False),
+            *((dimension, True) for dimension in binding["dimensions"]),
+        ]
     schema = ChartDataQueryContextSchema()
     schema.query_context_factory = QueryContextFactory(
         authorize_semantic_before_metadata=True
@@ -379,16 +382,52 @@ def _metric_number(value: object) -> int | float | None:
     raise CopilotToolError("The requested metric did not return a numeric value.")
 
 
+def _aggregate_values(
+    row: Mapping[str, Any], metric_names: list[str]
+) -> dict[str, int | float | None]:
+    """Project and validate only the selected saved metric values."""
+    if any(name not in row for name in metric_names):
+        raise CopilotToolError("The aggregate fields are unavailable.")
+    return {name: _metric_number(row[name]) for name in metric_names}
+
+
+def _aggregate_row(
+    row: Mapping[str, Any],
+    metric_names: list[str],
+    dimension: str | None,
+    *,
+    include_values: bool,
+) -> dict[str, Any]:
+    """Validate the selected group label and project its measures."""
+    if dimension and dimension not in row:
+        raise CopilotToolError("The aggregate fields are unavailable.")
+    group = row[dimension] if dimension else None
+    if isinstance(group, date):
+        group = group.isoformat()
+    if group is not None and (
+        type(group) not in (bool, int, float, str)
+        or (isinstance(group, str) and len(group) > 256)
+        or (isinstance(group, float) and not math.isfinite(group))
+    ):
+        raise CopilotToolError("The group label cannot be displayed.")
+    values = _aggregate_values(row, metric_names)
+    item: dict[str, Any] = {"group": group, "value": values[metric_names[0]]}
+    if include_values:
+        item["values"] = values
+    return item
+
+
 def aggregate_dataset(args: AggregateArguments) -> dict[str, Any]:
-    """Read a saved metric with at most ten groups and one equality predicate."""
+    """Read saved measures and an optional ungrouped baseline under one scope."""
     dataset = _evidence_dataset(args.id)
-    if args.metric not in {m.metric_name for m in dataset.metrics}:
-        raise ValueError("Choose an existing metric.")
+    metric_names = args.metric_names
+    if set(metric_names) - {m.metric_name for m in dataset.metrics}:
+        raise ValueError("Choose an existing metric for each measure.")
     if args.dimension and args.dimension not in {
         col.column_name for col in dataset.columns if col.groupby
     }:
         raise ValueError("Choose a groupable dataset column.")
-    if args.dimension == args.metric:
+    if args.dimension in metric_names:
         raise ValueError("Choose a dimension with a distinct result label.")
     filters = []
     if args.filter:
@@ -396,38 +435,56 @@ def aggregate_dataset(args: AggregateArguments) -> dict[str, Any]:
             [{**args.filter.model_dump(), "operator": "EQUALS"}],
             {col.column_name for col in dataset.columns if col.filterable},
         )
-    rows = _evidence_rows(
-        {
-            "datasetId": args.id,
-            "metrics": [args.metric],
-            "dimensions": [args.dimension] if args.dimension else [],
-            "rowLimit": 11 if args.dimension else 1,
-        },
-        filters,
-        ordered=bool(args.dimension),
+    advanced = bool(
+        args.model_fields_set
+        & {"additional_metrics", "limit", "order", "include_baseline"}
     )
-    result = []
-    for row in rows[:10]:
-        if args.metric not in row or (args.dimension and args.dimension not in row):
-            raise CopilotToolError("The aggregate fields are unavailable.")
-        value = _metric_number(row[args.metric])
-        group = row.get(args.dimension) if args.dimension else None
-        if isinstance(group, date):
-            group = group.isoformat()
-        if group is not None and (
-            type(group) not in (bool, int, float, str)
-            or (isinstance(group, str) and len(group) > 256)
-            or (isinstance(group, float) and not math.isfinite(group))
-        ):
-            raise CopilotToolError("The group label cannot be displayed.")
-        result.append({"group": group, "value": value})
-    return {
+    limit = args.limit if args.dimension else 1
+    binding: dict[str, Any] = {"datasetId": args.id, "metrics": metric_names}
+    grouped_binding = {
+        **binding,
+        "dimensions": [args.dimension] if args.dimension else [],
+        "rowLimit": limit + 1 if args.dimension else limit,
+    }
+    if args.dimension and args.order == "dimension_asc":
+        grouped_binding["orderByDimension"] = True
+    rows = _evidence_rows(
+        grouped_binding,
+        filters,
+        ordered=bool(args.dimension and args.order == "metric_desc"),
+    )
+    result = [
+        _aggregate_row(row, metric_names, args.dimension, include_values=advanced)
+        for row in rows[:limit]
+    ]
+    truncated = len(rows) > limit
+    response: dict[str, Any] = {
         "dataset_id": args.id,
         "metric": args.metric,
         "dimension": args.dimension,
         "rows": result,
-        "truncated": len(rows) > 10,
+        "truncated": truncated,
     }
+    if advanced:
+        response.update(
+            metrics=metric_names,
+            order=args.order if args.dimension else None,
+            limit=limit,
+            groups_returned=len(result),
+            groups_total=None if truncated else len(result),
+        )
+    if args.include_baseline:
+        # Execute the saved expressions over the filtered population itself.
+        # Combining returned groups would misstate rates and distinct counts.
+        baseline_rows = (
+            _evidence_rows({**binding, "dimensions": [], "rowLimit": 1}, filters)
+            if args.dimension
+            else rows
+        )
+        if len(baseline_rows) != 1:
+            raise CopilotToolError("The aggregate baseline is unavailable.")
+        response["baseline"] = _aggregate_values(baseline_rows[0], metric_names)
+    return response
 
 
 def _validate_widget_columns(widget: ProposalWidget, dataset: SqlaTable) -> None:

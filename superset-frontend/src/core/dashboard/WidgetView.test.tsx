@@ -259,13 +259,13 @@ test('the header takes its height out of the widget, not out of the canvas', () 
   // the result to size its canvas — so the band above it has to come out of
   // the height rather than be added to it, or every widget overflows its cell
   // by exactly the header.
-  expect(screen.getByTestId(`widget-content-${id}`).style.height).toMatch(
-    /^calc\(100% - \d+px\)$/,
-  );
+  expect(
+    getComputedStyle(screen.getByTestId(`widget-content-${id}`)).blockSize,
+  ).toMatch(/^calc\(100% - \d+px\)$/);
   // The root has no header to subtract.
   render(<WidgetView nodeId={rootId} />);
   expect(screen.getByTestId(`widget-content-${rootId}`)).toHaveStyle({
-    height: '100%',
+    blockSize: '100%',
   });
 });
 
@@ -287,7 +287,7 @@ test('a widget with no title gives its content the whole box, not a row minus a 
   // sits right below it) — reserving one anyway was a band of blank space
   // above the actual content, with nothing on either side of it.
   expect(screen.getByTestId(`widget-content-${id}`)).toHaveStyle({
-    height: '100%',
+    blockSize: '100%',
   });
 });
 

@@ -44,6 +44,7 @@ import EmbedWidgetModal from './EmbedWidgetModal';
 import { NodePathContext, isUnrenderable } from './nodePath';
 import { NodeErrorsContext } from './nodeErrors';
 import { useDashboardLocalizedText } from './localizedText';
+import { DASHBOARD_VIEW_CONTAINER } from './layoutStyle';
 
 /**
  * A refused save's reason, drawn on the widget it was about. Logical
@@ -139,6 +140,29 @@ const BlockHeader = styled.div`
     gap: ${theme.sizeUnit}px;
     height: ${theme.controlHeightSM}px;
     flex: 0 0 auto;
+
+    @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
+      block-size: auto;
+      min-block-size: ${theme.controlHeightSM}px;
+
+      > [data-test^='widget-title-'] {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+    }
+  `}
+`;
+
+const WidgetContent = styled.div<{ $hasTitle: boolean }>`
+  ${({ $hasTitle, theme }) => css`
+    inline-size: 100%;
+    block-size: ${$hasTitle ? `calc(100% - ${theme.controlHeightSM}px)` : '100%'};
+
+    @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
+      block-size: auto;
+      min-block-size: 0;
+      flex: 1 1 auto;
+    }
   `}
 `;
 
@@ -337,9 +361,6 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
     } else if (hasRegisteredView) {
       resolved = resolveView(node.type, { nodeId });
     }
-    // The same token `BlockHeader` is drawn at: the content box below is this
-    // element's height minus the band, so the two have to be one number.
-    const headerHeight = theme.controlHeightSM;
     // A type `widgetLabel` leaves unnamed (markdown, carousel) has nothing
     // to put in a header row, so it doesn't get one — see `OverlayControls`.
     const hasTitle = Boolean(label);
@@ -397,14 +418,20 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
         // Never on the root: it is the canvas, not a card resting on it.
         css={
           !isRoot &&
-          editable &&
-          css`
-            transition: box-shadow ${theme.motionDurationMid};
+          (editable
+            ? css`
+                transition: box-shadow ${theme.motionDurationMid};
 
-            &:hover {
-              box-shadow: ${theme.boxShadowSecondary};
-            }
-          `
+                &:hover {
+                  box-shadow: ${theme.boxShadowSecondary};
+                }
+              `
+            : css`
+                @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
+                  display: flex;
+                  flex-direction: column;
+                }
+              `)
         }
         style={{
           ...rest.style,
@@ -616,26 +643,19 @@ const WidgetView = forwardRef<HTMLDivElement, WidgetViewProps>(
               </OverlayControls>
             ) : null;
           })()}
-        {/* The widget's own box — the whole of this element when there's no
-            title reserving a row above it (see `hasTitle`), or this
-            element's height minus that row otherwise. Subtracted in pixels
-            off a percentage rather than left to a flex column, because what
-            a leaf widget does with the box is resolve `height: 100%` against
-            it — a chart measures the result to size its canvas — and that
-            wants a height there is no question about. */}
-        <div
+        {/* A chart measures the box left over after its title. The desktop
+            band is fixed. A narrow viewer can wrap the title and allocate
+            the remaining height with flex. */}
+        <WidgetContent
           data-test={`widget-content-${nodeId}`}
-          style={{
-            width: '100%',
-            height: hasTitle ? `calc(100% - ${headerHeight}px)` : '100%',
-          }}
+          $hasTitle={hasTitle}
         >
           <ErrorBoundary>
             <NodePathContext.Provider value={pathWithSelf}>
               {resolved ?? <UnsupportedBlockPlaceholder nodeId={nodeId} />}
             </NodePathContext.Provider>
           </ErrorBoundary>
-        </div>
+        </WidgetContent>
         {/* What the last save was refused for, when it was this widget: said
             on the widget rather than only in a toast that names an id. Laid
             over the foot of the card instead of taking a row from it, so a

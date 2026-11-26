@@ -45,7 +45,7 @@ ShortText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
 ]
 SummaryText = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=768)
 ]
 ResourceId = Annotated[int, Field(gt=0, le=2**31 - 1)]
 ContentLocale = Literal["en", "ar"]
@@ -198,11 +198,29 @@ class ProfileArguments(GetArguments):
 
 
 class AggregateArguments(GetArguments):
-    """Summarize a registered metric, optionally grouped and filtered."""
+    """Summarize registered metrics over a bounded, optionally grouped scope."""
 
     metric: ShortText
     dimension: ShortText | None = None
     filter: AggregateFilter | None = None
+    additional_metrics: list[ShortText] = Field(
+        default_factory=list, alias="additionalMetrics", max_length=4
+    )
+    limit: int = Field(default=10, ge=1, le=48)
+    order: Literal["metric_desc", "dimension_asc"] = "metric_desc"
+    include_baseline: bool = Field(default=False, alias="includeBaseline")
+
+    @property
+    def metric_names(self) -> list[str]:
+        """Return the primary measure followed by the comparison measures."""
+        return [self.metric, *self.additional_metrics]
+
+    @model_validator(mode="after")
+    def unique_metrics(self) -> AggregateArguments:
+        """Require distinct result labels for the selected measures."""
+        if len(self.metric_names) != len(set(self.metric_names)):
+            raise ValueError("Choose distinct aggregate metrics.")
+        return self
 
 
 class SavedWidgetArguments(Contract):
@@ -355,7 +373,7 @@ def _table_header(name: str, label: str | None) -> str:
 def _table_columns(
     widget: ProposalWidget, metadata: ProposalMetadata
 ) -> list[dict[str, Any]]:
-    """Define grouped columns first and format only saved temporal dimensions."""
+    """Define grouped columns first and apply supported saved display formats."""
     columns: list[dict[str, Any]] = []
     header_layout = {"wrapHeaderText": True, "autoHeaderHeight": True}
     for name in widget.dimension_names:
@@ -372,18 +390,37 @@ def _table_columns(
         if key in metadata.temporal_dimensions:
             column["valueFormat"] = "date"
         columns.append(column)
-    return columns + [
-        {
+    for name in widget.metric_names:
+        key = (widget.dataset_id, name)
+        column = {
             "field": name,
-            "headerName": _table_header(
-                name, metadata.metric_labels.get((widget.dataset_id, name))
-            ),
+            "headerName": _table_header(name, metadata.metric_labels.get(key)),
             "minWidth": 132,
             "flex": 1,
             **header_layout,
         }
-        for name in widget.metric_names
-    ]
+        d3format = metadata.metric_formats.get(key)
+        if (precision := percent_precision(d3format)) is not None:
+            column.update(valueFormat="percent", valueFormatPrecision=precision)
+        elif fixed := re.fullmatch(r",?\.([0-9]|10)f", d3format or ""):
+            column.update(valueFormat="decimal", valueFormatPrecision=int(fixed[1]))
+        elif d3format in {"d", ",d"}:
+            column.update(valueFormat="decimal", valueFormatPrecision=0)
+        columns.append(column)
+    return columns
+
+
+def _widget_title(title: str, widget: ProposalWidget, locale: ContentLocale) -> str:
+    """Disclose the ranked query cap without implying a total category count."""
+    if widget.chart_style != "ranked-bar":
+        return title
+    cap = str(RANKED_CATEGORY_LIMIT)
+    scope = (
+        f"أعلى {cap.translate(str.maketrans('0123456789', '٠١٢٣٤٥٦٧٨٩'))}"
+        if locale == "ar"
+        else f"Top {cap}"
+    )
+    return f"{title} · {scope}"
 
 
 def _theme_value(token: str) -> dict[str, dict[str, str]]:
@@ -392,7 +429,7 @@ def _theme_value(token: str) -> dict[str, dict[str, str]]:
 
 
 def _chart_value_axis(
-    label: str, d3format: str | None, is_trend: bool
+    label: str, d3format: str | None, is_trend: bool, percent_sign: str
 ) -> dict[str, Any]:
     """Describe the value scale using safe, supported saved format details."""
     axis_label: dict[str, Any] = {
@@ -408,7 +445,10 @@ def _chart_value_axis(
         "axisLabel": axis_label,
         "splitLine": {"lineStyle": {"color": _theme_value("colorBorderSecondary")}},
     }
-    if fixed := re.fullmatch(r"(\$)?,?\.([0-9]|10)f", d3format or ""):
+    if (precision := percent_precision(d3format)) is not None:
+        axis["minInterval"] = 10**-precision
+        axis_label["formatter"] = f"{{value}}{percent_sign}"
+    elif fixed := re.fullmatch(r"(\$)?,?\.([0-9]|10)f", d3format or ""):
         axis["minInterval"] = 10 ** -int(fixed[2])
         if fixed[1]:
             axis_label["formatter"] = "${value}"
@@ -418,31 +458,48 @@ def _chart_value_axis(
 
 
 def _chart_display(
-    widget: ProposalWidget, metadata: ProposalMetadata
+    widget: ProposalWidget, metadata: ProposalMetadata, locale: ContentLocale
 ) -> dict[str, Any]:
     """Compile a legacy bar, ranked category comparison or chronological native line."""
     is_trend = widget.chart_style == "line"
     metric = widget.metric_names[0]
     axis_binding = {"source": "dimension", "alias": widget.dimension}
     metric_binding = {"$bind": {"source": "metric", "alias": metric}}
+    key = (widget.dataset_id, metric)
+    d3format = metadata.metric_formats.get(key)
+    precision = percent_precision(d3format)
+    percent_sign = "٪" if locale == "ar" else "%"
+    percent_tooltip = {}
+    if precision is not None:
+        metric_binding["$bind"]["format"] = "percent"
+        percent_tooltip["formatter"] = f"{{b0}}: {{c0}}{percent_sign}"
     if widget.chart_style in {None, "bar"}:
+        value_axis: dict[str, Any] = {"type": "value"}
+        if precision is not None:
+            value_axis.update(
+                axisLabel={"formatter": f"{{value}}{percent_sign}"},
+                minInterval=10**-precision,
+            )
         return {
             "crossFilter": True,
             "echartsOptions": {
                 "animation": False,
                 "grid": {"left": 64, "right": 24, "bottom": 40, "top": 48},
-                "tooltip": {"trigger": "axis", "renderMode": "richText"},
+                "tooltip": {
+                    "trigger": "axis",
+                    "renderMode": "richText",
+                    **percent_tooltip,
+                },
                 "xAxis": {
                     "type": "category",
                     "axisLabel": {"hideOverlap": True},
                     "data": {"$bind": axis_binding},
                 },
-                "yAxis": {"type": "value"},
+                "yAxis": value_axis,
                 "series": [{"type": "bar", "data": metric_binding}],
                 **({"title": {"text": widget.title}} if widget.title else {}),
             },
         }
-    key = (widget.dataset_id, metric)
     label = _table_header(metric, metadata.metric_labels.get(key))
     category_label: dict[str, Any] = {
         "color": _theme_value("colorTextSecondary"),
@@ -473,7 +530,7 @@ def _chart_display(
         category_axis["inverse"] = True
         category_label.update(width=148, overflow="break")
         series.update(barMaxWidth=24, realtimeSort=True)
-    value_axis = _chart_value_axis(label, metadata.metric_formats.get(key), is_trend)
+    value_axis = _chart_value_axis(label, d3format, is_trend, percent_sign)
     options: dict[str, Any] = {
         "animation": False,
         "aria": {"enabled": True},
@@ -492,13 +549,16 @@ def _chart_display(
             "renderMode": "richText",
             "confine": True,
             "axisPointer": {"type": "line" if is_trend else "shadow"},
+            **percent_tooltip,
         },
         "xAxis": category_axis if is_trend else value_axis,
         "yAxis": value_axis if is_trend else category_axis,
         "series": [series],
     }
-    if widget.title:
-        options["title"] = {"text": widget.title}
+    if widget.title or not is_trend:
+        options["title"] = {
+            "text": _widget_title(widget.title or label, widget, locale)
+        }
     return {"crossFilter": not is_trend, "echartsOptions": options}
 
 
@@ -528,6 +588,7 @@ def make_document(
 ) -> dict[str, Any]:
     """Compile the allowed widget choices through the Dashboard V2 document format."""
     metadata = metadata or ProposalMetadata()
+    content_locale = proposal.content_locale or "en"
     children, chart_spans = _dashboard_layout(proposal)
     nodes: dict[str, Any] = {
         "root": {"type": "grid", "layout": {"columns": 24}, "children": children}
@@ -565,12 +626,15 @@ def make_document(
         if widget.type == "ag-grid-table" and widget.title:
             props["label"] = widget.title
         compound_table = widget.metrics is not None
-        if compound_table:
+        if widget.type == "ag-grid-table" and (
+            compound_table
+            or metadata.metric_formats.get((widget.dataset_id, metric_names[0]))
+        ):
             props["columnDefs"] = _table_columns(widget, metadata)
         if (compound_table and dimensions) or is_trend:
             props["dataBinding"]["orderByDimension"] = True
         if is_chart:
-            props.update(_chart_display(widget, metadata))
+            props.update(_chart_display(widget, metadata, content_locale))
         nodes[node_id] = {
             "type": widget.type,
             "layout": {
@@ -597,8 +661,11 @@ def make_document(
                 },
                 "widgets": {
                     f"widget_{index}": {
-                        "source": widget.title,
-                        "translations": widget.title_translations,
+                        "source": _widget_title(widget.title, widget, content_locale),
+                        "translations": {
+                            locale: _widget_title(title, widget, locale)
+                            for locale, title in widget.title_translations.items()
+                        },
                     }
                     for index, widget in enumerate(proposal.widgets, 1)
                     if widget.title and widget.title_translations

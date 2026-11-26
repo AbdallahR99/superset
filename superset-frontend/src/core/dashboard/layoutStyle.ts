@@ -26,6 +26,9 @@ type Theme = ReturnType<typeof useTheme>;
 /** Column count a container falls back to when its layout omits `columns`. */
 export const DEFAULT_COLUMNS = 24;
 
+/** Named inline-size container for the read-only dashboard and its widgets. */
+export const DASHBOARD_VIEW_CONTAINER = 'dashboard-v2-viewer';
+
 const DEFAULT_GAP = 16;
 
 /** A container's resolved grid geometry, in the plain numbers `RootGrid` feeds to the grid engine (column count / row pixel height / gap). */

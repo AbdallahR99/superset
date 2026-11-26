@@ -246,6 +246,18 @@ const Bar = styled.header`
   `}
 `;
 
+const CompactBar = styled(Bar)`
+  ${({ theme }) => css`
+    padding: ${theme.paddingXS}px ${theme.paddingSM}px;
+
+    h1 {
+      flex: 1 1 12rem;
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+    }
+  `}
+`;
+
 /** What an author does to the whole dashboard, at the end they read last. */
 const Actions = styled.span`
   ${({ theme }) => css`
@@ -274,8 +286,10 @@ const Actions = styled.span`
  * one place.
  */
 export default function DashboardHeader({
+  compact = false,
   onToggleEdit,
 }: {
+  compact?: boolean;
   onToggleEdit?: () => void;
 }): ReactElement {
   useDashboardRevision();
@@ -296,6 +310,31 @@ export default function DashboardHeader({
   // deployment has not turned that on there is nothing to offer, and an
   // action that could only lead to a refusal is left off the bar.
   const canEmbed = isFeatureEnabled(FeatureFlag.EmbeddedSuperset);
+  const heading = (
+    <TitleHeading data-test="header-title" dir="auto">
+      {displayTitle || t('Untitled dashboard')}
+    </TitleHeading>
+  );
+  const publicationState = (
+    <span data-test="header-published">
+      <PublishedLabel isPublished={session.published} />
+    </span>
+  );
+  const unsaved = session.dirty && (
+    <Typography.Text type="secondary" data-test="header-unsaved">
+      {t('Unsaved changes')}
+    </Typography.Text>
+  );
+
+  if (compact) {
+    return (
+      <CompactBar data-test="dashboard-header">
+        {heading}
+        {publicationState}
+        {unsaved}
+      </CompactBar>
+    );
+  }
 
   return (
     <Bar data-test="dashboard-header">
@@ -306,19 +345,11 @@ export default function DashboardHeader({
       <Inert label={t('Templates')} test="header-templates" reads>
         {t('Templates')}
       </Inert>
-      {viewing ? (
-        <TitleHeading data-test="header-title" dir="auto">
-          {displayTitle || t('Untitled dashboard')}
-        </TitleHeading>
-      ) : (
-        <Title nodeId={root.id} title={title} />
-      )}
+      {viewing ? heading : <Title nodeId={root.id} title={title} />}
       <Inert label={t('Favorite')} test="header-favorite" buttonStyle="link">
         <Icons.StarOutlined iconSize="m" />
       </Inert>
-      <span data-test="header-published">
-        <PublishedLabel isPublished={session.published} />
-      </span>
+      {publicationState}
       {/* Beside the status rather than opposite it: whether a dashboard is a
           draft, whose it is, and when it was last written are one answer to
           one question — what state is this in — and they are read together. */}
@@ -328,11 +359,7 @@ export default function DashboardHeader({
       />
       {/* Said only while it is true, so its absence means the server has
           what is on screen. */}
-      {session.dirty && (
-        <Typography.Text type="secondary" data-test="header-unsaved">
-          {t('Unsaved changes')}
-        </Typography.Text>
-      )}
+      {unsaved}
 
       <Actions>
         {onToggleEdit && (

@@ -32,8 +32,8 @@ interface BindMarker {
     source: 'metric' | 'dimension' | 'theme' | 'records';
     /** `metric`/`dimension` — the row field to pull one column's values from. */
     alias?: string;
-    /** `dimension` — show temporal values as UTC dates instead of epochs. */
-    format?: 'date';
+    /** `dimension` displays UTC dates, `metric` scales ratios to percentage points. */
+    format?: 'date' | 'percent';
     /** `theme` — the theme token to substitute. */
     token?: string;
     /**
@@ -120,6 +120,14 @@ function resolveBind(bind: BindMarker['$bind'], ctx: BindContext): unknown {
     if (bind.source === 'dimension' && bind.format === 'date') {
       const labels = values.map(formatTemporalLabel);
       return bind.single ? labels[0] : labels;
+    }
+    if (bind.source === 'metric' && bind.format === 'percent') {
+      const scaled = values.map(value =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? value * 100
+          : null,
+      );
+      return bind.single ? scaled[0] : scaled;
     }
     return bind.single ? values[0] : values;
   }

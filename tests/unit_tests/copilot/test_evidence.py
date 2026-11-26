@@ -17,6 +17,7 @@
 
 """Regression coverage for aggregate-only Copilot evidence."""
 
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -106,7 +107,176 @@ def test_aggregate_converts_database_decimal_to_a_finite_json_number() -> None:
         ),
     ):
         result = services.aggregate_dataset(AggregateArguments(id=23, metric="share"))
-    assert result["rows"] == [{"group": None, "value": 0.48698}]
+    assert result == {
+        "dataset_id": 23,
+        "metric": "share",
+        "dimension": None,
+        "rows": [{"group": None, "value": 0.48698}],
+        "truncated": False,
+    }
+
+
+def test_aggregate_scope_keeps_filtered_ratios_and_distinct_counts() -> None:
+    metric_names = ["share", "completed", "eligible", "distinct_users"]
+    dataset = SimpleNamespace(
+        metrics=[SimpleNamespace(metric_name=name) for name in metric_names],
+        columns=[
+            SimpleNamespace(column_name="region", groupby=True, filterable=False),
+            SimpleNamespace(column_name="status", groupby=False, filterable=True),
+        ],
+    )
+    grouped = [
+        {
+            "region": "North",
+            "share": 0.75,
+            "completed": 15,
+            "eligible": 20,
+            "distinct_users": 5,
+            "raw": "ignored",
+        },
+        {
+            "region": "South",
+            "share": 0.25,
+            "completed": 20,
+            "eligible": 80,
+            "distinct_users": 10,
+        },
+    ]
+    baseline = {
+        "share": Decimal("0.35"),
+        "completed": 35,
+        "eligible": 100,
+        "distinct_users": 13,
+        "raw": "ignored",
+    }
+    with (
+        patch.object(services, "_evidence_dataset", return_value=dataset),
+        patch.object(
+            services, "_evidence_rows", side_effect=[grouped, [baseline]]
+        ) as read,
+    ):
+        result = services.aggregate_dataset(
+            AggregateArguments.model_validate(
+                {
+                    "id": 2,
+                    "metric": "share",
+                    "additionalMetrics": metric_names[1:],
+                    "dimension": "region",
+                    "filter": {"column": "status", "value": "active"},
+                    "includeBaseline": True,
+                    "limit": 1,
+                }
+            )
+        )
+    assert result == {
+        "dataset_id": 2,
+        "metric": "share",
+        "metrics": metric_names,
+        "dimension": "region",
+        "rows": [
+            {
+                "group": "North",
+                "value": 0.75,
+                "values": {name: grouped[0][name] for name in metric_names},
+            }
+        ],
+        "truncated": True,
+        "order": "metric_desc",
+        "limit": 1,
+        "groups_returned": 1,
+        "groups_total": None,
+        "baseline": {
+            "share": 0.35,
+            "completed": 35,
+            "eligible": 100,
+            "distinct_users": 13,
+        },
+    }
+    grouped_call, baseline_call = read.call_args_list
+    assert grouped_call.args[0] == {
+        "datasetId": 2,
+        "metrics": metric_names,
+        "dimensions": ["region"],
+        "rowLimit": 2,
+    }
+    assert grouped_call.kwargs == {"ordered": True}
+    assert baseline_call.args[0] == {
+        "datasetId": 2,
+        "metrics": metric_names,
+        "dimensions": [],
+        "rowLimit": 1,
+    }
+    assert grouped_call.args[1] == baseline_call.args[1]
+    assert baseline_call.args[1][0]["comparator"] == "active"
+
+
+def test_aggregate_chronological_groups_can_cover_more_than_ten_periods() -> None:
+    dataset = SimpleNamespace(
+        metrics=[SimpleNamespace(metric_name="count")],
+        columns=[SimpleNamespace(column_name="month", groupby=True)],
+    )
+    month_rows = [
+        {"month": date(2025 + i // 12, i % 12 + 1, 1), "count": i} for i in range(23)
+    ]
+    with (
+        patch.object(services, "_evidence_dataset", return_value=dataset),
+        patch.object(services, "_evidence_rows", return_value=month_rows) as read,
+    ):
+        result = services.aggregate_dataset(
+            AggregateArguments(
+                id=2, metric="count", dimension="month", limit=48, order="dimension_asc"
+            )
+        )
+    assert result["groups_total"] == 23
+    assert result["groups_returned"] == 23
+    assert not result["truncated"]
+    assert result["rows"][0]["group"] == "2025-01-01"
+    assert result["rows"][-1]["group"] == "2026-11-01"
+    assert read.call_args.args[0]["rowLimit"] == 49
+    assert read.call_args.args[0]["orderByDimension"] is True
+    assert read.call_args.kwargs == {"ordered": False}
+
+
+def test_aggregate_ungrouped_baseline_reuses_measure_query() -> None:
+    dataset = SimpleNamespace(metrics=[SimpleNamespace(metric_name="share")])
+    with (
+        patch.object(services, "_evidence_dataset", return_value=dataset),
+        patch.object(
+            services, "_evidence_rows", return_value=[{"share": None}]
+        ) as read,
+    ):
+        result = services.aggregate_dataset(
+            AggregateArguments.model_validate(
+                {"id": 2, "metric": "share", "includeBaseline": True}
+            )
+        )
+    read.assert_called_once()
+    assert result["baseline"] == {"share": None}
+    assert result["order"] is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"additionalMetrics": ["total"]}, {"limit": 49}, {"order": "unknown"}],
+)
+def test_aggregate_rejects_invalid_evidence_options(changes: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        AggregateArguments.model_validate({"id": 2, "metric": "total", **changes})
+
+
+def test_aggregate_rejects_unregistered_additional_measure_before_query() -> None:
+    dataset = SimpleNamespace(metrics=[SimpleNamespace(metric_name="share")])
+    with (
+        patch.object(services, "_evidence_dataset", return_value=dataset),
+        patch.object(services, "_evidence_rows") as read,
+        pytest.raises(ValueError, match="existing metric"),
+    ):
+        services.aggregate_dataset(
+            AggregateArguments.model_validate(
+                {"id": 2, "metric": "share", "additionalMetrics": ["unknown"]}
+            )
+        )
+    read.assert_not_called()
 
 
 def test_profile_requires_dataset_access_before_query() -> None:
@@ -233,7 +403,7 @@ def test_compound_proposal_uses_only_authorized_saved_fields(
         {
             key: value
             for key, value in column.items()
-            if key in {"field", "headerName", "valueFormat"}
+            if key in {"field", "headerName", "valueFormat", "valueFormatPrecision"}
         }
         for column in props["columnDefs"]
     ]
@@ -241,7 +411,12 @@ def test_compound_proposal_uses_only_authorized_saved_fields(
         {"field": "sale_month", "headerName": "Sale month", "valueFormat": "date"},
         {"field": "property_type", "headerName": "Property type"},
         {"field": "sale_count", "headerName": "Sales"},
-        {"field": "weighted_price", "headerName": "Weighted price"},
+        {
+            "field": "weighted_price",
+            "headerName": "Weighted price",
+            "valueFormat": "decimal",
+            "valueFormatPrecision": 2,
+        },
     ]
     _, query, _ = services.build_widget_query(props, [])
     assert query["metrics"] == ["sale_count", "weighted_price"]

@@ -269,7 +269,8 @@ class AgGridTableControls(WidgetControls):
         description=(
             "Optional AG Grid column definitions. When empty, columns are "
             "derived one-to-one from the query result columns. "
-            'Use "valueFormat": "date" to display a temporal column in UTC.'
+            'Use "valueFormat": "date" for UTC dates, or "decimal" and "percent" '
+            'for localized numbers. "valueFormatPrecision" sets the decimal places.'
         ),
         json_schema_extra={"x-control": "code", "x-language": "json"},
     )

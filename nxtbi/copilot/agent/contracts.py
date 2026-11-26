@@ -47,7 +47,7 @@ DatasetFieldId = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
 ]
 DashboardSummary = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=768)
 ]
 
 
@@ -71,6 +71,16 @@ class DatasetFilter(BaseModel):
 
     column: LABEL
     value: LABEL | int | float | bool
+
+
+class RateComparison(BaseModel):
+    """Identify the three saved measures that describe the same rate."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    numerator: DatasetFieldId
+    denominator: DatasetFieldId
+    rate: DatasetFieldId
 
 
 class TitleTranslations(BaseModel):

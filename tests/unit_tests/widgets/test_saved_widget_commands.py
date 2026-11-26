@@ -384,7 +384,7 @@ def test_data_and_values_commands_dispatch(mocker: MockerFixture) -> None:
 @pytest.mark.parametrize(
     ("overrides", "expected_order"),
     [
-        ({}, [("sum__num", False)]),
+        ({}, [("sum__num", False), ("state", True)]),
         ({"orderByDimension": True}, [("state", True)]),
         ({"orderByMetric": False}, None),
         ({"dimensions": []}, None),
@@ -464,7 +464,9 @@ def test_ranked_query_compiles_metric_order_before_limit() -> None:
                 dialect=engine.dialect, compile_kwargs={"literal_binds": True}
             )
         )
-    assert re.search(r"ORDER BY [^\n]+ DESC\s+LIMIT 12\b", sql, re.IGNORECASE)
+    assert re.search(
+        r"ORDER BY [^\n]+ DESC, [^\n]*state ASC\s+LIMIT 12\b", sql, re.IGNORECASE
+    )
 
 
 def test_guest_inline_props_accept_safe_shapes() -> None:

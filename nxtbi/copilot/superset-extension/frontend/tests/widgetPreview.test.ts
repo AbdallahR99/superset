@@ -77,10 +77,12 @@ test('ranks a bounded set of categories with horizontal bars and readable labels
   assert.equal(chart?.props.crossFilter, true);
   assert.ok(chart);
   const options = chart.props.echartsOptions as {
+    title: { text: string };
     xAxis: { type: string; minInterval: number; name: string };
     yAxis: unknown;
     series: unknown;
   };
+  assert.equal(options.title.text, 'Amount · Top 12');
   assert.equal(options.xAxis.type, 'value');
   assert.equal(options.xAxis.minInterval, 1);
   assert.equal(options.xAxis.name, 'Amount');
@@ -135,6 +137,50 @@ test('keeps explicit and default legacy bar proposals vertical and unranked', ()
     series: [
       { type: 'bar', data: { $bind: { source: 'metric', alias: 'count' } } },
     ],
+  });
+});
+
+test('shows saved percentage units for a default vertical bar without changing its layout', () => {
+  const preview = widgetPreview(
+    {
+      type: 'echarts',
+      datasetId: 10,
+      metric: 'return_rate',
+      dimension: 'region',
+    },
+    '.1%',
+  );
+  assert.ok(preview);
+  assert.deepEqual(preview.props.echartsOptions, {
+    animation: false,
+    grid: { left: 64, right: 24, bottom: 40, top: 48 },
+    tooltip: {
+      trigger: 'axis',
+      renderMode: 'richText',
+      formatter: '{b0}: {c0}%',
+    },
+    xAxis: {
+      type: 'category',
+      axisLabel: { hideOverlap: true },
+      data: { $bind: { source: 'dimension', alias: 'region' } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { formatter: '{value}%' },
+      minInterval: 0.1,
+    },
+    series: [
+      {
+        type: 'bar',
+        data: { $bind: { source: 'metric', alias: 'return_rate', format: 'percent' } },
+      },
+    ],
+  });
+  assert.deepEqual(preview.props.dataBinding, {
+    datasetId: 10,
+    metrics: ['return_rate'],
+    dimensions: ['region'],
+    rowLimit: 100,
   });
 });
 
@@ -204,10 +250,38 @@ test('keeps an edited chart title in its declarative widget option', () => {
     dimension: 'region',
     title: '  Reviewed chart  ',
   });
+  assert.ok(chart);
   assert.equal(
-    (chart?.props.echartsOptions as { title: { text: string } }).title.text,
+    (chart.props.echartsOptions as { title: { text: string } }).title.text,
     'Reviewed chart',
   );
+});
+
+test('uses a localized ranked title and percentage units without editing the proposal', () => {
+  const widget: ProposedWidget = {
+    type: 'echarts',
+    datasetId: 10,
+    chartStyle: 'ranked-bar',
+    metric: 'return_rate',
+    dimension: 'region',
+    title: 'معدل الإرجاع',
+  };
+  const preview = widgetPreview(widget, '.1%', undefined, 'ar');
+  assert.ok(preview);
+  const options = preview.props.echartsOptions as {
+    title: { text: string };
+    xAxis: { minInterval: number; axisLabel: { formatter: string } };
+    tooltip: { formatter: string };
+    series: { data: unknown }[];
+  };
+  assert.equal(widget.title, 'معدل الإرجاع');
+  assert.equal(options.title.text, 'معدل الإرجاع · أعلى ١٢');
+  assert.equal(options.xAxis.minInterval, 0.1);
+  assert.equal(options.xAxis.axisLabel.formatter, '{value}٪');
+  assert.equal(options.tooltip.formatter, '{b0}: {c0}٪');
+  assert.deepEqual(options.series[0]?.data, {
+    $bind: { source: 'metric', alias: 'return_rate', format: 'percent' },
+  });
 });
 
 test('previews every compound table field in selection order with saved labels and date formatting', () => {
@@ -275,6 +349,47 @@ test('previews every compound table field in selection order with saved labels a
       dimensions: [],
       rowLimit: 100,
     },
+  );
+});
+
+test('previews accepted metric formats per table column and ignores unknown formats', () => {
+  const preview = widgetPreview(
+    {
+      type: 'ag-grid-table',
+      datasetId: 10,
+      metrics: ['return_rate', 'count', 'fees', 'unknown'],
+      dimensions: [],
+    },
+    undefined,
+    {
+      metrics: new Map(),
+      dimensions: new Map(),
+      metricFormats: new Map([
+        ['return_rate', '.1%'],
+        ['count', ',d'],
+        ['fees', ',.10f'],
+        ['unknown', '.11f'],
+      ]),
+    },
+  );
+  assert.ok(preview);
+  const columns = preview.props.columnDefs as {
+    field: string;
+    valueFormat?: string;
+    valueFormatPrecision?: number;
+  }[];
+  assert.deepEqual(
+    columns.map(({ field, valueFormat, valueFormatPrecision }) => [
+      field,
+      valueFormat,
+      valueFormatPrecision,
+    ]),
+    [
+      ['return_rate', 'percent', 1],
+      ['count', 'decimal', 0],
+      ['fees', 'decimal', 10],
+      ['unknown', undefined, undefined],
+    ],
   );
 });
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json  # noqa: TID251 - The standalone service has no Superset runtime.
 import logging
+import math
 import os
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -49,6 +50,16 @@ from fastapi.responses import StreamingResponse
 from pydantic import BeforeValidator, Field, ValidationError
 from pydantic_ai import Agent, ModelRetry, RunContext, UsageLimits
 from pydantic_ai.capabilities import Instrumentation
+from pydantic_ai.exceptions import (
+    ModelAPIError,
+    ModelContextWindowExceededError,
+    ModelQuotaExceededError,
+    ModelRateLimitError,
+    ModelTimeoutError,
+    RunCancelled,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -56,7 +67,7 @@ from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai_compatible import OpenAICompatibleProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.ui.ag_ui import AGUIAdapter
+from pydantic_ai.ui.ag_ui import AGUIAdapter, AGUIEventStream
 
 from . import captions, snapshot, surfaces, uploads
 from .contracts import (
@@ -65,12 +76,14 @@ from .contracts import (
     DashboardLocalization,
     DashboardProposal,
     DashboardSummary,
+    DatasetFieldId,
     DatasetFilter,
     GatewayClaims,
     LABEL,
     MAX_BODY_BYTES,
     parse_run,
     POSITIVE_ID,
+    RateComparison,
     RunHints,
     TitleTranslations,
     verify_gateway_token,
@@ -81,6 +94,7 @@ logger = logging.getLogger(__name__)
 TOOL_RESULT_BYTES = 24_000
 MAX_SURFACES = 4
 MODEL_TIMEOUT = 75
+RUN_ERROR_MESSAGE = "Copilot could not complete this request."
 CAPTION_TIMEOUT = 12
 CAPTION_TOKEN_LIMIT = 2_400
 CAPTION_INSTRUCTIONS = """Translate draft dashboard captions between English and Arabic.
@@ -94,9 +108,10 @@ PRIVATE_INSTRUMENTATION = InstrumentationSettings(
     include_model_request_parameters=False,
 )
 RUN_LIMITS = UsageLimits(
-    request_limit=10,
+    request_limit=16,
     tool_calls_limit=18,
-    input_tokens_limit=48_000,
+    # The provider counts the growing evidence context again at each turn.
+    input_tokens_limit=96_000,
     output_tokens_limit=10_000,
 )
 RELAY_EVENTS = {
@@ -134,23 +149,35 @@ call aggregate_dataset only for those facts, once per needed scope, and preserve
 the observed scope and values. The draft preview runs its own queries, so skip
 unrelated exploration and call propose_dashboard promptly. Provide a requested
 dashboard summary in the optional top-level summary field as one or two plain-text
-sentences, up to 512 characters. Grouped tables and summaries require Dashboard V2.
+sentences, up to 768 characters. Grouped tables and summaries require Dashboard V2.
 For a dashboard requested to compare results, find insights, or support a decision,
 use this plan even for a selected upload or stock/snapshot source. Preserve the
 explicitly requested widget count, chart or table types, fields, filters, and order.
-Resolve the dataset once. Use get_dataset to find saved measures and grouping
-columns. Read the metric descriptions and choose one decision the data can inform. Use
-profile_dataset once when you need to verify suitable periods or categories. Run
-two targeted aggregate_dataset queries for the complementary comparisons when
-the data supports them. Match the scope and grouping of each chart to its evidence.
-When comparing two saved measures, use a common grouping and time scope and
-disclose any difference in which records are eligible for each measure.
-For an open analytical Dashboard V2 layout, lead with two native echarts widgets
-when supported: a ranked-bar comparing a useful category by a saved measure and a
-line showing the same measure over meaningful, verified periods. If the time
-evidence is missing, truncated, or too granular, use a second category chart for a
-distinct question using a verified grouping or measure. Use fewer charts if only
-one valid comparison exists. Add a KPI or table only when it serves a separate purpose.
+For an open analytical brief, resolve the dataset once and use get_dataset to
+read measure definitions and choose the decision to support. When the saved
+measures support a rate, use one aggregate_dataset call with rate_comparison to
+measure the numerator, eligible denominator, and rate together by a useful group
+and across the same filtered scope. Compare the highest volume and the highest
+rate, even when their leaders differ. Use the actual scope rate as the baseline,
+never an average of group percentages. Report the compared rates as numerator /
+denominator plus percentage and include the baseline with its denominator. State
+ties and flag thin samples before recommending an action. Use the counts to triage
+workload and the rates to select groups for investigation. Check a second relevant
+grouping when available and say when a decision-relevant segment was not measured.
+Reuse complete grouped results for their count, rate, and baseline. Once the
+decision-driving comparisons are verified, stage the dashboard before optional
+exploration. The native widgets will query their selected fields on review.
+Choose the charts that best support those findings. When a comparative rate is
+available, use complementary count and rate views and a detail table with their
+denominators if needed to interpret them. If an ordered period chart would be
+more useful, profile the temporal field then use aggregate_dataset with
+order=dimension_asc and a limit covering the checked periods. If truncated, retry
+with limit=48. If coverage remains incomplete, omit the period chart. Verify the
+latest observed date and its period boundary before calling any period final or
+partial. Never infer them from truncated or unverified evidence. Disclose missing
+groups, filters, and material differences in measure eligibility.
+Use fewer charts if only one valid comparison exists. Add a KPI only for a distinct
+headline, and do not invent a rate or a denominator when the source lacks them.
 Use chartStyle ranked-bar for a ranked horizontal V2 comparison of up to 12 groups.
 Use chartStyle bar for an ordinary, unranked category chart or in Classic dashboards.
 Never treat rank-limited aggregate results as a complete time series.
@@ -236,6 +263,14 @@ GatewayToolName = Literal[
     "propose_dashboard",
 ]
 SearchQuery = Annotated[str, Field(max_length=120)]
+ChronologyScope = tuple[int, str, str, str | None]
+
+
+def _chronology_scope(
+    dataset_id: int, dimension: str, metric: str, filters: DatasetFilter | None
+) -> ChronologyScope:
+    """Match the exact dataset, group, measure, and filter of a period query."""
+    return dataset_id, dimension, metric, filters.model_dump_json() if filters else None
 
 
 def _decode_model_object(value: object) -> object:
@@ -251,6 +286,7 @@ def _decode_model_object(value: object) -> object:
 
 
 ModelFilter = Annotated[DatasetFilter, BeforeValidator(_decode_model_object)]
+ModelRateComparison = Annotated[RateComparison, BeforeValidator(_decode_model_object)]
 ModelTitleTranslations = Annotated[
     TitleTranslations, BeforeValidator(_decode_model_object)
 ]
@@ -317,6 +353,40 @@ class RunDeps:
     proposal_staged: bool = False
     terminal_proposal_call_id: str | None = None
     checked_dashboard_ids: set[int] = field(default_factory=set)
+    truncated_chronology: set[ChronologyScope] = field(default_factory=set)
+
+    def remember_chronology(
+        self,
+        result: object,
+        dataset_id: int,
+        dimension: str | None,
+        metrics: list[str],
+        filters: DatasetFilter | None,
+    ) -> None:
+        """Retain truncated evidence until a complete result covers its scope."""
+        if dimension is None or not isinstance(result, dict):
+            return
+        scopes = {
+            _chronology_scope(dataset_id, dimension, metric, filters)
+            for metric in metrics
+        }
+        if result.get("truncated") is True:
+            self.truncated_chronology.update(scopes)
+        elif result.get("truncated") is False and result.get("rows"):
+            self.truncated_chronology.difference_update(scopes)
+
+    def has_truncated_line(self, widgets: list[WidgetDraft]) -> bool:
+        """Find proposed lines whose matching evidence is known to be truncated."""
+        return any(
+            widget.chart_style == "line"
+            and widget.dimension is not None
+            and widget.metric is not None
+            and _chronology_scope(
+                widget.dataset_id, widget.dimension, widget.metric, widget.filter
+            )
+            in self.truncated_chronology
+            for widget in widgets
+        )
 
     @property
     def has_superset_tools(self) -> bool:
@@ -382,6 +452,72 @@ class RunDeps:
                 )
 
 
+def _run_failure_category(error: Exception) -> str:
+    """Classify adapter failures without exposing provider or generated error text."""
+    if isinstance(error, UsageLimitExceeded):
+        # PydanticAI names the crossed budget in the exception, not a public field.
+        return next(
+            (
+                limit
+                for limit in (
+                    "per_request_input_tokens_limit",
+                    "input_tokens_limit",
+                    "output_tokens_limit",
+                    "total_tokens_limit",
+                    "request_limit",
+                    "tool_calls_limit",
+                    "cost_limit",
+                )
+                if limit in str(error)
+            ),
+            "usage_limit",
+        )
+    categories = (
+        ((TimeoutError, ModelTimeoutError), "timeout"),
+        (RunCancelled, "cancelled"),
+        (ModelContextWindowExceededError, "provider_context_window"),
+        ((ModelRateLimitError, ModelQuotaExceededError), "provider_limit"),
+        (ModelAPIError, "provider_error"),
+        (UnexpectedModelBehavior, "invalid_model_output"),
+    )
+    return next(
+        (
+            category
+            for error_type, category in categories
+            if isinstance(error, error_type)
+        ),
+        "internal_error",
+    )
+
+
+class _CopilotEventStream(AGUIEventStream[RunDeps, str]):
+    """Redact raw exception messages before the AG-UI stream is built."""
+
+    async def on_error(self, error: Exception) -> AsyncIterator[BaseEvent]:
+        logger.warning("Copilot adapter failure: %s", _run_failure_category(error))
+        async for event in super().on_error(RuntimeError(RUN_ERROR_MESSAGE)):
+            yield event
+
+    async def on_cancelled(self, cancelled: RunCancelled) -> AsyncIterator[BaseEvent]:
+        logger.warning("Copilot adapter failure: %s", _run_failure_category(cancelled))
+        async for event in super().on_cancelled(cancelled):
+            yield event
+
+
+class _CopilotAdapter(AGUIAdapter[RunDeps, str]):
+    """Build the classified event stream for the configured Copilot agent."""
+
+    def build_event_stream(self) -> _CopilotEventStream:
+        return _CopilotEventStream(
+            self.run_input,
+            accept=self.accept,
+            ag_ui_version=self.ag_ui_version,
+            include_usage=self.include_usage,
+            manage_system_prompt=self.manage_system_prompt,
+            preserve_file_data=self.preserve_file_data,
+        )
+
+
 async def _prepare_superset_tool(
     ctx: RunContext[RunDeps], definition: ToolDefinition
 ) -> ToolDefinition | None:
@@ -417,8 +553,89 @@ def _search_arguments(query: str) -> dict[str, object]:
     return {"query": text} if text else {}
 
 
+def _rate_triplet(
+    values: object, comparison: RateComparison
+) -> dict[str, int | float] | None:
+    """Accept a saved proportion only when it matches measured eligible counts."""
+    if not isinstance(values, dict):
+        return None
+    numerator = values.get(comparison.numerator)
+    denominator = values.get(comparison.denominator)
+    rate = values.get(comparison.rate)
+    if type(rate) not in (int, float) or not all(
+        type(count) is int or (type(count) is float and count.is_integer())
+        for count in (numerator, denominator)
+    ):
+        return None
+    numerator = cast(int | float, numerator)
+    denominator = cast(int | float, denominator)
+    rate = cast(int | float, rate)
+    if not (0 <= numerator <= denominator and denominator > 0 and 0 <= rate <= 1):
+        return None
+    if not math.isclose(rate, numerator / denominator, rel_tol=1e-6, abs_tol=1e-8):
+        return None
+    return {"numerator": int(numerator), "denominator": int(denominator), "rate": rate}
+
+
+def _rate_comparison(result: object, comparison: RateComparison) -> object:
+    """Identify measured volume and rate leaders, including ties in the result scope."""
+    if not isinstance(result, dict) or not isinstance(result.get("rows"), list):
+        return result
+    measured: list[tuple[object, dict[str, int | float]]] = []
+    for row in result["rows"]:
+        if isinstance(row, dict):
+            values = _rate_triplet(row.get("values"), comparison)
+            if values is not None:
+                measured.append((row.get("group"), values))
+
+    def leaders(key: Literal["numerator", "rate"]) -> dict[str, object]:
+        if not measured:
+            return {"groups": [], "tied_count": 0}
+        highest = max(values[key] for _, values in measured)
+        matches = [
+            {"group": group, **values}
+            for group, values in measured
+            if values[key] == highest
+        ]
+        return {"groups": matches[:4], "tied_count": len(matches)}
+
+    return {
+        **result,
+        "rate_comparison": {
+            "baseline": _rate_triplet(result.get("baseline"), comparison),
+            "highest_observed_volume": leaders("numerator"),
+            "highest_observed_rate": leaders("rate"),
+            "truncated": result.get("truncated") is not False,
+            "verified_groups": len(measured),
+            "unverified_groups": len(result["rows"]) - len(measured),
+        },
+    }
+
+
+def _additional_aggregate_metrics(
+    metric: str,
+    dimension: str | None,
+    additional_metrics: list[str] | None,
+    comparison: RateComparison | None,
+) -> list[str]:
+    """Add the saved rate measures within the gateway's existing metric budget."""
+    extras = list(additional_metrics or [])
+    if len({metric, *extras}) != 1 + len(extras):
+        raise ModelRetry("Select distinct saved metric names.")
+    if comparison is not None:
+        roles = [comparison.numerator, comparison.denominator, comparison.rate]
+        if dimension is None or len(set(roles)) != 3:
+            raise ModelRetry(
+                "Choose a grouping and three distinct saved rate measures."
+            )
+        extras.extend(name for name in roles if name != metric and name not in extras)
+        if len(extras) > 4:
+            raise ModelRetry("Select up to five distinct saved measures in total.")
+    return extras
+
+
 def _register_dataset_tools(agent: Agent[RunDeps, str]) -> None:
-    """Expose user-scoped dataset discovery and aggregate evidence."""
+    """Expose user-scoped dataset discovery and profiling."""
 
     @agent.tool(prepare=_prepare_superset_tool, sequential=True)
     async def list_datasets(
@@ -446,21 +663,57 @@ def _register_dataset_tools(agent: Agent[RunDeps, str]) -> None:
             arguments["columns"] = columns
         return await ctx.deps.gateway("profile_dataset", arguments)
 
+
+def _register_aggregate_tool(agent: Agent[RunDeps, str]) -> None:
+    """Expose user-scoped aggregate and rate evidence."""
+
     @agent.tool(prepare=_prepare_superset_tool, sequential=True)
     async def aggregate_dataset(
         ctx: RunContext[RunDeps],
         id: POSITIVE_ID,
-        metric: LABEL,
-        dimension: LABEL | None = None,
+        metric: DatasetFieldId,
+        dimension: DatasetFieldId | None = None,
         filter: ModelFilter | None = None,
+        additional_metrics: Annotated[list[DatasetFieldId], Field(max_length=4)]
+        | None = None,
+        limit: Annotated[int, Field(ge=1, le=48)] = 10,
+        order: Literal["metric_desc", "dimension_asc"] = "metric_desc",
+        include_baseline: bool = False,
+        rate_comparison: ModelRateComparison | None = None,
     ) -> object:
-        """Read a saved measure as a total or up to ten ranked groups."""
+        """Read saved measures as totals or grouped observations in one scope.
+
+        For a decision-driving rate, supply rate_comparison with the saved numerator,
+        eligible denominator, and proportional rate names. Their group values and
+        whole-scope baseline are queried together. Use dimension_asc for time and a
+        sufficient limit. A truncated result can only establish observed leaders.
+        """
         arguments: dict[str, object] = {"id": id, "metric": metric}
         if dimension is not None:
             arguments["dimension"] = dimension
         if filter is not None:
             arguments["filter"] = filter.model_dump(mode="json")
-        return await ctx.deps.gateway("aggregate_dataset", arguments)
+        extras = _additional_aggregate_metrics(
+            metric, dimension, additional_metrics, rate_comparison
+        )
+        if extras:
+            arguments["additionalMetrics"] = extras
+        if limit != 10:
+            arguments["limit"] = limit
+        if order != "metric_desc":
+            arguments["order"] = order
+        if include_baseline or rate_comparison is not None:
+            arguments["includeBaseline"] = True
+        result = await ctx.deps.gateway("aggregate_dataset", arguments)
+        if order == "dimension_asc":
+            ctx.deps.remember_chronology(
+                result, id, dimension, [metric, *extras], filter
+            )
+        return (
+            _rate_comparison(result, rate_comparison)
+            if rate_comparison is not None
+            else result
+        )
 
 
 async def _stage_proposal(
@@ -473,6 +726,13 @@ async def _stage_proposal(
     """Stage one gateway-validated preview without saving it."""
     if deps.proposal_staged:
         return {"status": "A draft is already awaiting user approval in this run."}
+    if deps.has_truncated_line(draft.widgets):
+        return {
+            "error": "A line chart has truncated evidence. Retry the same "
+            "chronological query with limit 48 and verify coverage. If incomplete, "
+            "omit the chart. Remove final or partial period claims without verified "
+            "date coverage."
+        }
     kind = deps.hints.dashboard_type or draft.dashboard_type
     if draft.requires_dashboard_v2:
         if kind == "v1":
@@ -850,6 +1110,7 @@ def build_agent(model: Model) -> Agent[RunDeps, str]:
     )
     agent.instructions(_host_hints)
     _register_dataset_tools(agent)
+    _register_aggregate_tool(agent)
     _register_snapshot_tool(agent)
     _register_superset_tools(agent)
     _register_surface_tools(agent)
@@ -1041,9 +1302,9 @@ async def _stream_events(
                 )
                 return
         except Exception as exc:
-            logger.warning("Copilot run stopped: %s", type(exc).__name__)
+            logger.warning("Copilot run stopped: %s", _run_failure_category(exc))
         yield RunErrorEvent(
-            message="Copilot could not complete this request.",
+            message=RUN_ERROR_MESSAGE,
             code="run_error",
         )
 
@@ -1092,7 +1353,7 @@ def create_app(
             raise HTTPException(503, "The Copilot model is not configured")
 
         adapter = (
-            AGUIAdapter(agent=agent, run_input=run_input)
+            _CopilotAdapter(agent=agent, run_input=run_input)
             if agent is not None and not is_shortcut
             else None
         )

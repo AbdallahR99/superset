@@ -27,6 +27,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -75,7 +76,9 @@ def _authorization(
     return {"Authorization": f"Bearer {token}"}
 
 
-def _events(response: httpx.Response) -> list[dict[str, Any]]:
+def _events(
+    response: httpx.Response, *, terminal: str = "RUN_FINISHED"
+) -> list[dict[str, Any]]:
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/event-stream")
     data = [
@@ -84,7 +87,7 @@ def _events(response: httpx.Response) -> list[dict[str, Any]]:
         if line.startswith("data: ")
     ]
     assert data[0]["type"] == "RUN_STARTED"
-    assert data[-1]["type"] == "RUN_FINISHED", data
+    assert data[-1]["type"] == terminal, data
     return data
 
 
@@ -747,6 +750,214 @@ def test_dataset_evidence_reaches_model(
     assert any(event.get("delta") == "The dataset was assessed." for event in events)
 
 
+def test_rate_comparison_uses_scoped_baseline_and_preserves_observed_ties() -> None:
+    """Verify paired evidence, and never describe a truncated rank as complete."""
+    headers = _authorization("superset")
+    arguments = {
+        "id": 47,
+        "metric": "pending",
+        "dimension": "region",
+        "filter": {"column": "year_date", "value": "2026-01-01"},
+        "additional_metrics": ["received"],
+        "limit": 32,
+        "order": "dimension_asc",
+        "rate_comparison": {
+            "numerator": "pending",
+            "denominator": "received",
+            "rate": "pending_rate",
+        },
+    }
+    groups = [
+        ("High volume", 40, 100, 0.4),
+        ("High rate west", 30, 50, 0.6),
+        ("High rate east", 30, 50, 0.6),
+        ("No eligible records", 0, 0, None),
+    ]
+    evidence = {
+        "rows": [
+            {
+                "group": group,
+                "value": pending,
+                "values": {
+                    "pending": pending,
+                    "received": received,
+                    "pending_rate": rate,
+                },
+            }
+            for group, pending, received, rate in groups
+        ],
+        "baseline": {"pending": 200, "received": 500, "pending_rate": 0.4},
+        "truncated": True,
+    }
+    calls: list[object] = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == headers["Authorization"]
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json=evidence)
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        for message in messages:
+            for part in message.parts:
+                if isinstance(part, ToolReturnPart):
+                    result = part.content
+                    assert result["rows"] == evidence["rows"]
+                    compared = result["rate_comparison"]
+                    assert compared["baseline"] == {
+                        "numerator": 200,
+                        "denominator": 500,
+                        "rate": 0.4,
+                    }
+                    assert compared["highest_observed_volume"] == {
+                        "groups": [
+                            {
+                                "group": "High volume",
+                                "numerator": 40,
+                                "denominator": 100,
+                                "rate": 0.4,
+                            }
+                        ],
+                        "tied_count": 1,
+                    }
+                    assert [
+                        r["group"] for r in compared["highest_observed_rate"]["groups"]
+                    ] == [
+                        "High rate west",
+                        "High rate east",
+                    ]
+                    assert compared["highest_observed_rate"]["tied_count"] == 2
+                    assert compared["truncated"] is True
+                    assert compared["verified_groups"] == 3
+                    assert compared["unverified_groups"] == 1
+                    yield "Only the measured groups were compared."
+                    return
+        yield {
+            0: DeltaToolCall(
+                name="aggregate_dataset",
+                tool_call_id="rates",
+                json_args=json.dumps(arguments),
+            )
+        }
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        model=FunctionModel(stream_function=generate),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        events = _events(client.post("/ag-ui", headers=headers, json=REQUEST))
+    assert calls == [
+        {
+            "name": "aggregate_dataset",
+            "arguments": {
+                "id": 47,
+                "metric": "pending",
+                "dimension": "region",
+                "filter": arguments["filter"],
+                "additionalMetrics": ["received", "pending_rate"],
+                "limit": 32,
+                "order": "dimension_asc",
+                "includeBaseline": True,
+            },
+        }
+    ]
+    assert any(
+        event.get("delta") == "Only the measured groups were compared."
+        for event in events
+    )
+
+
+def test_truncated_chronology_blocks_line_until_matching_scope_is_complete() -> None:
+    """Require complete evidence after observing a known-truncated line scope."""
+    headers = _authorization("superset")
+    filters = {"column": "request_kind", "value": "Service"}
+    scope = {
+        "id": 47,
+        "metric": "volume",
+        "dimension": "month",
+        "order": "dimension_asc",
+        "filter": filters,
+    }
+    proposal = {
+        "title": "Chronological volume",
+        "summary": "Compare the months with complete evidence.",
+        "widgets": [
+            {
+                "type": "echarts",
+                "datasetId": 47,
+                "metric": "volume",
+                "dimension": "month",
+                "chartStyle": "line",
+                "filter": filters,
+            }
+        ],
+    }
+    different_filter = {**scope, "filter": {"column": "request_kind", "value": "Visit"}}
+    steps = [
+        ("aggregate_dataset", {**scope, "limit": 13}),
+        ("propose_dashboard", proposal),
+        ("aggregate_dataset", {**different_filter, "limit": 48}),
+        ("propose_dashboard", proposal),
+        ("aggregate_dataset", {**scope, "limit": 48}),
+        ("propose_dashboard", proposal),
+    ]
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        call = json.loads(request.content)
+        name, arguments = call["name"], call["arguments"]
+        calls.append((name, arguments))
+        if name == "propose_dashboard":
+            return httpx.Response(200, json={**arguments, "approvalToken": "signed"})
+        return httpx.Response(
+            200,
+            json={
+                "truncated": arguments["limit"] == 13,
+                "rows": [{"group": "2026-01-01", "value": 47}],
+            },
+        )
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        evidence = [
+            part.content
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        step = len(evidence)
+        if step in (2, 4):
+            assert "truncated evidence" in evidence[-1]["error"]
+            assert "limit 48" in evidence[-1]["error"]
+            assert "partial period claims" in evidence[-1]["error"]
+        name, args = steps[step]
+        yield {
+            0: DeltaToolCall(
+                name=name, tool_call_id=f"period-{step}", json_args=json.dumps(args)
+            )
+        }
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY, tool_url=TOOL_URL),
+        model=FunctionModel(stream_function=generate),
+        tool_transport=httpx.MockTransport(gateway),
+    )
+    with TestClient(app) as client:
+        events = _events(client.post("/ag-ui", headers=headers, json=REQUEST))
+    assert calls[:3] == [steps[0], steps[2], steps[4]]
+    assert len(calls) == 4
+    assert calls[-1][0] == "propose_dashboard"
+    staged = [
+        event for event in events if event.get("name") == "nxtbi.dashboard-proposal"
+    ]
+    assert len(staged) == 1
+    assert staged[0]["value"]["widgets"][0]["filter"] == filters
+    assert events[-1]["outcome"]["type"] == "success"
+
+
 def test_analytical_upload_chat_uses_evidence_and_native_chart_proposal() -> None:
     """A selected upload in chat can support different measured chart questions."""
     headers = _authorization("superset")
@@ -939,7 +1150,7 @@ def test_dashboard_summary_is_bounded() -> None:
         "title": "Demo dashboard",
         "widgets": [{"type": "metric-tile", "datasetId": 5, "metric": "population"}],
     }
-    summary = "a" * 512
+    summary = "a" * 768
     assert (
         DashboardDraft.model_validate({**draft, "summary": summary}).summary == summary
     )
@@ -1522,6 +1733,39 @@ def test_superset_proposal_requires_separate_approval(
         any(event.get("delta") == "Approval is required." for event in events)
         != grouped
     )
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_category"),
+    [(UsageLimitExceeded, "input_tokens_limit"), (RuntimeError, "internal_error")],
+)
+def test_stream_classifies_failures_without_relaying_provider_text(
+    caplog: pytest.LogCaptureFixture,
+    failure_type: type[Exception],
+    expected_category: str,
+) -> None:
+    """Preserve fixed diagnostics even when the adapter receives private text."""
+    private_text = "opaque-provider-response-contents"
+
+    async def generate(
+        messages: Sequence[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str]:
+        if messages:
+            raise failure_type(f"Exceeded the input_tokens_limit: {private_text}")
+        yield "No messages received."
+
+    app = create_app(
+        Settings(shared_secret=SIGNING_KEY),
+        model=FunctionModel(stream_function=generate),
+    )
+    with TestClient(app) as client:
+        response = client.post("/ag-ui", headers=_authorization(), json=REQUEST)
+    events = _events(response, terminal="RUN_ERROR")
+    assert events[-1]["message"] == "Copilot could not complete this request."
+    assert events[-1]["code"] == "run_error"
+    assert f"Copilot adapter failure: {expected_category}" in caplog.text
+    assert private_text not in caplog.text
+    assert private_text not in response.text
 
 
 def test_unrecognized_a2ui_action_is_rejected() -> None:

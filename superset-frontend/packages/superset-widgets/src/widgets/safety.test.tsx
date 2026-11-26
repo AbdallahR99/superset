@@ -519,6 +519,64 @@ test('authored column definitions drop unsupported formats and callbacks', () =>
   ).toEqual([{ field: 'text' }, { field: 'number' }, { field: 'amount' }]);
 });
 
+test.each(['en', 'ar'])(
+  'formats percentages and decimals with the %s locale',
+  locale => {
+    const [percent, decimal] = sanitizeColumnDefs(
+      [
+        { field: 'rate', valueFormat: 'percent', valueFormatPrecision: 1 },
+        { field: 'cost', valueFormat: 'decimal', valueFormatPrecision: 2 },
+      ],
+      locale,
+    );
+    const formatPercent = percent.valueFormatter;
+    const formatDecimal = decimal.valueFormatter;
+    if (
+      typeof formatPercent !== 'function' ||
+      typeof formatDecimal !== 'function'
+    ) {
+      throw new Error('Missing numeric formatters');
+    }
+    const rate = (value: unknown) =>
+      formatPercent({ value } as Parameters<typeof formatPercent>[0]);
+    expect(percent.field).toBe('rate');
+    expect(percent).not.toHaveProperty('valueFormatPrecision');
+    expect(rate(0.588235294)).toBe(
+      new Intl.NumberFormat(locale, {
+        style: 'percent',
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      }).format(0.588235294),
+    );
+    expect(rate(0)).not.toBe('');
+    expect(rate(null)).toBe('');
+    expect(rate(' ')).toBe('');
+    expect(
+      formatDecimal({ value: '1482.3' } as Parameters<typeof formatDecimal>[0]),
+    ).toBe(
+      new Intl.NumberFormat(locale, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(1482.3),
+    );
+  },
+);
+
+test('metric percent bindings scale the plotted values and keep missing data missing', () => {
+  const options = {
+    series: [
+      {
+        data: { $bind: { source: 'metric', alias: 'rate', format: 'percent' } },
+      },
+    ],
+  };
+  const rows = [{ rate: 0.123 }, { rate: null }, { rate: 0 }];
+  expect(resolveBindings(options, { rows, theme })).toEqual({
+    series: [{ data: [12.3, null, 0] }],
+  });
+  expect(rows[0].rate).toBe(0.123);
+});
+
 test('markdown renders formatting and never raw script, handlers or script links', async () => {
   const content = [
     '# Title',

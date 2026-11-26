@@ -609,3 +609,83 @@ check for the MCP container, where that port is unused.
 Regression checks passed for 731 Superset Python tests, 762 frontend Jest
 tests, 34 extension tests, and 80 agent tests. The extension type check and
 the repository's changed-file checks passed.
+
+### Governed comparison and provider evaluation
+
+Copilot can request several saved measures in one grouped query and an
+ungrouped baseline using the same dataset, filters, and effective user. The
+saved aggregate measures determine eligibility and weighting. When Copilot
+provides a numerator, denominator, and rate, the agent checks their arithmetic
+before surfacing observed leaders and ties. A zero denominator leaves the
+rate unknown. Truncated results support conclusions about observed groups.
+Chronological requests can read up to 48 periods and report incomplete scope.
+The grouped and baseline queries are separate warehouse reads, so tie a
+published finding to an immutable fixture or an explicit data snapshot.
+
+Dashboard V2 labels capped rankings in Arabic and English, orders tied groups
+by the grouping columns, and uses saved percentage formats in generated
+charts and tables. Saved dashboards can use the existing mobile consumption
+mode with a compact header and a single-column reader layout on small screens.
+The branded government-readiness lab enables `MOBILE_CONSUMPTION_MODE`.
+
+**Semantic layer direction.** Keep Superset's provider extension as the
+integration boundary. Extend the existing approval registry to carry versions
+of metric definitions, eligible numerators and denominators, grain, allowed
+dimensions, date roles, source snapshots, and validation evidence. Attach dbt
+test and freshness results where dbt owns the transformation and require an
+executed result for the exact revision. [Superset provider SDK](https://superset.apache.org/developer-docs/extensions/extension-points/semantic-layers/)
+· [dbt run results](https://docs.getdbt.com/reference/artifacts/run-results-json)
+
+Use the agency's catalog when available. DataHub is a candidate for a scoped
+lineage trial, subject to service authentication and verified V2 and semantic
+member lineage. OpenLineage can carry run and assertion metadata. Warehouse
+permissions and viewer scope remain in the query path. [DataHub Superset connector](https://docs.datahub.com/docs/generated/ingestion/sources/superset)
+· [OpenLineage quality assertions](https://openlineage.io/docs/spec/facets/dataset-facets/data_quality_assertions/)
+
+Cube is a candidate to compare on a two-fact case because it aggregates at
+each fact's own grain. Validate the third-party Dremio adapter and actual
+end-user identity first. Copilot's saved SQL metrics give no evidence about
+Dremio impersonation or cross-provider behavior. [Cube multi-fact views](https://github.com/cube-js/cube/blob/master/docs-mintlify/docs/data-modeling/multi-fact-views.mdx)
+· [Cube data sources](https://docs.cube.dev/admin/connect-to-data/data-sources)
+
+**Evaluation.** Freeze the prompt and build before running. Keep the oracle
+outside runtime and use independent calculations and device tests as gates.
+Rotate held-out fixtures and include cases with no material rate difference,
+ties, missing or zero denominators, fan-out, a partial period, and viewer
+scope differences. Count failures and justified abstentions separately.
+Promptfoo could replay captured synthetic outputs locally against the same
+Boolean oracle. An advisor score is qualitative feedback and approval belongs
+to a named analyst reviewing a specific saved revision and data snapshot.
+[Promptfoo assertions](https://www.promptfoo.dev/docs/configuration/expected-outputs/)
+
+### Permit-review benchmark
+
+The 5,400-review holdout surfaced two service-rate findings but mislabeled
+the tail of a truncated time query as the dataset end. The draft stayed
+private. Opus 5.5 scored it 7/12 and Fable 5.2 scored it 6/12. Both flagged
+the date error as a publication blocker. Copilot blocks a line supported
+only by a matching truncated chronological query and permits a complete
+retry at the same scope. The logs identify safe categories of bounded
+stream failures.
+
+The rotated 6,100-review holdout used a new synthetic distribution and the
+same open brief. Earlier runs and their stream failures are retained.
+The completed run recovered all 16 months, used the correct 20.3% baseline
+(1,236/6,100), and separated Riverside's workload from West Market's 37.0%
+return rate (248/670). The saved narrative omitted the highest-workload
+permit category, Food premises approval. The exact model output is
+preserved as revision 1. Revision 2 applies the trusted percentage format
+to the vertical bar and leaves the selected metrics and narrative intact.
+
+Browser rechecks matched 62 native values over seven queries, plus 33
+values from the model's tool calls. Both 390px touch views stacked three
+332px chart canvases with no horizontal overflow or uncaught page errors.
+The fixture tested the Arabic shell, RTL layout, and localized captions.
+The source narrative is English. The draft is private until a named
+analyst approves the exact reviewed revision. The benchmark used one
+lab identity. Warehouse viewer parity and assistive-technology checks
+remain outside its verified scope.
+
+The lab worktree kept the artifacts under
+`nxtbi/out/semantic-lab/government-readiness/`. Final scoped verification
+included 742 backend tests, 84 agent tests, and 37 extension tests.

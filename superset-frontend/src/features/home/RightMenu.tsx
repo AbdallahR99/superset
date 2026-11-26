@@ -42,6 +42,7 @@ import {
   styled,
   css,
   SupersetTheme,
+  useIsRtl,
   useTheme,
 } from '@apache-superset/core/theme';
 import {
@@ -139,6 +140,7 @@ const RightMenu = ({
 }) => {
   const theme = useTheme();
   const isMobile = useIsMobile();
+  const isRtl = useIsRtl();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const user = useSelector<any, UserWithPermissionsAndRoles>(
     state => state.user,
@@ -835,17 +837,22 @@ const RightMenu = ({
             buttonStyle="link"
             onClick={() => setMobileMenuOpen(true)}
             aria-label={t('Menu')}
+            aria-haspopup="dialog"
+            aria-expanded={mobileMenuOpen}
+            css={css`
+              min-block-size: 44px;
+              min-inline-size: 44px;
+            `}
           >
             <Icons.MenuOutlined iconSize="l" />
           </Button>
           <Drawer
-            title={null}
-            placement="right"
+            title={t('Menu')}
+            placement={isRtl ? 'left' : 'right'}
             onClose={() => setMobileMenuOpen(false)}
             open={mobileMenuOpen}
             width={280}
             styles={{
-              header: { display: 'none' },
               body: { padding: 0 },
             }}
           >

@@ -24,8 +24,16 @@ COPY superset-frontend/packages/superset-core/src/dashboard/index.ts packages/su
 COPY superset-frontend/packages/superset-core/src/widgets/ packages/superset-core/src/widgets/
 COPY superset-frontend/packages/superset-widgets/src/ packages/superset-widgets/src/
 COPY superset-frontend/src/core/dashboard/EmbedWidgetModal.tsx src/core/dashboard/EmbedWidgetModal.tsx
+COPY superset-frontend/src/core/dashboard/StaticGrid.tsx src/core/dashboard/StaticGrid.tsx
+COPY superset-frontend/src/core/dashboard/WidgetView.tsx src/core/dashboard/WidgetView.tsx
+COPY superset-frontend/src/core/dashboard/layoutStyle.ts src/core/dashboard/layoutStyle.ts
+COPY superset-frontend/src/core/dashboard/widgetLabel.ts src/core/dashboard/widgetLabel.ts
+COPY superset-frontend/src/features/home/RightMenu.tsx src/features/home/RightMenu.tsx
+COPY superset-frontend/src/pages/DashboardBuilderV2/DashboardHeader.tsx src/pages/DashboardBuilderV2/DashboardHeader.tsx
 COPY superset-frontend/src/pages/DashboardBuilderV2/SchemaControlPanel.tsx src/pages/DashboardBuilderV2/SchemaControlPanel.tsx
 COPY superset-frontend/src/pages/DashboardBuilderV2/EmbedDashboardModal.tsx src/pages/DashboardBuilderV2/EmbedDashboardModal.tsx
+COPY superset-frontend/src/pages/DashboardBuilderV2/index.tsx src/pages/DashboardBuilderV2/index.tsx
+COPY superset-frontend/src/views/routes.tsx src/views/routes.tsx
 RUN npm run build > /tmp/semantic-lab-assets.log 2>&1 || { tail -n 100 /tmp/semantic-lab-assets.log; exit 1; }
 
 FROM ${SUPERSET_BASE_IMAGE}

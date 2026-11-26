@@ -35,7 +35,7 @@ function mockQuery() {
 
 afterEach(() => jest.restoreAllMocks());
 
-test('sends the first saved metric descending with the grouped row limit', async () => {
+test('ranks by the saved metric and breaks ties by the grouping columns', async () => {
   const post = mockQuery();
   await fetchQueryData({ ...grouped, orderByMetric: true });
   expect(post).toHaveBeenCalledWith(
@@ -44,7 +44,11 @@ test('sends the first saved metric descending with the grouped row limit', async
       jsonPayload: expect.objectContaining({
         queries: [
           expect.objectContaining({
-            orderby: [['count', false]],
+            orderby: [
+              ['count', false],
+              ['month', true],
+              ['district', true],
+            ],
             row_limit: 12,
           }),
         ],

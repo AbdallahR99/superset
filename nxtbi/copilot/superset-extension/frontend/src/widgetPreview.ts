@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { DashboardProposal } from '@nxtbi/copilot';
+import type { DashboardContentLocale, DashboardProposal } from '@nxtbi/copilot';
 
 export type ProposedWidget = DashboardProposal['widgets'][number];
 
@@ -76,6 +76,33 @@ interface WidgetPreview {
 interface PreviewFields {
   metrics: ReadonlyMap<string, string>;
   dimensions: ReadonlyMap<string, { label: string; temporal: boolean }>;
+  metricFormats?: ReadonlyMap<string, string | undefined>;
+}
+
+const RANKED_CATEGORY_LIMIT = 12;
+
+export function rankedChartTitle(title: string, locale: DashboardContentLocale) {
+  return `${title} · ${locale === 'ar' ? 'أعلى ١٢' : `Top ${RANKED_CATEGORY_LIMIT}`}`;
+}
+
+function percentPrecision(d3format?: string): number | undefined {
+  const match = d3format?.match(/^(?:\.([0-9]))?%$/);
+  return match ? Number(match[1] ?? 0) : undefined;
+}
+
+function tableMetricFormat(d3format?: string) {
+  const precision = percentPrecision(d3format);
+  if (precision !== undefined) {
+    return { valueFormat: 'percent', valueFormatPrecision: precision };
+  }
+  const fixedPrecision = d3format?.match(/^,?\.([0-9]|10)f$/);
+  if (fixedPrecision || /^,?d$/.test(d3format ?? '')) {
+    return {
+      valueFormat: 'decimal',
+      valueFormatPrecision: Number(fixedPrecision?.[1] ?? 0),
+    };
+  }
+  return {};
 }
 
 function chartOptions(
@@ -85,32 +112,51 @@ function chartOptions(
   style: NonNullable<ProposedWidget['chartStyle']>,
   title?: string,
   d3format?: string,
+  locale: DashboardContentLocale = 'en',
 ) {
+  const precision = percentPrecision(d3format);
+  const percentSign = locale === 'ar' ? '٪' : '%';
+  const percentTooltip =
+    precision === undefined ? {} : { formatter: `{b0}: {c0}${percentSign}` };
+  const metricBinding = {
+    $bind: {
+      source: 'metric',
+      alias: metric,
+      ...(precision !== undefined && { format: 'percent' }),
+    },
+  };
   if (style === 'bar') {
     return {
       animation: false,
       ...(title && { title: { text: title } }),
       grid: { left: 64, right: 24, bottom: 40, top: 48 },
-      tooltip: { trigger: 'axis', renderMode: 'richText' },
+      tooltip: { trigger: 'axis', renderMode: 'richText', ...percentTooltip },
       xAxis: {
         type: 'category',
         axisLabel: { hideOverlap: true },
         data: { $bind: { source: 'dimension', alias: dimension } },
       },
-      yAxis: { type: 'value' },
-      series: [
-        { type: 'bar', data: { $bind: { source: 'metric', alias: metric } } },
-      ],
+      yAxis: {
+        type: 'value',
+        ...(precision !== undefined && {
+          axisLabel: { formatter: `{value}${percentSign}` },
+          minInterval: 10 ** -precision,
+        }),
+      },
+      series: [{ type: 'bar', data: metricBinding }],
     };
   }
 
   const isTrend = style === 'line';
   const fixedPrecision = d3format?.match(/^\$?,?\.([0-9]|10)f$/);
-  const minInterval = fixedPrecision
-    ? 10 ** -Number(fixedPrecision[1])
-    : /^,?d$/.test(d3format ?? '')
-      ? 1
-      : undefined;
+  const minInterval =
+    precision !== undefined
+      ? 10 ** -precision
+      : fixedPrecision
+        ? 10 ** -Number(fixedPrecision[1])
+        : /^,?d$/.test(d3format ?? '')
+          ? 1
+          : undefined;
   const categoryAxis = {
     type: 'category',
     ...(isTrend ? {} : { inverse: true }),
@@ -135,8 +181,10 @@ function chartOptions(
     nameTextStyle: { width: 170, overflow: 'break' },
     axisLabel: {
       fontSize: 11,
-      ...(fixedPrecision &&
-        d3format?.startsWith('$') && { formatter: '${value}' }),
+      ...(precision !== undefined
+        ? { formatter: `{value}${percentSign}` }
+        : fixedPrecision &&
+          d3format?.startsWith('$') && { formatter: '${value}' }),
     },
     splitLine: {
       lineStyle: {
@@ -165,6 +213,7 @@ function chartOptions(
       renderMode: 'richText',
       confine: true,
       axisPointer: { type: isTrend ? 'line' : 'shadow' },
+      ...percentTooltip,
     },
     xAxis: isTrend ? categoryAxis : valueAxis,
     yAxis: isTrend ? valueAxis : categoryAxis,
@@ -172,7 +221,7 @@ function chartOptions(
       {
         type: isTrend ? 'line' : 'bar',
         name: metricLabel,
-        data: { $bind: { source: 'metric', alias: metric } },
+        data: metricBinding,
         ...(isTrend
           ? {
               showSymbol: true,
@@ -192,6 +241,8 @@ export function widgetPreview(
   widget: ProposedWidget,
   d3format?: string,
   fields?: PreviewFields,
+  locale: DashboardContentLocale = 'en',
+  titleLocale = locale,
 ): WidgetPreview | undefined {
   const { type, datasetId, title, chartStyle, filter } = widget;
   const isTrend = chartStyle === 'line';
@@ -217,7 +268,7 @@ export function widgetPreview(
     datasetId,
     metrics,
     dimensions,
-    rowLimit: isRanked ? 12 : 100,
+    rowLimit: isRanked ? RANKED_CATEGORY_LIMIT : 100,
     ...(isRanked && { orderByMetric: true }),
     ...((isTrend || (widget.metrics && dimensions.length > 0)) && {
       orderByDimension: true,
@@ -238,15 +289,15 @@ export function widgetPreview(
   switch (type) {
     case 'metric-tile': {
       if (!metric) return undefined;
-      const precision = d3format?.match(/^(?:\.([0-9]))?%$/);
+      const precision = percentPrecision(d3format);
       const fixedPrecision = d3format?.match(/^,?\.([0-9]|10)f$/);
       return {
         type,
         props: {
           dataBinding,
           label: title?.trim() || fields?.metrics.get(metric) || metric,
-          ...(precision
-            ? { percentage: true, decimals: Number(precision[1] ?? 0) }
+          ...(precision !== undefined
+            ? { percentage: true, decimals: precision }
             : fixedPrecision && { decimals: Number(fixedPrecision[1]) }),
         },
       };
@@ -274,6 +325,7 @@ export function widgetPreview(
           minWidth: 132,
           wrapHeaderText: true,
           autoHeaderHeight: true,
+          ...tableMetricFormat(fields?.metricFormats?.get(field)),
         })),
       ];
       return {
@@ -285,8 +337,9 @@ export function widgetPreview(
         },
       };
     }
-    case 'echarts':
+    case 'echarts': {
       if (!metric || !dimension) return undefined;
+      const metricLabel = fields?.metrics.get(metric) || metric;
       return {
         type,
         props: {
@@ -295,13 +348,17 @@ export function widgetPreview(
           echartsOptions: chartOptions(
             metric,
             dimension,
-            fields?.metrics.get(metric) || metric,
+            metricLabel,
             chartStyle ?? 'bar',
-            title?.trim(),
+            isRanked
+              ? rankedChartTitle(title?.trim() || metricLabel, titleLocale)
+              : title?.trim(),
             d3format,
+            locale,
           ),
         },
       };
+    }
     default:
       return undefined;
   }

@@ -107,7 +107,17 @@ export async function fetchQueryData(
     return binding.orderByMetric === true &&
       typeof metric === 'string' &&
       metric.trim()
-      ? [{ ...query, orderby: [[metric, false]] }]
+      ? [
+          {
+            ...query,
+            orderby: [
+              [metric, false],
+              ...dimensions
+                .filter(dimension => dimension !== metric)
+                .map(dimension => [dimension, true] as [string, boolean]),
+            ],
+          },
+        ]
       : [query];
   });
 

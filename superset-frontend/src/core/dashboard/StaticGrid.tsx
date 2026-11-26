@@ -16,17 +16,55 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { ReactElement } from 'react';
-import { useTheme } from '@apache-superset/core/theme';
+import type { CSSProperties, ReactElement } from 'react';
+import { css, styled, useTheme } from '@apache-superset/core/theme';
 import { useDashboardStore, useDashboardRevision } from './store';
-import { resolveGridMetrics } from './layoutStyle';
+import { DASHBOARD_VIEW_CONTAINER, resolveGridMetrics } from './layoutStyle';
+import type { GridMetrics } from './layoutStyle';
 import { packChildLayout } from './gridPacking';
 // eslint-disable-next-line import/no-cycle
 import WidgetView from './WidgetView';
 
+const Surface = styled.div`
+  container: ${DASHBOARD_VIEW_CONTAINER} / inline-size;
+  inline-size: 100%;
+  min-inline-size: 0;
+`;
+
+const Layout = styled.div<{ $metrics: GridMetrics }>`
+  ${({ $metrics, theme }) => css`
+    display: grid;
+    grid-template-columns: repeat(${$metrics.columns}, minmax(0, 1fr));
+    grid-auto-rows: ${$metrics.rowUnitPx}px;
+    gap: ${$metrics.gap}px;
+
+    > [data-dashboard-grid-item] {
+      grid-column: var(--dashboard-grid-column);
+      grid-row: var(--dashboard-grid-row);
+      inline-size: 100%;
+      block-size: 100%;
+      min-inline-size: 0;
+    }
+
+    @container ${DASHBOARD_VIEW_CONTAINER} (inline-size <= ${theme.screenSMMax}px) {
+      display: flex;
+      flex-direction: column;
+
+      > [data-dashboard-grid-item] {
+        block-size: var(--dashboard-grid-block-size);
+      }
+
+      > [data-dashboard-grid-item='markdown'] {
+        block-size: auto;
+        overflow-wrap: anywhere;
+      }
+    }
+  `}
+`;
+
 /**
  * Read-only counterpart to `RootGrid`: the same packing (so a viewer sees the
- * layout the author arranged), laid out with CSS grid instead of gridstack.
+ * layout the author arranged), with a single column when space is limited.
  */
 export default function StaticGrid({
   nodeId,
@@ -42,36 +80,34 @@ export default function StaticGrid({
   const children = node.children ?? [];
   const metrics = resolveGridMetrics(node.layout, theme);
   const packed = packChildLayout(children, metrics.columns, store.getNode);
+  // Keep keyboard and mobile reading order aligned with the desktop grid.
+  // Packed x starts at the inline edge in both directions.
+  const items = Object.entries(packed).sort(
+    ([, a], [, b]) => a.y - b.y || a.x - b.x,
+  );
 
   return (
-    <div
-      data-test="static-grid"
-      data-container-id={nodeId}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${metrics.columns}, minmax(0, 1fr))`,
-        gridAutoRows: metrics.rowUnitPx,
-        gap: metrics.gap,
-        width: '100%',
-      }}
-    >
-      {children.map(childId => {
-        const rect = packed[childId];
-        if (!rect) return null;
-        return (
+    <Surface>
+      <Layout
+        data-test="static-grid"
+        data-container-id={nodeId}
+        $metrics={metrics}
+      >
+        {items.map(([childId, rect]) => (
           <WidgetView
             key={childId}
             nodeId={childId}
-            style={{
-              gridColumn: `${rect.x + 1} / span ${rect.w}`,
-              gridRow: `${rect.y + 1} / span ${rect.h}`,
-              width: '100%',
-              height: '100%',
-              minWidth: 0,
-            }}
+            data-dashboard-grid-item={store.getNode(childId)?.type ?? ''}
+            style={
+              {
+                '--dashboard-grid-column': `${rect.x + 1} / span ${rect.w}`,
+                '--dashboard-grid-row': `${rect.y + 1} / span ${rect.h}`,
+                '--dashboard-grid-block-size': `${rect.h * (metrics.rowUnitPx + metrics.gap) - metrics.gap}px`,
+              } as CSSProperties
+            }
           />
-        );
-      })}
-    </div>
+        ))}
+      </Layout>
+    </Surface>
   );
 }

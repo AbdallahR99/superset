@@ -30,6 +30,7 @@ import {
   changeWidgetDataset,
   changeWidgetType,
   expandTableFields,
+  rankedChartTitle,
   widgetPreview,
 } from "./widgetPreview";
 import type { ProposedWidget } from "./widgetPreview";
@@ -372,6 +373,7 @@ export default function ProposalEditor({
           const previewFields = {
             metrics: new Map(metricOptions.map((option) => [option.name, option.label])),
             dimensions: new Map(dimensionOptions.map((option) => [option.name, option])),
+            metricFormats: new Map(metrics.map((item) => [item.metric_name, item.d3format])),
           };
           const datasets = catalog?.result ?? [];
           const snapshot = previewWidgets[index];
@@ -380,14 +382,23 @@ export default function ProposalEditor({
           const titleLocale = translatedTitle ? previewLocale : canonicalLocale;
           const displayType =
             widget.type === "echarts" ? (widget.chartStyle ?? "bar") : widget.type;
+          const heading =
+            displayType === "ranked-bar"
+              ? rankedChartTitle(
+                  title?.trim() || selectedMetric?.verbose_name || widget.metric?.trim() || text[displayType],
+                  titleLocale,
+                )
+              : title;
           const preview =
             snapshot === widget &&
-            widgetPreview({ ...widget, title }, selectedMetric?.d3format, previewFields);
+            widgetPreview({ ...widget, title }, selectedMetric?.d3format, previewFields, previewLocale, titleLocale);
           return (
             <article className="nxtbi-proposal-widget" key={index}>
               <header className="nxtbi-proposal-widget__header">
                 <h4>
-                  <bdi lang={title ? titleLocale : locale}>{title || text[displayType]}</bdi>
+                  <bdi lang={title || displayType === "ranked-bar" ? titleLocale : locale}>
+                    {heading || text[displayType]}
+                  </bdi>
                 </h4>
                 {dataset && (
                   <p>

@@ -341,6 +341,7 @@ AG_GRID_COLUMN_SETTINGS: dict[str, type] = {
     "type": str,
     "cellDataType": str,
     "valueFormat": str,
+    "valueFormatPrecision": float,
     "sort": str,
     "pinned": str,
     "width": float,
@@ -369,7 +370,7 @@ _COLUMN_ENUMS: dict[str, frozenset[str]] = {
     "cellDataType": frozenset(
         {"text", "number", "boolean", "date", "dateString", "object"}
     ),
-    "valueFormat": frozenset({"date"}),
+    "valueFormat": frozenset({"date", "decimal", "percent"}),
     "sort": frozenset({"asc", "desc"}),
     "pinned": frozenset({"left", "right"}),
 }
@@ -382,6 +383,12 @@ def _column_setting_problem(key: str, value: Any, path: str) -> str | None:
     if expected is float:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return f"{path} must be a number"
+        if key == "valueFormatPrecision":
+            return (
+                None
+                if 0 <= value <= 10 and int(value) == value
+                else f"{path} must be a whole number from 0 to 10"
+            )
         return None if 0 <= value <= 100000 else f"{path} is out of range"
     if not isinstance(value, str):
         return f"{path} must be text"
